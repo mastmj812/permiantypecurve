@@ -1,0 +1,76 @@
+# Local dev stack. Single-user; bind-mounts for hot reload.
+# Bring up: `docker compose up --build`
+services:
+  postgres:
+    # TimescaleDB image with PostGIS baked in. Pin to a specific tag — the
+    # "latest" tags shift PG major versions without notice and have broken
+    # extensions for us in the past.
+    image: timescale/timescaledb-ha:pg16.4-ts2.17.0-all
+    container_name: permian-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-permian}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-permian}
+      POSTGRES_DB: ${POSTGRES_DB:-permian}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/home/postgres/pgdata/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-permian} -d ${POSTGRES_DB:-permian}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: permian-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://permian:permian@postgres:5432/permian}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-prod}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      PMTILES_PATH: /app/basemap/permian.pmtiles
+      PLSS_GEOJSON_PATH: /app/basemap/plss_tx_nm.geojson
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ENVERUS_API_KEY_PRISM: ${ENVERUS_API_KEY_PRISM:-}
+      ENVERUS_API_KEY_DI: ${ENVERUS_API_KEY_DI:-}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/tests:/app/tests
+      - ./infra/basemap:/app/basemap:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: permian-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      VITE_API_BASE_URL: /api
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.ts:/app/vite.config.ts
+      - ./frontend/tsconfig.json:/app/tsconfig.json
+
+volumes:
+  postgres_data:
