@@ -62,6 +62,9 @@ class ForecastResult:
     n_points_fit: int
     insufficient_history: bool = False
     notes: str = ""
+    # Fraction of post-peak months excluded as downtime (0.0 to 1.0).
+    # See app.forecasting.fit::_flag_downtime for the heuristic.
+    downtime_ratio: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -82,4 +85,5 @@ class ForecastResult:
             "n_points_fit": self.n_points_fit,
             "insufficient_history": self.insufficient_history,
             "notes": self.notes,
+            "downtime_ratio": self.downtime_ratio,
         }

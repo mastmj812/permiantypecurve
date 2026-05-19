@@ -32,7 +32,8 @@ from datetime import date
 class RateInputs:
     prod_date: date
     first_prod_date: date | None
-    producing_days: int | None
+    # Float — Enverus reports fractional days for partial first months.
+    producing_days: float | None
     oil_bbl: float | None
     gas_mcf: float | None
     water_bbl: float | None
@@ -53,7 +54,7 @@ def calendar_days_in(month_date: date) -> int:
 
 
 def _is_first_prod_partial_month(
-    prod_date: date, first_prod_date: date | None, producing_days: int | None
+    prod_date: date, first_prod_date: date | None, producing_days: float | None
 ) -> bool:
     if first_prod_date is None or producing_days is None:
         return False
@@ -62,7 +63,7 @@ def _is_first_prod_partial_month(
     return 0 < producing_days < calendar_days_in(prod_date)
 
 
-def _safe_div(volume: float | None, denom: int | None) -> float | None:
+def _safe_div(volume: float | None, denom: float | None) -> float | None:
     if volume is None or denom is None or denom <= 0:
         return None
     return volume / denom
@@ -73,7 +74,9 @@ def compute_rates(inputs: RateInputs) -> RateOutputs:
     use_pd_for_calday = _is_first_prod_partial_month(
         inputs.prod_date, inputs.first_prod_date, inputs.producing_days
     )
-    calday_denom: int = inputs.producing_days if use_pd_for_calday else cal_days  # type: ignore[assignment]
+    calday_denom: float = (
+        inputs.producing_days if use_pd_for_calday else cal_days  # type: ignore[assignment]
+    )
     # When use_pd_for_calday is True, _is_first_prod_partial_month already
     # guarantees producing_days is a positive int.
 

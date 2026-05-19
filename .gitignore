@@ -34,8 +34,27 @@ Thumbs.db
 # Project artifacts
 infra/basemap/permian.pmtiles
 infra/basemap/plss_tx_nm.geojson
+infra/basemap/blocks_tx_nm.geojson
+infra/basemap/sections_tx_nm.geojson
+# OTLS source extracts — converted into blocks_tx_nm.geojson /
+# sections_tx_nm.geojson by infra/basemap/convert_shapefiles.{ps1,sh}.
+# Multi-MB raw inputs; regenerate from the upstream OTLS download
+# rather than committing.
+infra/basemap/otls_*.geojson
+infra/basemap/*.shp
+infra/basemap/*.dbf
+infra/basemap/*.prj
+infra/basemap/*.shx
+infra/basemap/*.cpg
 infra/basemap/.bin/
 infra/basemap/.cache/
 
+# Backup dumps — keep the script + README, exclude the actual dumps.
+infra/backup/dumps/
+
 # Postgres data volume (in case anyone mounts it locally)
 infra/postgres/data/
+
+# Operational logs from real syncs (multi-MB, regenerable).
+seed.log
+*.seed.log

@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     plss_geojson_path: Path = Field(
         default=Path("/app/basemap/plss_tx_nm.geojson"), alias="PLSS_GEOJSON_PATH"
     )
+    blocks_geojson_path: Path = Field(
+        default=Path("/app/basemap/blocks_tx_nm.geojson"), alias="BLOCKS_GEOJSON_PATH"
+    )
+    sections_geojson_path: Path = Field(
+        default=Path("/app/basemap/sections_tx_nm.geojson"),
+        alias="SECTIONS_GEOJSON_PATH",
+    )
 
     enverus_api_key_prism: str | None = Field(default=None, alias="ENVERUS_API_KEY_PRISM")
     enverus_api_key_di: str | None = Field(default=None, alias="ENVERUS_API_KEY_DI")

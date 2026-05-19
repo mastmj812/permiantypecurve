@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import Date, Float, ForeignKey, Integer, String
+from sqlalchemy import Date, Float, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -25,7 +25,10 @@ class ProductionMonthly(Base):
     oil_bbl: Mapped[float | None] = mapped_column(Float)
     gas_mcf: Mapped[float | None] = mapped_column(Float)
     water_bbl: Mapped[float | None] = mapped_column(Float)
-    producing_days: Mapped[int | None] = mapped_column(Integer)
+    # Float because Enverus reports fractional producing-days for partial
+    # first months (e.g. 0.166 = ~4 hours online). Integer truncation
+    # would zero-out IP-rich first-month rates.
+    producing_days: Mapped[float | None] = mapped_column(Float)
 
     # Diagnostic only — DO NOT use in forecasting or type curve aggregation.
     rate_prodday_bopd: Mapped[float | None] = mapped_column(Float)

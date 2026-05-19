@@ -1,16 +1,19 @@
 """Enverus client package.
 
 `base.py` defines the abstract interface every adapter must satisfy.
-`prism.py` is the primary REST/JSON adapter (Prism API).
-`di_direct.py` is a fallback for fields Prism doesn't expose (DirectAccess).
+`prism.py` wraps Enverus' DeveloperAPIv3 Python SDK — the SDK handles
+HTTP, OAuth refresh, pagination, and 429 backoff; our wrapper only deals
+in dataset names + field-name mapping.
+`di_direct.py` is a fallback stub for fields Prism doesn't expose.
 
-Tests inject a mock `httpx.MockTransport` into the Prism adapter so we never
-hit the real Enverus endpoints in CI.
+Tests inject a fake SDK client (any object with a `query()` method that
+yields dicts) into PrismClient via the `sdk_client=` kwarg — no real
+network calls in CI.
 """
 
 from app.enverus_client.base import (
-    EnverusClient,
     DirectionalSurvey,
+    EnverusClient,
     ProductionRecord,
     SurveyStation,
     WellHeader,

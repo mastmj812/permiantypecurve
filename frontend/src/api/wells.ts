@@ -1,3 +1,4 @@
+import { apiFetch } from "./auth";
 import type {
   FilterFacets,
   FilterSpec,
@@ -19,6 +20,11 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.first_prod_end) params.set("first_prod_end", spec.first_prod_end);
   if (spec.lateral_min_ft != null) params.set("lateral_min_ft", String(spec.lateral_min_ft));
   if (spec.lateral_max_ft != null) params.set("lateral_max_ft", String(spec.lateral_max_ft));
+  // api14 allow-list. 14 digits each — 500 of them = ~7.5 KB of query
+  // string, still inside typical proxy buffer limits. Beyond that the
+  // tile URL risks getting rejected; the FilterPanel input warns at
+  // 500 to keep users out of that zone.
+  if (spec.api14s.length) params.set("api14s", spec.api14s.join(","));
   return params.toString();
 }
 
@@ -29,19 +35,46 @@ export function tileUrlTemplate(spec: FilterSpec): string {
 }
 
 export async function fetchWellDetail(api14: string): Promise<WellDetail> {
-  const r = await fetch(`/api/wells/${api14}`);
+  const r = await apiFetch(`/api/wells/${api14}`);
   if (!r.ok) throw new Error(`well lookup failed: ${r.status}`);
   return (await r.json()) as WellDetail;
 }
 
 export async function fetchOperators(q: string): Promise<OperatorMatch[]> {
-  const r = await fetch(`/api/wells/filters/operators?q=${encodeURIComponent(q)}`);
+  const r = await apiFetch(`/api/wells/filters/operators?q=${encodeURIComponent(q)}`);
   if (!r.ok) throw new Error(`operator typeahead failed: ${r.status}`);
   return (await r.json()) as OperatorMatch[];
 }
 
-export async function fetchFacets(): Promise<FilterFacets> {
-  const r = await fetch("/api/wells/filters/facets");
+// Lightweight GeoJSON for the review-tab map. One LineString per well
+// (the heel-to-bottomhole wellstick), with api14/formation/operator
+// properties for client-side coloring/joining against forecasts.
+export interface WellstickFeatureCollection {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    geometry: { type: "LineString"; coordinates: [number, number][] };
+    properties: { api14: string; formation: string | null; operator: string | null };
+  }>;
+}
+
+export async function fetchWellsticks(api14s: string[]): Promise<WellstickFeatureCollection> {
+  if (api14s.length === 0) {
+    return { type: "FeatureCollection", features: [] };
+  }
+  const r = await apiFetch(`/api/wells/wellsticks?api14s=${api14s.join(",")}`);
+  if (!r.ok) throw new Error(`wellsticks fetch failed: ${r.status}`);
+  return (await r.json()) as WellstickFeatureCollection;
+}
+
+export async function fetchFacets(spec?: FilterSpec): Promise<FilterFacets> {
+  // Pass the current filters so the backend can compute per-facet counts
+  // under "all filters except this facet's own column". The endpoint
+  // ignores any filter keys that match the facet being counted, so we
+  // don't have to strip formation here — just hand it the full spec.
+  const q = spec ? filterSpecToQuery(spec) : "";
+  const url = q ? `/api/wells/filters/facets?${q}` : "/api/wells/filters/facets";
+  const r = await apiFetch(url);
   if (!r.ok) throw new Error(`facets failed: ${r.status}`);
   return (await r.json()) as FilterFacets;
 }
@@ -56,7 +89,7 @@ export async function selectWellsSpatial(args: {
   bbox?: [number, number, number, number];
   filters: FilterSpec;
 }): Promise<SelectResponse> {
-  const r = await fetch("/api/wells/select", {
+  const r = await apiFetch("/api/wells/select", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -70,7 +103,7 @@ export async function selectWellsSpatial(args: {
 }
 
 export async function summaryForApi14s(api14s: string[]): Promise<SelectionSummary> {
-  const r = await fetch("/api/wells/summary", {
+  const r = await apiFetch("/api/wells/summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ api14s }),

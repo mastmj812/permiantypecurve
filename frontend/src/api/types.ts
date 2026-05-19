@@ -13,6 +13,10 @@ export interface FilterSpec {
   first_prod_end: string | null;
   lateral_min_ft: number | null;
   lateral_max_ft: number | null;
+  // Explicit API14 allow-list. When non-empty, only the map's wells
+  // that match one of these api14s are shown. Pasted from an external
+  // tool's well-list workflow.
+  api14s: string[];
 }
 
 export const DEFAULT_FILTER_SPEC: FilterSpec = {
@@ -24,6 +28,7 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   first_prod_end: null,
   lateral_min_ft: null,
   lateral_max_ft: null,
+  api14s: [],
 };
 
 export interface SelectionSummary {

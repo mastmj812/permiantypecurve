@@ -46,6 +46,7 @@ from app.db.models import (
     SyncEntity,
     SyncJob,
     SyncJobStatus,
+    Well,
 )
 from app.db.session import SessionLocal, get_session
 from app.forecasting.eur import compute_eur
@@ -127,9 +128,22 @@ class ForecastRow(BaseModel):
     fit_rmse: float | None
     fit_at_bound: bool          # one or more fit parameters pinned at a bound
     bound_note: str | None      # human-readable details when fit_at_bound is True
+    # Fraction of post-peak months excluded as downtime (0.0–1.0). High
+    # values signal the engineer should eyeball the fit since the well
+    # was offline a lot. None on rows that predate the column.
+    downtime_ratio: float | None
     manual_override: bool
     locked: bool
     updated_at: datetime
+    # Well attributes — populated by /list when joined, None on /by-id.
+    # Lets the review page render lateral_ft / formation / vintage in one
+    # round-trip instead of N+1 wells lookups.
+    well_name: str | None = None
+    well_operator: str | None = None
+    well_formation: str | None = None
+    well_lateral_ft: float | None = None
+    well_vintage_year: int | None = None
+    well_county: str | None = None
 
     @classmethod
     def from_orm_row(cls, f: Forecast) -> "ForecastRow":
@@ -151,6 +165,7 @@ class ForecastRow(BaseModel):
             peak_month_date=f.peak_month_date, peak_rate=f.peak_rate,
             fit_method=f.fit_method, fit_r2=f.fit_r2, fit_rmse=f.fit_rmse,
             fit_at_bound=at_bound, bound_note=bound_note,
+            downtime_ratio=f.downtime_ratio,
             manual_override=f.manual_override, locked=f.locked,
             updated_at=f.updated_at,
         )
@@ -254,11 +269,63 @@ def list_forecasts(
     api14: list[str] | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> list[ForecastRow]:
-    stmt = select(Forecast)
+    """List forecasts joined to wells for the review/forecast grids.
+
+    Single-trip JOIN avoids the N+1 well-lookup the frontend used to do.
+    """
+    stmt = (
+        select(
+            Forecast,
+            Well.name,
+            Well.operator,
+            Well.formation,
+            Well.lateral_ft,
+            Well.vintage_year,
+            Well.county,
+        )
+        .join(Well, Well.api14 == Forecast.api14)
+        .order_by(Forecast.api14, Forecast.stream)
+    )
     if api14:
         stmt = stmt.where(Forecast.api14.in_(api14))
-    rows = session.execute(stmt.order_by(Forecast.api14, Forecast.stream)).scalars().all()
-    return [ForecastRow.from_orm_row(f) for f in rows]
+    out: list[ForecastRow] = []
+    for f, name, operator, formation, lateral_ft, vintage_year, county in session.execute(stmt).all():
+        row = ForecastRow.from_orm_row(f)
+        # mutate in-place — model_copy(update=) would also work but allocates.
+        row.well_name = name
+        row.well_operator = operator
+        row.well_formation = formation
+        row.well_lateral_ft = float(lateral_ft) if lateral_ft is not None else None
+        row.well_vintage_year = int(vintage_year) if vintage_year is not None else None
+        row.well_county = county
+        out.append(row)
+    return out
+
+
+def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
+    """Build a ForecastRow with the joined well_* fields populated.
+
+    Used by /forecasts/{id} (GET) and PATCH so an edit response carries
+    the same shape as /forecasts (list). The Review grid splices the
+    response into its in-memory `allForecasts` map; without this helper
+    the well headers (name / operator / formation / lateral / vintage)
+    would null out on every Save Override / Lock click because
+    `from_orm_row` only knows about the Forecast columns.
+    """
+    row = ForecastRow.from_orm_row(f)
+    well = session.get(Well, f.api14)
+    if well is not None:
+        row.well_name = well.name
+        row.well_operator = well.operator
+        row.well_formation = well.formation
+        row.well_lateral_ft = (
+            float(well.lateral_ft) if well.lateral_ft is not None else None
+        )
+        row.well_vintage_year = (
+            int(well.vintage_year) if well.vintage_year is not None else None
+        )
+        row.well_county = well.county
+    return row
 
 
 @router.get("/{forecast_id}", response_model=ForecastRow)
@@ -266,7 +333,7 @@ def get_forecast(forecast_id: uuid.UUID, session: Session = Depends(get_session)
     f = session.get(Forecast, forecast_id)
     if f is None:
         raise HTTPException(status_code=404, detail="not found")
-    return ForecastRow.from_orm_row(f)
+    return _row_with_well_join(f, session)
 
 
 @router.patch("/{forecast_id}", response_model=ForecastRow)
@@ -300,7 +367,7 @@ def patch_forecast(
         f.manual_override = req.manual_override
 
     session.commit()
-    return ForecastRow.from_orm_row(f)
+    return _row_with_well_join(f, session)
 
 
 # ============================ curves (for detail modal) ============================
@@ -362,18 +429,33 @@ def well_curves(
         fc = fc_by_stream.get(st)
         if fc and fc.peak_month_date is not None:
             # Evaluate from peak forward in monthly resolution.
+            # Index 0 is the peak month (t=0), so rate[0] = qi exactly and
+            # the cum starts at 0 — matching the preview endpoint, which
+            # also anchors its first sample at t≈0. Before this change,
+            # curves evaluated at t = (i+1)/12 and integrated as
+            # `cum_running += rate * 30.4375`, which left cum[0] at a
+            # full month's worth of production (~3000+ BBL for a typical
+            # Permian oil well) and made the cum chart visibly snap up
+            # whenever the live preview overlay cleared after Save Override.
             n_pts = int(horizon_years * 12)
-            t = (np.arange(n_pts, dtype=float) + 1.0) / 12.0
+            t = np.arange(n_pts, dtype=float) / 12.0
             r = _evaluate_rate(fc.model_type.value, fc.params, t)
             cum_running = 0.0
             for i in range(n_pts):
-                # Cumulative ~= rate * days_in_month. Use a flat 30.44 days/month.
-                cum_running += float(r[i]) * 30.4375
+                rate_i = float(r[i])
+                forecast_rate.append(rate_i)
+                # Trapezoid step from t[i-1] to t[i] (one month apart).
+                # cum[0] = 0 (no production has accumulated AT the peak
+                # boundary itself). Each subsequent step adds the
+                # average of the two end-rates times the 30.4375-day
+                # month length.
+                if i > 0:
+                    cum_running += 0.5 * (float(r[i - 1]) + rate_i) * 30.4375
                 forecast_cum.append(cum_running)
-                forecast_rate.append(float(r[i]))
-                # Walk months forward from peak_month_date.
-                yr = fc.peak_month_date.year + (fc.peak_month_date.month - 1 + i + 1) // 12
-                mo = ((fc.peak_month_date.month - 1 + i + 1) % 12) + 1
+                # Walk months forward from peak_month_date. Index 0
+                # corresponds to peak_month itself (not peak+1).
+                yr = fc.peak_month_date.year + (fc.peak_month_date.month - 1 + i) // 12
+                mo = ((fc.peak_month_date.month - 1 + i) % 12) + 1
                 forecast_months.append(date(yr, mo, 1))
 
         streams.append(StreamCurves(
@@ -395,12 +477,24 @@ def well_curves(
 
 @router.post("/preview", response_model=PreviewResponse)
 def forecast_preview(req: PreviewRequest) -> PreviewResponse:
-    t = np.linspace(0.01, req.horizon_years, req.n_points)
+    # Sample from t=0 (peak boundary, rate=qi) through the horizon so
+    # rate[0] sits exactly at the peak and cum[0] is 0 — same convention
+    # as /api/forecasts/{api14}/curves. The previous version sampled
+    # from t=0.01 and integrated with right-endpoint Riemann
+    # (`cum += rate * dt`), which UNDERESTIMATES the cum integral of
+    # any declining curve — the curves endpoint uses dense monthly
+    # trapezoidal integration, so its cum landed ~10% higher than the
+    # preview's at the same params and the chart visibly snapped up on
+    # Save Override.
+    t = np.linspace(0.0, req.horizon_years, req.n_points)
     rates = _evaluate_rate(req.model_type, req.params, t)
-    # Cumulative via trapezoid for the preview — fast and visually identical
-    # to the closed form at 120+ points.
-    dt = np.diff(t, prepend=0.0)
-    cum = np.cumsum(np.asarray(rates) * dt * 365.0)
+    rates_arr = np.asarray(rates, dtype=float)
+    # Trapezoidal integration: cum[i] = ∫(0..t[i]) rate dτ.
+    # Each step's area = 0.5 * (rate[i-1] + rate[i]) * (t[i]-t[i-1]) * 365.
+    # cum[0] = 0 (no production has accumulated at the peak boundary).
+    dt = np.diff(t)
+    step_area = 0.5 * (rates_arr[:-1] + rates_arr[1:]) * dt * 365.0
+    cum = np.concatenate(([0.0], np.cumsum(step_area)))
     eur = compute_eur(
         req.model_type, req.params,
         horizon_years=req.horizon_years,
@@ -408,7 +502,7 @@ def forecast_preview(req: PreviewRequest) -> PreviewResponse:
     )
     return PreviewResponse(
         t_years=t.tolist(),
-        rate=np.asarray(rates).tolist(),
+        rate=rates_arr.tolist(),
         cum=cum.tolist(),
         eur=eur,
     )

@@ -15,7 +15,12 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import SyncEntity, SyncJob, SyncJobStatus, SyncWatermark
 from app.db.session import get_session
-from app.sync.orchestrator import DEFAULT_BASIN, DEFAULT_COUNTY, sync_county
+from app.sync.orchestrator import (
+    DEFAULT_BASIN,
+    DEFAULT_COUNTIES,
+    DEFAULT_COUNTY,
+    sync_counties,
+)
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 log = get_logger("api.sync")
@@ -23,7 +28,12 @@ log = get_logger("api.sync")
 
 class RunSyncRequest(BaseModel):
     basin: str = Field(default=DEFAULT_BASIN)
-    county: str | None = Field(default=DEFAULT_COUNTY)
+    # Preferred: multi-county scope. None falls through to ``county`` for
+    # legacy callers, then to DEFAULT_COUNTIES.
+    counties: list[str] | None = Field(default=None)
+    # Legacy singular field — kept so existing curl scripts don't break.
+    # If ``counties`` is set this is ignored.
+    county: str | None = Field(default=None)
     pull_production: bool = Field(default=True)
     pull_surveys: bool = Field(default=True)
 
@@ -31,7 +41,7 @@ class RunSyncRequest(BaseModel):
 class RunSyncResponse(BaseModel):
     accepted: bool
     basin: str
-    county: str | None
+    counties: list[str]
     note: str
 
 
@@ -59,27 +69,39 @@ class SyncStatusResponse(BaseModel):
     watermarks: list[WatermarkInfo]
 
 
-def _run_sync_bg(req: RunSyncRequest) -> None:
+def _resolve_counties(req: RunSyncRequest) -> tuple[str, ...]:
+    # Precedence: explicit list > legacy singular > default.
+    if req.counties:
+        return tuple(c for c in req.counties if c)
+    if req.county:
+        return (req.county,)
+    return DEFAULT_COUNTIES
+
+
+def _run_sync_bg(req: RunSyncRequest, counties: tuple[str, ...]) -> None:
     try:
-        sync_county(
+        sync_counties(
             basin=req.basin,
-            county=req.county or DEFAULT_COUNTY,
+            counties=counties,
             pull_production=req.pull_production,
             pull_surveys=req.pull_surveys,
         )
     except Exception:
-        log.exception("background_sync_failed", basin=req.basin, county=req.county)
+        log.exception(
+            "background_sync_failed", basin=req.basin, counties=list(counties)
+        )
 
 
 @router.post("/run", response_model=RunSyncResponse, status_code=202)
 async def run_sync(
     req: RunSyncRequest, background: BackgroundTasks
 ) -> RunSyncResponse:
-    background.add_task(_run_sync_bg, req)
+    counties = _resolve_counties(req)
+    background.add_task(_run_sync_bg, req, counties)
     return RunSyncResponse(
         accepted=True,
         basin=req.basin,
-        county=req.county,
+        counties=list(counties),
         note="poll GET /api/sync/status for progress",
     )
 

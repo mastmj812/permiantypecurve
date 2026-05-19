@@ -1,16 +1,17 @@
 from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import basemap, forecasts, health, sync
+from app.api import auth, basemap, deals, forecasts, health, sync, type_curves
+from app.api.auth import get_current_user
+from app.config import settings
+from app.core.logging import configure_logging, get_logger
 from app.wells_api import detail as wells_detail
 from app.wells_api import selection as wells_selection
 from app.wells_api import tiles as wells_tiles
-from app.config import settings
-from app.core.logging import configure_logging, get_logger
 
 
 @asynccontextmanager
@@ -33,9 +34,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Single-user dev: frontend on :5173 talks to backend on :8000 in some local
-# setups. In docker compose the Vite proxy makes this unnecessary, but
-# keeping it open for local non-docker workflows.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -43,12 +41,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Public routes (no auth):
+#   * /health        — liveness probe; the frontend's HealthBadge polls this
+#                      pre-login to render the green pill on the login page.
+#   * /auth/*        — login/logout/me; obviously must accept unauth requests.
+#   * /basemap/*     — PMTiles + PLSS GeoJSON. Static assets served raw so
+#                      MapLibre can range-request without an Authorization
+#                      header (its tile fetcher doesn't attach one anyway).
 app.include_router(health.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
 app.include_router(basemap.router, prefix="/api")
-app.include_router(sync.router, prefix="/api")
-# All four wells_api routers share the /api/wells prefix; FastAPI merges
-# them by path so /tiles, /filters/*, /select, /summary, /{api14} coexist.
-app.include_router(wells_tiles.router, prefix="/api")
-app.include_router(wells_detail.router, prefix="/api")
-app.include_router(wells_selection.router, prefix="/api")
-app.include_router(forecasts.router, prefix="/api")
+
+# Protected routes — applied as a router-level dependency so every endpoint
+# on each router requires a valid bearer token. 401 on missing/invalid/expired.
+protected = [Depends(get_current_user)]
+app.include_router(sync.router, prefix="/api", dependencies=protected)
+app.include_router(wells_tiles.router, prefix="/api", dependencies=protected)
+app.include_router(wells_detail.router, prefix="/api", dependencies=protected)
+app.include_router(wells_selection.router, prefix="/api", dependencies=protected)
+app.include_router(forecasts.router, prefix="/api", dependencies=protected)
+app.include_router(type_curves.router, prefix="/api", dependencies=protected)
+app.include_router(deals.router, prefix="/api", dependencies=protected)

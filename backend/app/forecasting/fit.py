@@ -20,6 +20,7 @@ placed at the end-of-month boundary (t_i = (i+1)/12).
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -52,25 +53,28 @@ log = get_logger("forecasting.fit")
 # alongside in the UI via app.forecasting.metrics.effective_decline_first_year.
 #
 # Why these specific bounds:
-#   * Di_lo = 0.3  — a producing horizontal in its first ~3 yr declining
-#                    slower than 30%/yr (≈26% effective at b=1) is implausible.
-#   * Di_hi = 5.0  — matches the original brief. Real Permian wells with
-#                    >75% first-year effective decline land in 3 < Di < 5
-#                    at b=1 and we don't want the fitter pinned at a ceiling.
-#                    The b-bound below is what defends against the
-#                    pathological low-b corner; we don't need to also cap Di.
-#   * b in [0.7, 1.5] — covers the bulk of Wolfcamp / Bone Spring fits.
-#                       Tighter than the brief's [0, 2] to suppress the
-#                       underdetermined-hyperbolic corner solutions we saw
-#                       on real_well_4 and real_well_5.
+#   * Di_lo = 0.5  — squeezed from 0.3 once we saw the rate-time fallback
+#                    occasionally land near 0.3 on noisy wells. A producing
+#                    Permian unconventional declining slower than ~33%
+#                    effective in year 1 (Di_nom=0.5 at b=1) is implausible.
+#   * Di_hi = 4.0  — squeezed from 5.0 for the same reason. ~78% effective
+#                    at b=1 covers the steepest Permian wells we've seen;
+#                    fits that want >78% effective signal a degenerate
+#                    short-history fit, not a real well.
+#   * b in [0.9, 1.2] — Wolfcamp-typical petrophysical range. Started at
+#                       [0, 2] (brief), tightened to [0.7, 1.5] in step 4
+#                       to kill underdetermined corners, then tightened
+#                       further to [0.9, 1.2] once the rate-time fallback
+#                       (fit_with_fallback) started exposing wells whose
+#                       free-b drifted wider than petrophysically plausible.
 #
 # Other plays (Eagle Ford, Bakken, conventional) should override these via
 # ForecastConfig once we make them configurable — for now they're hardcoded
 # Permian defaults.
-DI_NOMINAL_LO_PER_YEAR: float = 0.3
-DI_NOMINAL_HI_PER_YEAR: float = 5.0
-B_LO: float = 0.7
-B_HI: float = 1.5
+DI_NOMINAL_LO_PER_YEAR: float = 0.5
+DI_NOMINAL_HI_PER_YEAR: float = 4.0
+B_LO: float = 0.9
+B_HI: float = 1.2
 
 # Initial guess: basin-typical Wolfcamp values, centered in the bounds.
 DI_NOMINAL_P0: float = 1.0
@@ -132,11 +136,62 @@ MODEL_FREE_PARAMS = {
 }
 
 
+# Downtime-filter heuristic. A post-peak month is flagged as downtime
+# (and dropped from the fit) when its calday rate is below this fraction
+# of the local rolling max. Centered 7-month window is wide enough to
+# span typical 1–2 month offline bouts AND include normal-producing
+# months on either side, so the local max stays anchored to the real
+# decline trend rather than getting pulled down by the dip itself.
+#
+# Why this beats `producing_days`: Enverus reports `producing_days`
+# inconsistently — some operators report it accurately, others fill it
+# with calendar-day counts, others zero it out. The calday rate
+# (`oil_bbl / 30.4`) lies under all of those reporting patterns
+# because a half-month of production at normal flow looks identical to
+# a full month at half flow. Comparing each month to its neighbors via
+# rolling-max sidesteps the data-quality issue entirely.
+_DOWNTIME_WINDOW: int = 7
+_DOWNTIME_THRESHOLD: float = 0.30
+
+
+def _flag_downtime(rates: pd.Series) -> pd.Series:
+    """Return a boolean Series — True where the month looks like downtime.
+
+    Computed against the centered rolling max so single-month and
+    multi-month dips both surface as long as the surrounding window
+    still contains at least one normal-flow month. min_periods=1 keeps
+    the edges from going NaN; the first/last months use whatever
+    neighbors exist."""
+    local_max = rates.rolling(
+        window=_DOWNTIME_WINDOW, center=True, min_periods=1
+    ).max()
+    # Floor the threshold at 1.0 BOPD-equivalent so all-zero late-tail
+    # months don't accidentally flag as downtime against a near-zero
+    # local max. Real downtime months stand out against a non-trivial
+    # local max from a producing neighbor.
+    threshold = (_DOWNTIME_THRESHOLD * local_max).clip(lower=1.0)
+    return rates < threshold
+
+
 def _post_peak_slice(
-    monthly_df: pd.DataFrame, peak: PeakResult, rate_col: str, vol_col: str
-) -> pd.DataFrame:
-    """Return rows from peak month forward, with derived `t_years` and
-    `cum_vol` columns."""
+    monthly_df: pd.DataFrame,
+    peak: PeakResult,
+    rate_col: str,
+    vol_col: str,
+    *,
+    filter_downtime: bool = True,
+) -> tuple[pd.DataFrame, float]:
+    """Return (rows-from-peak-forward-after-downtime-filter, downtime_ratio).
+
+    `cum_vol` is computed BEFORE filtering, so the remaining months
+    still carry the true cumulative volume as of their calendar month —
+    the cum-fit doesn't lose the (small) production from the dropped
+    downtime months.
+
+    `downtime_ratio` is the fraction of post-peak months that were
+    flagged. Persisted on the Forecast row so the Review grid can
+    surface noisy wells.
+    """
     df = monthly_df.sort_values("prod_date").reset_index(drop=True)
     df = df.iloc[peak.peak_index :].copy()
     # End-of-month timestamps as years since peak month start.
@@ -144,7 +199,15 @@ def _post_peak_slice(
     df["t_years"] = (np.arange(len(df), dtype=float) + 1.0) / 12.0
     df["cum_vol"] = df[vol_col].astype(float).cumsum()
     df["rate"] = df[rate_col].astype(float)
-    return df
+
+    if not filter_downtime or len(df) == 0:
+        return df, 0.0
+
+    downtime_mask = _flag_downtime(df["rate"])
+    ratio = float(downtime_mask.sum()) / float(len(df))
+    if downtime_mask.any():
+        df = df.loc[~downtime_mask].reset_index(drop=True)
+    return df, ratio
 
 
 def _r_squared(actual: NDArray[np.float64], predicted: NDArray[np.float64]) -> float:
@@ -273,6 +336,7 @@ def _build_result(
     stream: str,
     n_points_fit: int,
     insufficient_history: bool,
+    downtime_ratio: float = 0.0,
 ) -> ForecastResult:
     params = _params_to_dict(model_type, popt, config.df_terminal_per_year)
     econ_limit = getattr(config, STREAM_ECON_LIMIT_FIELD[stream])
@@ -298,6 +362,7 @@ def _build_result(
         fit_rmse=_rmse(actual, predicted),
         n_points_fit=n_points_fit,
         insufficient_history=insufficient_history,
+        downtime_ratio=downtime_ratio,
     )
 
 
@@ -313,7 +378,7 @@ def fit_rate_cum(
     cfg = config or ForecastConfig()
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
-    df = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
@@ -334,6 +399,7 @@ def fit_rate_cum(
         stream=stream,
         n_points_fit=len(df),
         insufficient_history=insufficient,
+        downtime_ratio=downtime_ratio,
     )
 
 
@@ -349,7 +415,7 @@ def fit_rate_time(
     cfg = config or ForecastConfig()
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
-    df = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)
@@ -370,4 +436,99 @@ def fit_rate_time(
         stream=stream,
         n_points_fit=len(df),
         insufficient_history=insufficient,
+        downtime_ratio=downtime_ratio,
+    )
+
+
+# Acceptance floor for the rate-time fallback's R². Cum R² and rate R²
+# aren't directly comparable (different targets, different noise floors),
+# so we use an absolute floor here rather than comparing to primary.fit_r2.
+# 0.3 is generous — even a noisy rate-time fit that clears the Di bound
+# is a better engineer-defensible default than a cum fit pinned at 5.0.
+_FALLBACK_MIN_R2: float = 0.3
+
+
+def _di_at_bound(di: float | None) -> bool:
+    if di is None:
+        return False
+    return (
+        di < DI_NOMINAL_LO_PER_YEAR * (1 + BOUND_TOLERANCE_PCT)
+        or di > DI_NOMINAL_HI_PER_YEAR * (1 - BOUND_TOLERANCE_PCT)
+    )
+
+
+def fit_with_fallback(
+    monthly_df: pd.DataFrame,
+    *,
+    model_type: str = "modified_hyperbolic",
+    peak: PeakResult,
+    stream: str = "oil",
+    config: ForecastConfig | None = None,
+) -> ForecastResult:
+    """Default `rate_cum` fit with a `rate_time` retry on Di-at-bound.
+
+    Why: `fit_rate_cum` integrates the rate model to a closed-form
+    cumulative, then NLS-fits cum-vs-time. The integral has very low
+    Jacobian sensitivity to b — small b changes produce small cum
+    differences over typical post-peak windows — so the optimizer
+    often leaves b near its initial guess (1.0) and absorbs the misfit
+    into Di. On wells where the "true" b ≠ 1, Di then pins at the
+    bound (0.3 or 5.0) and the fit is flagged. Rate-vs-time is noisier
+    but more constraining on b, so it can produce a different
+    (Di, b) pair that doesn't pin.
+
+    Trigger: cum-fit's Di hits the lo/hi bound. Other bound hits
+    (qi-at-upper, b-at-bound) are not retried — leave the engineer the
+    original flag.
+
+    Accept fallback when: rate-time Di is NOT at a bound AND
+    rate-time R² ≥ `_FALLBACK_MIN_R2`.
+
+    The adopted result is tagged `fit_method="rate_time_fallback"` so
+    the engineer can see in the grid which wells were rescued.
+    """
+    primary = fit_rate_cum(
+        monthly_df,
+        model_type=model_type,
+        peak=peak,
+        stream=stream,
+        config=config,
+    )
+    if not _di_at_bound(primary.di_initial):
+        return primary
+    try:
+        fallback = fit_rate_time(
+            monthly_df,
+            model_type=model_type,
+            peak=peak,
+            stream=stream,
+            config=config,
+        )
+    except Exception as e:  # noqa: BLE001 — fallback is best-effort
+        log.info(
+            "fallback_fit_failed",
+            stream=stream,
+            err=str(e),
+            primary_di=primary.di_initial,
+        )
+        return primary
+    if _di_at_bound(fallback.di_initial) or fallback.fit_r2 < _FALLBACK_MIN_R2:
+        return primary
+    log.info(
+        "fallback_adopted",
+        stream=stream,
+        primary_di=primary.di_initial,
+        fallback_di=fallback.di_initial,
+        fallback_b=fallback.b,
+        fallback_r2=fallback.fit_r2,
+    )
+    note = (
+        f"cum fit pinned Di={primary.di_initial:.2f}; "
+        f"rate-time fallback Di={fallback.di_initial:.2f}, "
+        f"b={(fallback.b if fallback.b is not None else float('nan')):.2f}"
+    )
+    return replace(
+        fallback,
+        fit_method="rate_time_fallback",
+        notes=(note + ("\n" + fallback.notes if fallback.notes else "")),
     )

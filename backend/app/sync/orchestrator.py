@@ -1,8 +1,11 @@
 """High-level sync flows: well headers, then per-well production + surveys.
 
-Step-2 scope = Loving County only. The orchestrator persists progress to
-sync_jobs / sync_watermarks so /api/sync/status can poll. SSE streaming
-(brief target) wires up in step 3 once the map needs progressive updates.
+Default scope = Loving + Reeves Counties (the two big Delaware-basin
+producers in TX). Each county runs as its own sync_county() invocation
+so jobs / watermarks stay per-county (the scope_key embeds the county
+name). The orchestrator persists progress to sync_jobs / sync_watermarks
+so /api/sync/status can poll. SSE streaming (brief target) wires up in
+step 3 once the map needs progressive updates.
 """
 
 from __future__ import annotations
@@ -35,7 +38,14 @@ from app.ingest.wells import upsert_well_headers
 log = get_logger("sync.orchestrator")
 
 DEFAULT_BASIN = "Permian"
+# Single-county default kept for back-compat: callers that take a string
+# (synthetic seeder, the legacy `--county` singular CLI arg, the older
+# /api/sync/run request shape) still resolve to a sensible value.
 DEFAULT_COUNTY = "Loving"
+# Multi-county default. Anything that wants the canonical project scope
+# — `python -m app.seed.seed_county` with no args, the default body of
+# /api/sync/run — pulls both of these.
+DEFAULT_COUNTIES: tuple[str, ...] = ("Loving", "Reeves")
 
 T = TypeVar("T")
 
@@ -153,7 +163,12 @@ def sync_county(
             with _job(session, SyncEntity.PRODUCTION, scope_key) as job:
                 prod_iter = cli.fetch_monthly_production(api14s)
                 total = 0
-                for batch in _batched(prod_iter, 5000):
+                # production_monthly has ~13 bound parameters per row, so
+                # the batch size × 13 must stay safely below Postgres'
+                # 65 535 parameter limit per statement. 1 000 → ~13 000
+                # params, comfortable headroom even with the ON CONFLICT
+                # SET clause expanding the column list at parse time.
+                for batch in _batched(prod_iter, 1000):
                     total += upsert_production_records(session, batch)
                     job.items_upserted = total
                     job.items_seen = total
@@ -166,7 +181,7 @@ def sync_county(
                     datetime.now(timezone.utc),
                 )
 
-    # ---- 3. surveys (per-well, sequential) ----
+    # ---- 3. surveys (batched by api12 chunks) ----
     if pull_surveys:
         with SessionLocal() as session:
             api14s = [
@@ -176,14 +191,11 @@ def sync_county(
                 ).all()
             ]
             with _job(session, SyncEntity.SURVEYS, scope_key) as job:
-                for api14 in api14s:
-                    job.items_seen += 1
-                    survey = cli.fetch_directional_survey(api14)
-                    if survey is None:
-                        # Persist the progress tick anyway so the client
-                        # poll sees movement.
-                        session.commit()
-                        continue
+                # items_seen = how many wells we asked for (some may have
+                # no survey on file → no row yielded). items_upserted =
+                # how many surveys actually came back and were stored.
+                job.items_seen = len(api14s)
+                for survey in cli.fetch_directional_surveys(api14s):
                     upsert_survey(session, survey)
                     job.items_upserted += 1
                     session.commit()
@@ -194,3 +206,38 @@ def sync_county(
 
     log.info("sync_county_done", basin=basin, county=county, **counts)
     return counts
+
+
+def sync_counties(
+    *,
+    basin: str = DEFAULT_BASIN,
+    counties: tuple[str, ...] | list[str] = DEFAULT_COUNTIES,
+    pull_production: bool = True,
+    pull_surveys: bool = True,
+    client: EnverusClient | None = None,
+) -> dict[str, dict[str, int]]:
+    """Run ``sync_county`` for each county in sequence.
+
+    Returns ``{county: counts}`` so the CLI / API can surface per-county
+    totals. Each county gets its own sync_jobs row (scope_key encodes the
+    county), so a partial failure on Reeves doesn't roll back Loving.
+    The client is reused across counties — building one once avoids re-
+    establishing the HTTP session per county.
+    """
+    cli = client or _build_client()
+    out: dict[str, dict[str, int]] = {}
+    for county in counties:
+        out[county] = sync_county(
+            basin=basin,
+            county=county,
+            pull_production=pull_production,
+            pull_surveys=pull_surveys,
+            client=cli,
+        )
+    log.info(
+        "sync_counties_done",
+        basin=basin,
+        counties=list(counties),
+        totals={c: sum(v.values()) for c, v in out.items()},
+    )
+    return out

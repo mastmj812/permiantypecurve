@@ -1,9 +1,17 @@
 import { useEffect, useRef, useState } from "react";
-import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
+import maplibregl, {
+  type ExpressionSpecification,
+  type MapGeoJSONFeature,
+  type Map as MlMap,
+  type MapMouseEvent,
+  type RequestParameters,
+  type StyleSpecification,
+} from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import { getStoredToken } from "../api/auth";
 import { selectWellsSpatial, summaryForApi14s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
@@ -26,8 +34,75 @@ function registerPmtilesProtocol() {
 }
 
 const PERMIAN_CENTER: [number, number] = [-102.5, 32.0];
-const PLSS_SOURCE_ID = "plss";
-const PLSS_LAYER_ID = "plss-line";
+
+// GeoJSON overlays: Blocks + Sections (Texas/NM survey grid; OTLS data
+// covers both states, so the older PLSS overlay was retired).
+// (fill + line + symbol-label). The two abstract overlays render their
+// number labels at the zooms below — the BLM cadastral grid is too dense
+// to be useful before then.
+const BLOCKS_SOURCE_ID = "blocks";
+const BLOCKS_FILL_LAYER = "blocks-fill";
+const BLOCKS_LINE_LAYER = "blocks-line";
+const BLOCKS_LABEL_LAYER = "blocks-label";
+const BLOCKS_MIN_ZOOM = 8;
+
+const SECTIONS_SOURCE_ID = "sections";
+const SECTIONS_FILL_LAYER = "sections-fill";
+const SECTIONS_LINE_LAYER = "sections-line";
+const SECTIONS_LABEL_LAYER = "sections-label";
+const SECTIONS_MIN_ZOOM = 11;
+
+// MapLibre text-field expression — try the most common BLM/abstract
+// property names in order. Blank string at the end means "no label" if
+// none of these keys are present, which keeps the layer from throwing.
+const BLOCK_LABEL_EXPR = [
+  "coalesce",
+  ["get", "BLOCK_NO"],
+  ["get", "BLOCK"],
+  ["get", "BlockNo"],
+  ["get", "Block"],
+  ["get", "block"],
+  ["get", "BLOCKID"],
+  "",
+] as unknown as ExpressionSpecification;
+
+const SECTION_LABEL_EXPR = [
+  "coalesce",
+  // OTLS Texas GLO survey export: LEVEL3_SUR is the section number.
+  ["get", "LEVEL3_SUR"],
+  ["get", "SECTION_NO"],
+  ["get", "SECTION"],
+  ["get", "SEC"],
+  ["get", "SectionNo"],
+  ["get", "Section"],
+  ["get", "section"],
+  ["get", "SECTIONID"],
+  "",
+] as unknown as ExpressionSpecification;
+
+// Same-origin /api/* requests are auth-gated. MapLibre's tile loader
+// doesn't go through our apiFetch helper, so we attach the bearer here
+// via MapLibre's transformRequest hook. Other URLs (basemap PMTiles
+// served pre-auth, font CDN, etc.) pass through unchanged.
+function authedTransformRequest(
+  url: string,
+): RequestParameters | undefined {
+  try {
+    const parsed = new URL(url, window.location.origin);
+    if (
+      parsed.origin === window.location.origin &&
+      parsed.pathname.startsWith("/api/")
+    ) {
+      const token = getStoredToken();
+      if (token) {
+        return { url, headers: { Authorization: `Bearer ${token}` } };
+      }
+    }
+  } catch {
+    // Malformed URL — let MapLibre handle it untransformed.
+  }
+  return { url };
+}
 
 function buildStyle(): StyleSpecification {
   return {
@@ -49,8 +124,12 @@ export function MapView() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const drawerRef = useRef<DrawingController | null>(null);
+  // One reusable popup for hover info — avoids flicker from creating /
+  // destroying a Popup per mousemove. Cleaned up implicitly by map.remove().
+  const popupRef = useRef<maplibregl.Popup | null>(null);
   const [tilesMissing, setTilesMissing] = useState(false);
-  const [plssError, setPlssError] = useState<string | null>(null);
+  const [blocksError, setBlocksError] = useState<string | null>(null);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
   // Style is loaded async; secondary effects that touch sources/layers
   // must wait for this to flip true (or MapLibre throws
   // "Style is not done loading").
@@ -58,7 +137,8 @@ export function MapView() {
 
   const filters = useMapStore((s) => s.filters);
   const drawMode = useMapStore((s) => s.drawMode);
-  const showPlss = useMapStore((s) => s.showPlss);
+  const showBlocks = useMapStore((s) => s.showBlocks);
+  const showSections = useMapStore((s) => s.showSections);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const selectedApi14s = useMapStore((s) => s.selectedApi14s);
   const setSelection = useMapStore((s) => s.setSelection);
@@ -81,6 +161,7 @@ export function MapView() {
       minZoom: 3,
       maxZoom: 14,
       hash: true,
+      transformRequest: authedTransformRequest,
     });
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: false }), "top-right");
     map.addControl(new maplibregl.ScaleControl({ unit: "imperial" }), "bottom-left");
@@ -142,6 +223,38 @@ export function MapView() {
       });
       drawer.install();
       drawerRef.current = drawer;
+
+      // Hover tooltip across all wells layers (points at low zoom, lines
+      // at high zoom). The popup is pointer-events: none in CSS, so the
+      // click handler the DrawingController installs still receives the
+      // event when the user clicks a well underneath the popup.
+      popupRef.current = new maplibregl.Popup({
+        closeButton: false,
+        closeOnClick: false,
+        offset: 10,
+        className: "map-tooltip",
+      });
+      // Layer-scoped mousemove fires with the queried features attached;
+      // MapLibre v4 doesn't export the narrowed event type publicly, so
+      // we widen MapMouseEvent with the features field locally.
+      const onMove = (e: MapMouseEvent & { features?: MapGeoJSONFeature[] }) => {
+        const feat = e.features?.[0];
+        if (!feat) return;
+        map.getCanvas().style.cursor = "pointer";
+        popupRef.current!
+          .setLngLat(e.lngLat)
+          .setHTML(buildWellPopupHtml(feat.properties as Record<string, unknown>))
+          .addTo(map);
+      };
+      const onLeave = () => {
+        map.getCanvas().style.cursor = "";
+        popupRef.current?.remove();
+      };
+      for (const id of WELLS_INTERACTIVE_LAYERS) {
+        map.on("mousemove", id, onMove);
+        map.on("mouseleave", id, onLeave);
+      }
+
       setStyleLoaded(true);
     };
 
@@ -204,45 +317,159 @@ export function MapView() {
     }
   }, [showWellsticks, styleLoaded]);
 
-  // -------------- PLSS overlay toggle --------------
+  // -------------- Blocks overlay toggle --------------
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    if (showPlss) {
-      if (!map.getSource(PLSS_SOURCE_ID)) {
-        fetch("/api/basemap/plss_tx_nm.geojson")
+    if (showBlocks) {
+      if (!map.getSource(BLOCKS_SOURCE_ID)) {
+        fetch("/api/basemap/blocks_tx_nm.geojson")
           .then((r) => {
             if (r.status === 404) {
-              setPlssError("PLSS GeoJSON not loaded — see infra/basemap/README.md");
-              useMapStore.getState().setShowPlss(false);
+              setBlocksError(
+                "Blocks GeoJSON not loaded — run infra/basemap/convert_shapefiles.{ps1,sh}.",
+              );
+              useMapStore.getState().setShowBlocks(false);
               return null;
             }
-            if (!r.ok) throw new Error(`PLSS fetch ${r.status}`);
+            if (!r.ok) throw new Error(`Blocks fetch ${r.status}`);
             return r.json();
           })
           .then((data) => {
             if (!data) return;
-            setPlssError(null);
-            map.addSource(PLSS_SOURCE_ID, { type: "geojson", data });
+            setBlocksError(null);
+            map.addSource(BLOCKS_SOURCE_ID, { type: "geojson", data });
+            // Fill is barely there — keeps the polygon footprint visible
+            // without competing with wellsticks for attention.
             map.addLayer({
-              id: PLSS_LAYER_ID,
+              id: BLOCKS_FILL_LAYER,
+              type: "fill",
+              source: BLOCKS_SOURCE_ID,
+              minzoom: BLOCKS_MIN_ZOOM,
+              paint: { "fill-color": "#1e293b", "fill-opacity": 0.04 },
+            });
+            map.addLayer({
+              id: BLOCKS_LINE_LAYER,
               type: "line",
-              source: PLSS_SOURCE_ID,
-              paint: { "line-color": "#475569", "line-width": 0.5, "line-opacity": 0.4 },
+              source: BLOCKS_SOURCE_ID,
+              minzoom: BLOCKS_MIN_ZOOM,
+              paint: {
+                "line-color": "#1e293b",
+                "line-width": 0.9,
+                "line-opacity": 0.55,
+              },
+            });
+            map.addLayer({
+              id: BLOCKS_LABEL_LAYER,
+              type: "symbol",
+              source: BLOCKS_SOURCE_ID,
+              minzoom: BLOCKS_MIN_ZOOM,
+              layout: {
+                "text-field": BLOCK_LABEL_EXPR,
+                "text-size": 12,
+                "text-font": ["Noto Sans Regular"],
+                "text-allow-overlap": false,
+                "symbol-placement": "point",
+              },
+              paint: {
+                "text-color": "#0f172a",
+                "text-halo-color": "rgba(255,255,255,0.9)",
+                "text-halo-width": 1.5,
+              },
             });
           })
           .catch((e) => {
             console.error(e);
-            setPlssError(String(e));
+            setBlocksError(String(e));
           });
       } else {
-        map.setLayoutProperty(PLSS_LAYER_ID, "visibility", "visible");
+        for (const id of [BLOCKS_FILL_LAYER, BLOCKS_LINE_LAYER, BLOCKS_LABEL_LAYER]) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
+        }
       }
-    } else if (map.getLayer(PLSS_LAYER_ID)) {
-      map.setLayoutProperty(PLSS_LAYER_ID, "visibility", "none");
+    } else {
+      for (const id of [BLOCKS_FILL_LAYER, BLOCKS_LINE_LAYER, BLOCKS_LABEL_LAYER]) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
+      }
     }
-  }, [showPlss, styleLoaded]);
+  }, [showBlocks, styleLoaded]);
+
+  // -------------- Sections overlay toggle --------------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (showSections) {
+      if (!map.getSource(SECTIONS_SOURCE_ID)) {
+        fetch("/api/basemap/sections_tx_nm.geojson")
+          .then((r) => {
+            if (r.status === 404) {
+              setSectionsError(
+                "Sections GeoJSON not loaded — run infra/basemap/convert_shapefiles.{ps1,sh}.",
+              );
+              useMapStore.getState().setShowSections(false);
+              return null;
+            }
+            if (!r.ok) throw new Error(`Sections fetch ${r.status}`);
+            return r.json();
+          })
+          .then((data) => {
+            if (!data) return;
+            setSectionsError(null);
+            map.addSource(SECTIONS_SOURCE_ID, { type: "geojson", data });
+            map.addLayer({
+              id: SECTIONS_FILL_LAYER,
+              type: "fill",
+              source: SECTIONS_SOURCE_ID,
+              minzoom: SECTIONS_MIN_ZOOM,
+              paint: { "fill-color": "#475569", "fill-opacity": 0.03 },
+            });
+            map.addLayer({
+              id: SECTIONS_LINE_LAYER,
+              type: "line",
+              source: SECTIONS_SOURCE_ID,
+              minzoom: SECTIONS_MIN_ZOOM,
+              paint: {
+                "line-color": "#475569",
+                "line-width": 0.6,
+                "line-opacity": 0.5,
+              },
+            });
+            map.addLayer({
+              id: SECTIONS_LABEL_LAYER,
+              type: "symbol",
+              source: SECTIONS_SOURCE_ID,
+              minzoom: SECTIONS_MIN_ZOOM,
+              layout: {
+                "text-field": SECTION_LABEL_EXPR,
+                "text-size": 10,
+                "text-font": ["Noto Sans Regular"],
+                "text-allow-overlap": false,
+                "symbol-placement": "point",
+              },
+              paint: {
+                "text-color": "#334155",
+                "text-halo-color": "rgba(255,255,255,0.9)",
+                "text-halo-width": 1.25,
+              },
+            });
+          })
+          .catch((e) => {
+            console.error(e);
+            setSectionsError(String(e));
+          });
+      } else {
+        for (const id of [SECTIONS_FILL_LAYER, SECTIONS_LINE_LAYER, SECTIONS_LABEL_LAYER]) {
+          if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "visible");
+        }
+      }
+    } else {
+      for (const id of [SECTIONS_FILL_LAYER, SECTIONS_LINE_LAYER, SECTIONS_LABEL_LAYER]) {
+        if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", "none");
+      }
+    }
+  }, [showSections, styleLoaded]);
 
   return (
     <div className="map-root">
@@ -253,9 +480,14 @@ export function MapView() {
           <code>fetch.ps1</code> on Windows) to download the TX+NM PMTiles extract.
         </div>
       )}
-      {plssError && (
+      {blocksError && (
         <div className="map-warning" style={{ top: 64 }}>
-          <strong>PLSS overlay:</strong> {plssError}
+          <strong>Blocks overlay:</strong> {blocksError}
+        </div>
+      )}
+      {sectionsError && (
+        <div className="map-warning" style={{ top: 168 }}>
+          <strong>Sections overlay:</strong> {sectionsError}
         </div>
       )}
     </div>
@@ -265,4 +497,52 @@ export function MapView() {
 // MVT tiles are served same-origin (Vite proxies /api in dev; same-host in compose).
 function withOrigin(template: string): string {
   return template.startsWith("/") ? `${window.location.origin}${template}` : template;
+}
+
+// Escape user-controlled strings before injecting into setHTML — operator
+// names and formation labels come from the upstream warehouse and could
+// in principle contain HTML metacharacters.
+function escHtml(s: unknown): string {
+  if (s == null) return "—";
+  return String(s).replace(/[&<>"']/g, (c) => {
+    switch (c) {
+      case "&": return "&amp;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case '"': return "&quot;";
+      case "'": return "&#39;";
+      default:  return c;
+    }
+  });
+}
+
+function fmtIntHtml(v: unknown): string {
+  if (v == null || !Number.isFinite(Number(v))) return "—";
+  return Math.round(Number(v)).toLocaleString();
+}
+
+// Wellstick source enum values are short and underscore-cased; humanize
+// them for the tooltip so the engineer doesn't have to read the schema.
+function wellstickSourceLabel(v: unknown): string {
+  switch (String(v)) {
+    case "heel_to_bh":     return "heel → BH (survey)";
+    case "surface_to_bh":  return "surface → BH (no survey)";
+    case "none":           return "—";
+    default:               return escHtml(v);
+  }
+}
+
+function buildWellPopupHtml(p: Record<string, unknown>): string {
+  return `
+    <div class="mtt">
+      <div class="mtt-name">API14 ${escHtml(p.api14)}</div>
+      <table class="mtt-table">
+        <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
+        <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
+        <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>
+        <tr><td>Vintage</td><td>${escHtml(p.vintage_year)}</td></tr>
+        <tr><td>Lateral</td><td>${fmtIntHtml(p.lateral_ft)} ft</td></tr>
+        <tr><td>Stick</td><td>${wellstickSourceLabel(p.wellstick_source)}</td></tr>
+      </table>
+    </div>`;
 }

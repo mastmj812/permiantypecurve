@@ -15,7 +15,7 @@ import {
 } from "../api/types";
 
 export type DrawMode = "off" | "lasso" | "box" | "click";
-export type PageId = "map" | "forecast";
+export type PageId = "map" | "forecast" | "review" | "type_curve";
 
 export interface MapState {
   // ---- top-level nav ----
@@ -24,6 +24,12 @@ export interface MapState {
   // api14s carried across nav from map → forecast page
   forecastApi14s: string[];
   setForecastApi14s: (api14s: string[]) => void;
+  // Wells the engineer un-ticked on the Review page. Stays out of any
+  // type-curve aggregation (step 6) but stays in the forecasts table.
+  excludedApi14s: Set<string>;
+  toggleExcluded: (api14: string) => void;
+  setExcluded: (api14s: string[]) => void;
+  clearExcluded: () => void;
 
   // ---- filters ----
   filters: FilterSpec;
@@ -32,6 +38,7 @@ export interface MapState {
   setStatuses: (statuses: WellStatus[]) => void;
   setVintageRange: (start: string | null, end: string | null) => void;
   setLateralRange: (min: number | null, max: number | null) => void;
+  setApi14s: (api14s: string[]) => void;
   resetFilters: () => void;
 
   // ---- selection ----
@@ -46,8 +53,10 @@ export interface MapState {
   setDrawMode: (mode: DrawMode) => void;
 
   // ---- layer toggles ----
-  showPlss: boolean;
-  setShowPlss: (v: boolean) => void;
+  showBlocks: boolean;
+  setShowBlocks: (v: boolean) => void;
+  showSections: boolean;
+  setShowSections: (v: boolean) => void;
   showWellsticks: boolean;
   setShowWellsticks: (v: boolean) => void;
 }
@@ -57,6 +66,17 @@ export const useMapStore = create<MapState>((set) => ({
   setCurrentPage: (currentPage) => set({ currentPage }),
   forecastApi14s: [],
   setForecastApi14s: (forecastApi14s) => set({ forecastApi14s }),
+
+  excludedApi14s: new Set<string>(),
+  toggleExcluded: (api14) =>
+    set((s) => {
+      const next = new Set(s.excludedApi14s);
+      if (next.has(api14)) next.delete(api14);
+      else next.add(api14);
+      return { excludedApi14s: next };
+    }),
+  setExcluded: (api14s) => set({ excludedApi14s: new Set(api14s) }),
+  clearExcluded: () => set({ excludedApi14s: new Set<string>() }),
 
   filters: DEFAULT_FILTER_SPEC,
   setFormations: (formations) =>
@@ -73,6 +93,8 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({
       filters: { ...s.filters, lateral_min_ft: min, lateral_max_ft: max },
     })),
+  setApi14s: (api14s) =>
+    set((s) => ({ filters: { ...s.filters, api14s } })),
   resetFilters: () => set({ filters: DEFAULT_FILTER_SPEC }),
 
   selectedApi14s: new Set<string>(),
@@ -91,8 +113,10 @@ export const useMapStore = create<MapState>((set) => ({
   drawMode: "off",
   setDrawMode: (drawMode) => set({ drawMode }),
 
-  showPlss: false,
-  setShowPlss: (showPlss) => set({ showPlss }),
+  showBlocks: false,
+  setShowBlocks: (showBlocks) => set({ showBlocks }),
+  showSections: false,
+  setShowSections: (showSections) => set({ showSections }),
   showWellsticks: true,
   setShowWellsticks: (showWellsticks) => set({ showWellsticks }),
 }));

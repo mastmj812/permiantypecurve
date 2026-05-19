@@ -42,6 +42,11 @@ class Well(Base):
 
     api14: Mapped[str] = mapped_column(String(14), primary_key=True)
 
+    # Well/lease name as reported by Enverus (e.g. "STATE 36 #1H"). Free-form
+    # — varies by operator. Indexed because the review/forecast tables sort
+    # and search by it.
+    name: Mapped[str | None] = mapped_column(String(255), index=True)
+
     operator: Mapped[str | None] = mapped_column(String(255), index=True)
     formation: Mapped[str | None] = mapped_column(String(64), index=True)
     first_prod_date: Mapped[date | None] = mapped_column(Date, index=True)

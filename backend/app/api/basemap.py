@@ -117,27 +117,45 @@ async def head_pmtiles() -> Response:
     )
 
 
-@router.get("/plss_tx_nm.geojson")
-async def serve_plss() -> Response:
-    """Serve the cached BLM PLSS sections GeoJSON for TX + NM.
-
-    Not present by default — the user opts in by downloading from
-    blm.gov/services/geospatial/GISData/cadastral and placing the file at
-    PLSS_GEOJSON_PATH. The frontend handles the 404 with a helpful toast.
-    """
-    path = settings.plss_geojson_path
+def _serve_geojson(path: Path, missing_hint: str) -> Response:
+    """Shared helper for the three GeoJSON overlay endpoints."""
     if not path.is_file():
-        log.info("plss_missing", path=str(path))
+        log.info("overlay_missing", path=str(path))
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=(
-                f"PLSS GeoJSON not found at {path}. Download from "
-                "https://www.blm.gov/services/geospatial/GISData/cadastral "
-                "and save as plss_tx_nm.geojson in infra/basemap."
-            ),
+            detail=f"GeoJSON not found at {path}. {missing_hint}",
         )
     return FileResponse(
         path,
         media_type="application/geo+json",
         headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/plss_tx_nm.geojson")
+async def serve_plss() -> Response:
+    return _serve_geojson(
+        settings.plss_geojson_path,
+        "Download from blm.gov/services/geospatial/GISData/cadastral "
+        "and save as plss_tx_nm.geojson in infra/basemap.",
+    )
+
+
+@router.get("/blocks_tx_nm.geojson")
+async def serve_blocks() -> Response:
+    return _serve_geojson(
+        settings.blocks_geojson_path,
+        "Place the source shapefile (.shp + .dbf + .prj + .shx) in "
+        "infra/basemap/ and run infra/basemap/convert_shapefiles.ps1 "
+        "(or .sh) to convert it to GeoJSON.",
+    )
+
+
+@router.get("/sections_tx_nm.geojson")
+async def serve_sections() -> Response:
+    return _serve_geojson(
+        settings.sections_geojson_path,
+        "Place the source shapefile (.shp + .dbf + .prj + .shx) in "
+        "infra/basemap/ and run infra/basemap/convert_shapefiles.ps1 "
+        "(or .sh) to convert it to GeoJSON.",
     )

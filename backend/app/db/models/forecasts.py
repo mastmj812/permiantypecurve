@@ -31,6 +31,11 @@ class Stream(str, enum.Enum):
 class FitMethod(str, enum.Enum):
     RATE_CUM = "rate_cum"
     RATE_TIME = "rate_time"
+    # The default cum-fit retried with rate-time because the primary
+    # pinned Di at a bound (cum has low Jacobian sensitivity to b — see
+    # forecasting/fit.py::fit_with_fallback). Distinct from RATE_TIME so
+    # the engineer can tell which wells were rescued.
+    RATE_TIME_FALLBACK = "rate_time_fallback"
 
 
 class ModelType(str, enum.Enum):
@@ -74,6 +79,12 @@ class Forecast(Base):
     )
     fit_r2: Mapped[float | None] = mapped_column(Float)
     fit_rmse: Mapped[float | None] = mapped_column(Float)
+    # Fraction of post-peak months flagged as downtime and excluded from
+    # the fit (0.0 to 1.0). Lets the Review grid surface wells whose
+    # forecast was built on a noisy production profile so the engineer
+    # knows to eyeball them. Computed once at fit time; same value
+    # across oil/gas/water streams since downtime is per-well.
+    downtime_ratio: Mapped[float | None] = mapped_column(Float)
 
     manual_override: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     locked: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

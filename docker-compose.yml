@@ -46,6 +46,13 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
+      # Bind-mount Alembic + scripts so new migrations and entrypoint
+      # tweaks land without an image rebuild. The entrypoint runs
+      # `alembic upgrade head` on every container start, so adding a new
+      # revision file then restarting the backend is all it takes.
+      - ./backend/alembic:/app/alembic
+      - ./backend/alembic.ini:/app/alembic.ini
+      - ./backend/scripts:/app/scripts
       - ./infra/basemap:/app/basemap:ro
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/api/health').status==200 else 1)"]

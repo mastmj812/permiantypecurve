@@ -11,6 +11,10 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     strictPort: true,
+    // Bind mounts from a Windows host into the Linux container don't
+    // deliver inotify events reliably, so HMR misses file edits. Poll
+    // instead — slightly more CPU, but edits actually reload.
+    watch: { usePolling: true, interval: 250 },
     proxy: {
       "/api": {
         target: backendOrigin,

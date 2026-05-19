@@ -1,10 +1,18 @@
-"""Prism (Direct Access REST) adapter — primary Enverus source.
+"""Prism adapter — thin wrapper over the Enverus Developer API v3 SDK.
 
-NOTE on endpoint paths and field names: these are placeholders modeled on
-the public Prism Direct Access v3 patterns. Verify each against the live
-contract before the first non-mock pull — Enverus has been known to rename
-fields between minor versions. The boundary is narrow on purpose: changes
-land in `_parse_*` and the `_PATH_*` constants only.
+The SDK handles HTTP, OAuth token refresh, pagination, and 429 backoff
+for us. Our job is reduced to:
+  * passing the right dataset name + filter kwargs to `sdk.query(...)`
+  * mapping each returned dict into our typed DTO via `_parse_*`
+
+Dataset names confirmed against the user's subscription:
+  * `wells`                       → well headers
+  * `production`                  → monthly production volumes
+  * `full-directional-surveys`    → directional survey stations
+
+If Enverus renames fields between versions, the parser functions are the
+narrow boundary that needs updating. Endpoint paths, auth, pagination,
+and retry logic are not our concern — the SDK owns them.
 """
 
 from __future__ import annotations
@@ -21,34 +29,71 @@ from app.enverus_client.base import (
     SurveyStation,
     WellHeader,
 )
-from app.enverus_client.http import EnverusHTTPClient
 
 log = get_logger("enverus.prism")
 
-# --- API surface (verify against current Prism docs before going live) ---
-DEFAULT_BASE_URL = "https://api.enverus.com"
-_PATH_WELLS = "/v3/direct-access/wells"
-_PATH_PRODUCTION = "/v3/direct-access/producing-entity-monthly-production"
-_PATH_SURVEY = "/v3/direct-access/wellbores-directional-surveys"
+DATASET_WELLS = "wells"
+DATASET_PRODUCTION = "production"
+DATASET_SURVEYS = "full-directional-surveys"
 
-_DEFAULT_PAGE_SIZE = 500
+# Chunk size for the production endpoint when filtering by an api14 list —
+# the SDK paginates within a single query, but very long filter strings
+# can trip URL-length limits on intermediary proxies.
+_API14_CHUNK_SIZE = 50
+
+# Enverus' `ENVBasin` column stores Permian wells under three sub-basin
+# names rather than a single "PERMIAN" umbrella. To honor our app-level
+# basin="Permian" request we have to filter on all three. The mapping
+# stays inside the adapter — the rest of the codebase still thinks of
+# "Permian" as one basin.
+_BASIN_VALUE_MAP: dict[str, tuple[str, ...]] = {
+    "PERMIAN": ("DELAWARE", "MIDLAND", "PERMIAN OTHER"),
+    # Add other plays as they come online (Eagle Ford, Bakken, etc.).
+}
+
+
+def _enverus_basin_filter(app_basin: str) -> str:
+    """Resolve the app-level basin name to the Enverus filter value.
+
+    Uses Enverus' comma-separated IN-style filter when multiple sub-basin
+    values map to one app-level name; otherwise returns the single value.
+    """
+    key = app_basin.upper()
+    values = _BASIN_VALUE_MAP.get(key, (key,))
+    return ",".join(values)
 
 
 class PrismClient(EnverusClient):
+    """Wraps Enverus' DeveloperAPIv3 SDK behind our `EnverusClient` ABC.
+
+    The SDK is lazy-initialized on first use so callers can construct a
+    PrismClient with `api_key=None` for synthetic-only flows without
+    importing the SDK or hitting the network.
+    """
+
     def __init__(
         self,
         *,
         api_key: str | None,
-        base_url: str = DEFAULT_BASE_URL,
-        http: EnverusHTTPClient | None = None,
-        page_size: int = _DEFAULT_PAGE_SIZE,
+        sdk_client: Any | None = None,
     ) -> None:
-        self._page_size = page_size
-        # `http` injection is what lets tests use httpx.MockTransport.
-        self._http = http or EnverusHTTPClient(base_url=base_url, api_key=api_key)
+        self._api_key = api_key
+        # Pre-wired SDK client (used in tests with a fake/mocked SDK).
+        self._sdk_override = sdk_client
+        self._sdk: Any | None = sdk_client
 
-    def close(self) -> None:
-        self._http.close()
+    def _get_sdk(self) -> Any:
+        if self._sdk is not None:
+            return self._sdk
+        if not self._api_key:
+            raise RuntimeError(
+                "PrismClient called without an api_key — set "
+                "ENVERUS_API_KEY_PRISM in .env or use synthetic seeding."
+            )
+        from enverus_developer_api import DeveloperAPIv3  # lazy import
+
+        self._sdk = DeveloperAPIv3(secret_key=self._api_key)
+        return self._sdk
 
     # -------------------- well headers --------------------
     def fetch_well_headers(
@@ -58,14 +103,23 @@ class PrismClient(EnverusClient):
         county: str | None = None,
         updated_since: datetime | None = None,
     ) -> Iterator[WellHeader]:
-        params: dict[str, Any] = {"basin": basin, "pageSize": self._page_size}
+        # Enverus stores ENVBasin VALUES uppercase AND at sub-basin level
+        # (DELAWARE / MIDLAND / PERMIAN OTHER). Our app talks in app-level
+        # basin names ("Permian"); `_enverus_basin_filter` maps and joins.
+        # Note: Country IS a returned column but NOT a filterable one on
+        # the wells dataset — adding `Country=US` zeroes the result. The
+        # basin filter alone restricts to US wells anyway.
+        filters: dict[str, Any] = {"ENVBasin": _enverus_basin_filter(basin)}
         if county is not None:
-            params["county"] = county
+            filters["county"] = county.upper()
         if updated_since is not None:
-            params["updatedSince"] = updated_since.isoformat()
+            filters["updateddate"] = f"gt({updated_since.isoformat()})"
+        # `deleteddate=null` excludes wells logically deleted since their
+        # last appearance — standard practice for incremental syncs.
+        filters.setdefault("deleteddate", "null")
 
-        for item in self._paginate(_PATH_WELLS, params):
-            yield _parse_well_header(item)
+        for row in self._get_sdk().query(DATASET_WELLS, **filters):
+            yield _parse_well_header(row)
 
     # -------------------- monthly production --------------------
     def fetch_monthly_production(
@@ -74,57 +128,87 @@ class PrismClient(EnverusClient):
         *,
         start_date: date | None = None,
     ) -> Iterator[ProductionRecord]:
-        # Prism accepts a comma-delimited filter; we chunk to keep query
-        # strings under typical proxy limits (8 KB).
-        chunk_size = 50
+        # The production and surveys datasets use Enverus' canonical
+        # `API_UWI_14_Unformatted` column for the 14-digit api14. The
+        # wells dataset has both that and a convenience `API14` alias —
+        # production / surveys only know the full name.
         api14s = list(api14_list)
-        for i in range(0, len(api14s), chunk_size):
-            chunk = api14s[i : i + chunk_size]
-            params: dict[str, Any] = {
-                "api14": ",".join(chunk),
-                "pageSize": self._page_size,
-            }
+        for i in range(0, len(api14s), _API14_CHUNK_SIZE):
+            chunk = api14s[i : i + _API14_CHUNK_SIZE]
+            filters: dict[str, Any] = {"API_UWI_14_Unformatted": ",".join(chunk)}
             if start_date is not None:
-                params["startDate"] = start_date.isoformat()
-            for item in self._paginate(_PATH_PRODUCTION, params):
-                yield _parse_production_record(item)
+                filters["producingmonth"] = f"gte({start_date.isoformat()})"
+            for row in self._get_sdk().query(DATASET_PRODUCTION, **filters):
+                yield _parse_production_record(row)
 
     # -------------------- directional survey --------------------
+    # The survey dataset is keyed on api12 (wellbore), not api14 (well +
+    # recompletion). A directional survey is a property of the borehole,
+    # so recompletions (api14 differs in the trailing 2 digits) share it.
+
+    @staticmethod
+    def _api14_to_api12(api14: str) -> str:
+        return api14[:12] if len(api14) >= 12 else api14
+
     def fetch_directional_survey(self, api14: str) -> DirectionalSurvey | None:
-        params = {"api14": api14, "pageSize": self._page_size}
+        """Single-well lookup — kept for the per-well detail-modal path."""
+        api12 = self._api14_to_api12(api14)
         stations: list[SurveyStation] = []
-        for item in self._paginate(_PATH_SURVEY, params):
-            stations.append(_parse_station(item))
+        for row in self._get_sdk().query(
+            DATASET_SURVEYS, API_UWI_12_Unformatted=api12
+        ):
+            stations.append(_parse_station(row))
         if not stations:
             return None
         return DirectionalSurvey(api14=api14, stations=stations)
 
-    # -------------------- pagination --------------------
-    def _paginate(self, path: str, params: dict[str, Any]) -> Iterator[dict[str, Any]]:
-        cursor: str | None = None
-        page = 0
-        while True:
-            q = {**params}
-            if cursor:
-                q["cursor"] = cursor
-            payload = self._http.get(path, params=q)
-            items = payload.get("data") or payload.get("items") or []
-            for item in items:
-                yield item
-            page += 1
-            # Prism uses `nextCursor`; older endpoints expose `next`. Accept either.
-            cursor = payload.get("nextCursor") or payload.get("next")
-            if not cursor:
-                return
-            log.debug("prism_paginate", path=path, page=page, cursor=cursor)
+    def fetch_directional_surveys(
+        self, api14s: Iterable[str]
+    ) -> Iterator[DirectionalSurvey]:
+        """Batched survey fetch — what the sync orchestrator uses.
+
+        50 wells per Enverus call instead of one call per well. Cuts API
+        round-trips by ~50× and avoids the 429 rate limit that per-well
+        calls trip on Permian-scale syncs.
+
+        Stations come back interleaved across the requested api12s, so
+        we group them by `API_UWI_12_Unformatted` before constructing
+        the typed `DirectionalSurvey` objects. Multiple api14s sharing
+        an api12 each receive their own DirectionalSurvey with the same
+        station list (recompletions of the same wellbore).
+        """
+        # api12 → all api14s that map to it (recompletions etc.)
+        api12_to_api14s: dict[str, list[str]] = {}
+        for api14 in api14s:
+            api12 = self._api14_to_api12(api14)
+            api12_to_api14s.setdefault(api12, []).append(api14)
+
+        api12_list = list(api12_to_api14s.keys())
+        for i in range(0, len(api12_list), _API14_CHUNK_SIZE):
+            chunk = api12_list[i : i + _API14_CHUNK_SIZE]
+            stations_by_api12: dict[str, list[SurveyStation]] = {}
+            for row in self._get_sdk().query(
+                DATASET_SURVEYS, API_UWI_12_Unformatted=",".join(chunk)
+            ):
+                api12 = str(_g(row, "API_UWI_12_Unformatted") or "")
+                if not api12:
+                    continue
+                stations_by_api12.setdefault(api12, []).append(_parse_station(row))
+
+            for api12, stations in stations_by_api12.items():
+                # Sort by station_seq so heel detection sees the same
+                # order regardless of how Enverus interleaved rows.
+                stations.sort(key=lambda s: s.station_seq)
+                for api14 in api12_to_api14s.get(api12, []):
+                    yield DirectionalSurvey(api14=api14, stations=list(stations))
 
 
 # ---------------- parsers (the boundary that's most likely to drift) ----------------
-# Each parser is forgiving: a missing/None field becomes None. Keep the
-# `_get` helpers central so renaming a field is a one-line change.
+# Each parser is forgiving: a missing/None field becomes None. Update these
+# when Enverus renames a column or you discover an alternate spelling in
+# the wild. Keys are checked in order; the first non-None wins.
 
 def _g(d: dict[str, Any], *keys: str) -> Any:
-    """Return the first non-None value from any of the candidate keys."""
     for k in keys:
         v = d.get(k)
         if v is not None:
@@ -156,53 +240,77 @@ def _as_date(v: Any) -> date | None:
     if isinstance(v, date):
         return v
     try:
-        # Accept full ISO datetimes and date-only strings.
         return date.fromisoformat(str(v)[:10])
     except ValueError:
         return None
 
 
 def _parse_well_header(item: dict[str, Any]) -> WellHeader:
+    # Enverus wells dataset column names use `<Name>_<Unit>` suffixes.
+    # `_BH` suffix marks the bottomhole point; surface lat/lon are plain
+    # `Latitude` / `Longitude`. County is stored uppercase ("LOVING") —
+    # we title-case it on the way in so UI strings stay consistent with
+    # what the user types ("Loving" in the filter panel, etc).
+    raw_county = _g(item, "County", "county")
+    county = raw_county.title() if isinstance(raw_county, str) else raw_county
     return WellHeader(
-        api14=str(_g(item, "API14", "api14", "API_14")),
+        api14=str(_g(item, "API_UWI_14_Unformatted", "API14", "api14", "API_14")),
+        # ENVWellName is the Enverus-normalized lease/well name; WellName is
+        # the operator-reported variant. Either is fine — the field is
+        # display-only and there's no canonical authority.
+        name=_g(item, "ENVWellName", "WellName", "well_name", "LeaseName"),
         operator=_g(item, "ENVOperator", "operator", "operator_name"),
-        formation=_g(item, "ENVInterval", "formation", "target_formation"),
+        formation=_g(item, "ENVInterval", "Formation", "formation", "target_formation"),
         first_prod_date=_as_date(_g(item, "FirstProdDate", "firstProdDate", "first_prod_date")),
-        lateral_ft=_as_float(_g(item, "LateralLength", "lateral_length_ft", "lateralFt")),
-        proppant_lbs=_as_float(_g(item, "Proppant", "proppantLbs", "totalProppant")),
-        fluid_bbl=_as_float(_g(item, "Fluid", "fluidBbl", "totalFluid")),
-        stages=_as_int(_g(item, "Stages", "stageCount", "stages")),
-        tvd_ft=_as_float(_g(item, "TVD", "tvd_ft", "trueVerticalDepth")),
-        county=_g(item, "County", "county"),
+        lateral_ft=_as_float(_g(item, "LateralLength_FT", "LateralLength", "lateralFt")),
+        proppant_lbs=_as_float(_g(item, "Proppant_LBS", "Proppant", "proppantLbs", "totalProppant")),
+        fluid_bbl=_as_float(_g(item, "TotalFluidPumped_BBL", "Fluid", "fluidBbl", "totalFluid")),
+        stages=_as_int(_g(item, "FracStages", "StimulatedStages", "Stages", "stageCount")),
+        tvd_ft=_as_float(_g(item, "TVD_FT", "TVD", "trueVerticalDepth")),
+        county=county,
         basin=_g(item, "ENVBasin", "basin"),
         status=_g(item, "ENVWellStatus", "status", "well_status"),
         sh_lat=_as_float(_g(item, "Latitude", "surfaceLatitude", "sh_lat")),
         sh_lon=_as_float(_g(item, "Longitude", "surfaceLongitude", "sh_lon")),
-        bh_lat=_as_float(_g(item, "BottomLatitude", "bottomholeLatitude", "bh_lat")),
-        bh_lon=_as_float(_g(item, "BottomLongitude", "bottomholeLongitude", "bh_lon")),
+        bh_lat=_as_float(_g(item, "Latitude_BH", "BottomLatitude", "bottomholeLatitude", "bh_lat")),
+        bh_lon=_as_float(_g(item, "Longitude_BH", "BottomLongitude", "bottomholeLongitude", "bh_lon")),
         raw=item,
     )
 
 
 def _parse_production_record(item: dict[str, Any]) -> ProductionRecord:
     return ProductionRecord(
-        api14=str(_g(item, "API14", "api14")),
-        prod_date=_as_date(_g(item, "ProducingMonth", "prodDate", "month")) or date(1900, 1, 1),
-        oil_bbl=_as_float(_g(item, "LiquidsProd_BBL", "oil_bbl", "oilBbl")),
-        gas_mcf=_as_float(_g(item, "GasProd_MCF", "gas_mcf", "gasMcf")),
-        water_bbl=_as_float(_g(item, "WaterProd_BBL", "water_bbl", "waterBbl")),
-        producing_days=_as_int(_g(item, "ProducingDays", "producing_days", "producingDays")),
+        api14=str(_g(item, "API_UWI_14_Unformatted", "API14", "api14")),
+        prod_date=_as_date(_g(item, "ProducingMonth", "prodDate", "month", "producingmonth"))
+        or date(1900, 1, 1),
+        oil_bbl=_as_float(_g(item, "LiquidsProd_BBL", "oil_bbl", "oilBbl", "liquidsprod_bbl")),
+        gas_mcf=_as_float(_g(item, "GasProd_MCF", "gas_mcf", "gasMcf", "gasprod_mcf")),
+        water_bbl=_as_float(_g(item, "WaterProd_BBL", "water_bbl", "waterBbl", "waterprod_bbl")),
+        # Float — Enverus reports fractional producing-days for partial
+        # first months (e.g. 0.166 = ~4 hours online on first-prod day).
+        producing_days=_as_float(
+            _g(item, "ProducingDays", "producing_days", "producingDays", "producingdays")
+        ),
         source="prism",
     )
 
 
 def _parse_station(item: dict[str, Any]) -> SurveyStation:
+    # Enverus' surveys dataset uses `<Name>_<Unit>` column names —
+    # `MeasuredDepth_FT`, `Inclination_DEG`, etc. Bare names (MD, TVD)
+    # are kept as fallbacks for other potential sources.
     return SurveyStation(
-        station_seq=_as_int(_g(item, "StationNumber", "stationSeq", "station_seq")) or 0,
-        md_ft=_as_float(_g(item, "MD", "md_ft", "measuredDepth")) or 0.0,
-        inclination_deg=_as_float(_g(item, "Inclination", "inclination_deg")) or 0.0,
-        azimuth_deg=_as_float(_g(item, "Azimuth", "azimuth_deg")),
-        tvd_ft=_as_float(_g(item, "TVD", "tvd_ft")),
+        station_seq=_as_int(
+            _g(item, "StationNumber", "stationSeq", "station_seq", "stationnumber")
+        ) or 0,
+        md_ft=_as_float(
+            _g(item, "MeasuredDepth_FT", "MD", "md_ft", "measuredDepth")
+        ) or 0.0,
+        inclination_deg=_as_float(
+            _g(item, "Inclination_DEG", "Inclination", "inclination_deg")
+        ) or 0.0,
+        azimuth_deg=_as_float(_g(item, "Azimuth_DEG", "Azimuth", "azimuth_deg")),
+        tvd_ft=_as_float(_g(item, "TVD_FT", "TVD", "tvd_ft")),
         lat=_as_float(_g(item, "Latitude", "lat")),
         lon=_as_float(_g(item, "Longitude", "lon")),
     )

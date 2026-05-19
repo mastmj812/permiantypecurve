@@ -6,7 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.6",
-    "pydantic>=2.7",
+    "pydantic[email]>=2.7",
     "pydantic-settings>=2.4",
     "structlog>=24.4",
     "sqlalchemy>=2.0.34",
@@ -15,12 +15,18 @@ dependencies = [
     "geoalchemy2>=0.15.2",
     "httpx>=0.27.2",
     "tenacity>=9.0.0",
+    "enverus-developer-api>=2.0",
     "apscheduler>=3.10.4",
     "numpy>=2.1.1",
     "pandas>=2.2.2",
     "scipy>=1.14.1",
+    "openpyxl>=3.1",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
+    # bcrypt 4.1+ broke API compat with passlib 1.7.4: even short passwords
+    # raise "password cannot be longer than 72 bytes". Pin to the 4.0.x
+    # series until passlib ships a fix. Re-evaluate when passlib 1.8 lands.
+    "bcrypt>=4.0,<4.1",
 ]
 
 [project.optional-dependencies]

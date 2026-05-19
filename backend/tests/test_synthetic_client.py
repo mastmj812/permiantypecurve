@@ -162,3 +162,28 @@ def test_malformed_first_station_is_skipped_next_one_wins() -> None:
 def test_unknown_api14_yields_no_production() -> None:
     cli = _client(n=5)
     assert list(cli.fetch_monthly_production(["00000000000000"])) == []
+
+
+# ------------------------------ Reeves County ------------------------------
+# Synthetic-mode counterpart of bringing Reeves into the real-data scope.
+# Confirms the FIPS prefix + bbox table actually drives api14 and lat/lon —
+# the wells_points layer on the map renders by lat/lon, so a Reeves well
+# placed inside Loving's box would silently look wrong.
+
+
+def test_reeves_wells_carry_reeves_fips_prefix_and_bbox() -> None:
+    cli = SyntheticEnverusClient(n_wells=20, county="Reeves", basin="Permian", seed=42)
+    headers = list(cli.fetch_well_headers(basin="Permian", county="Reeves"))
+    assert len(headers) == 20
+    for h in headers:
+        # TX state FIPS 42 + Reeves county FIPS 389.
+        assert h.api14.startswith("42389") and len(h.api14) == 14
+        assert h.county == "Reeves"
+        # Surface coords land inside the Reeves envelope (south of Loving).
+        assert h.sh_lat is not None and 31.00 <= h.sh_lat <= 31.85
+        assert h.sh_lon is not None and -104.20 <= h.sh_lon <= -103.30
+
+
+def test_unknown_county_rejected() -> None:
+    with pytest.raises(ValueError, match="known"):
+        SyntheticEnverusClient(n_wells=10, county="Atlantis", basin="Permian")

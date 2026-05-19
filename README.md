@@ -27,53 +27,69 @@ docs/       architecture diagrams, decision notes
 
 ## First-run
 
-```bash
-# 1. Copy env template and edit as needed (Enverus keys can wait until step 2).
+```powershell
+# 1. Copy env template. Set JWT_SECRET to a long random string for prod.
+#    Enverus keys can wait — synthetic data flow works without them.
 cp .env.example .env
 
 # 2. Download the Texas+NM PMTiles basemap (one-time, ~150–250 MB).
+.\infra\basemap\fetch.ps1          # Windows
 ./infra/basemap/fetch.sh           # macOS / Linux / Git Bash
-.\infra\basemap\fetch.ps1          # Windows PowerShell
 
-# 3. Bring up the stack.
-docker compose up --build
+# 3. Bring up the stack. Migrations run automatically on backend startup.
+docker compose up --build -d
+
+# 4. Create your user account (single-user — no signup flow in the UI).
+docker compose exec backend python -m app.cli.create_user --email you@example.com
+#    → prompts for password (≥ 8 chars, typed twice)
+
+# 5. Seed synthetic Permian wells so you have something to forecast.
+docker compose exec backend python -m app.seed.seed_synthetic --n 50 --seed 42
 ```
 
-Then:
-- Frontend: http://localhost:5173
-- Backend health: http://localhost:8000/api/health
-- API docs: http://localhost:8000/docs
+Then in the browser:
+- **Frontend**: http://localhost:5173  → log in with the email/password from step 4
+- **Backend API docs**: http://localhost:8000/docs (protected endpoints require the bearer token)
+- **Health probe (unauth)**: http://localhost:8000/api/health
 
-You should see a blank MapLibre map of the Permian rendered against the
-self-hosted Protomaps basemap. A green "api ok" badge in the header
-confirms the backend.
+You should land on the **Map** tab with 50 synthetic Loving County wells colored by formation. The header shows your email, a green "api ok" pill, and a sign-out link.
 
 ## Environment variables
 
-See `.env.example`. The ones that matter for step 1:
+See `.env.example`. The ones that matter:
 
-| Variable          | Purpose                                              |
-| ----------------- | ---------------------------------------------------- |
-| `DATABASE_URL`    | SQLAlchemy URL — defaults to compose Postgres        |
-| `JWT_SECRET`      | HS256 signing secret (step 7)                        |
-| `LOG_LEVEL`       | `DEBUG` / `INFO` / `WARNING`                         |
-| `PMTILES_PATH`    | Absolute path to the PMTiles file inside the backend |
-| `SENTRY_DSN`      | Optional; structlog → Sentry if set                  |
-
-Step 2 adds:
-- `ENVERUS_API_KEY_PRISM` — Prism API key
-- `ENVERUS_API_KEY_DI`    — DirectAccess fallback key
+| Variable                 | Purpose                                                  |
+| ------------------------ | -------------------------------------------------------- |
+| `DATABASE_URL`           | SQLAlchemy URL — defaults to the compose Postgres        |
+| `JWT_SECRET`             | **Must be set in production.** HS256 signing secret      |
+| `LOG_LEVEL`              | `DEBUG` / `INFO` / `WARNING`                             |
+| `PMTILES_PATH`           | Absolute path to the PMTiles file inside the backend     |
+| `PLSS_GEOJSON_PATH`      | Absolute path to the optional BLM PLSS GeoJSON           |
+| `SENTRY_DSN`             | Optional; structlog → Sentry if set                      |
+| `ENVERUS_API_KEY_PRISM`  | Required only for real-data sync                         |
+| `ENVERUS_API_KEY_DI`     | Required only for DI-Direct fallback fields              |
 
 ## Tests
 
 ```bash
-# Backend
+# Backend (pure-function tests, ~70 cases including real-well baselines)
 docker compose exec backend pytest
 
 # Frontend
 docker compose exec frontend npm run typecheck
-docker compose exec frontend npm test
+docker compose exec frontend npm test          # vitest — outlier detection cases
 ```
+
+## Backups
+
+Nightly pg_dump (`infra/backup/`):
+
+```powershell
+.\infra\backup\backup.ps1                       # one-shot
+# Schedule with Task Scheduler (Windows) or cron — see infra/backup/README.md
+```
+
+Restore is documented in `infra/backup/README.md`.
 
 ## Seed flow
 
@@ -138,9 +154,20 @@ renders all wellstick variants:
       with background jobs; SVG decline charts (Cartesian + semi-log);
       live re-render preview endpoint; manual override + lock; real-well
       regression baselines.
-- [ ] Step 5 — Review page with outlier flagging.
-- [ ] Step 6 — Type curve aggregation, library, CSV export, versioning.
-- [ ] Step 7 — Auth, polish, docs, deploy scripts.
+- [x] **Step 5** — Review page: sortable/filterable table over fits,
+      EUR-per-lateral-ft outlier flag (2σ from selection median),
+      per-well include/exclude checkbox feeding step-6 type-curve
+      aggregation, running summary panel.
+- [x] **Step 6** — Type curve aggregation, library, versioning, CSV
+      export: per-month P10/P25/P50/P75/P90 + mean + well_count,
+      normalized per-1000-lateral-ft, oil/gas/water; selectable
+      first-prod (default, incl. ramp-up) or peak-month alignment;
+      implied EUR per percentile; save / list / rename / delete;
+      compare two curves on the same chart; ZIP-of-CSVs export.
+- [x] **Step 7** — JWT auth (single-user with `create_user` CLI;
+      structured for future SSO), bearer-protected routes, login UI +
+      sign-out, pg_dump backup script with Windows / cron schedules,
+      README walkthrough.
 
 ## Architecture diagram
 

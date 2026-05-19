@@ -23,9 +23,31 @@ The script:
 
 Re-run with `--force` (bash) or `-Force` (PowerShell) to refresh.
 
-## PLSS overlay (optional, deferred)
+## PLSS overlay (optional)
 
 The BLM PLSS sections / townships GeoJSON belongs at
 `plss_tx_nm.geojson` in this directory. Sourced from
-https://www.blm.gov/services/geospatial/GISData/cadastral . Wired into the
-map page in step 3.
+https://www.blm.gov/services/geospatial/GISData/cadastral .
+
+## Block and section overlays (Permian abstracts)
+
+Drop your block + section shapefiles into this directory and run the
+converter. It uses `ogr2ogr` inside a tiny GDAL Docker image (no host
+GDAL install needed) and reprojects to WGS84 for MapLibre.
+
+```bash
+# expects ./blocks.shp and ./sections.shp by default
+.\infra\basemap\convert_shapefiles.ps1                # Windows
+./infra/basemap/convert_shapefiles.sh                  # macOS / Linux
+
+# or with custom paths:
+./infra/basemap/convert_shapefiles.sh --blocks my_blocks.shp --sections my_sections.shp
+```
+
+The script prints the property keys of the first feature in each output.
+If they don't include a recognized label key (`BLOCK_NO`, `BLOCK`,
+`SECTION_NO`, `SECTION`, `SEC`), update the `text-field` expression in
+`frontend/src/components/MapView.tsx` accordingly.
+
+Blocks render at zoom ≥ 8; sections at zoom ≥ 11. Toggle each with the
+checkboxes in the map's top toolbar.

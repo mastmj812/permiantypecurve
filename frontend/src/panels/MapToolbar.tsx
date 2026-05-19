@@ -12,8 +12,10 @@ export function MapToolbar() {
   const setDrawMode = useMapStore((s) => s.setDrawMode);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const setShowWellsticks = useMapStore((s) => s.setShowWellsticks);
-  const showPlss = useMapStore((s) => s.showPlss);
-  const setShowPlss = useMapStore((s) => s.setShowPlss);
+  const showBlocks = useMapStore((s) => s.showBlocks);
+  const setShowBlocks = useMapStore((s) => s.setShowBlocks);
+  const showSections = useMapStore((s) => s.showSections);
+  const setShowSections = useMapStore((s) => s.setShowSections);
 
   return (
     <div className="map-toolbar">
@@ -40,13 +42,27 @@ export function MapToolbar() {
           />
           Wellsticks
         </label>
-        <label className="chk-inline">
+        <label
+          className="chk-inline"
+          title="Block grid — labels render at zoom 8+"
+        >
           <input
             type="checkbox"
-            checked={showPlss}
-            onChange={(e) => setShowPlss(e.target.checked)}
+            checked={showBlocks}
+            onChange={(e) => setShowBlocks(e.target.checked)}
           />
-          PLSS
+          Blocks
+        </label>
+        <label
+          className="chk-inline"
+          title="Section grid — labels render at zoom 11+"
+        >
+          <input
+            type="checkbox"
+            checked={showSections}
+            onChange={(e) => setShowSections(e.target.checked)}
+          />
+          Sections
         </label>
       </div>
     </div>

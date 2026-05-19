@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
-import type { WellStatus } from "../api/types";
-import { groupedFormations } from "../map/formations";
+import type { FacetCount, WellStatus } from "../api/types";
+import { type FormationGroup, colorForFormation } from "../map/formations";
 import { useMapStore } from "../store/mapStore";
 
 const ALL_STATUSES: WellStatus[] = ["PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN"];
@@ -15,9 +15,16 @@ export function FilterPanel() {
   const setStatuses = useMapStore((s) => s.setStatuses);
   const setVintageRange = useMapStore((s) => s.setVintageRange);
   const setLateralRange = useMapStore((s) => s.setLateralRange);
+  const setApi14s = useMapStore((s) => s.setApi14s);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
-  const facetsQ = useQuery({ queryKey: ["facets"], queryFn: fetchFacets });
+  // Refetch facets whenever filters change so per-facet counts respond
+  // ("WOLFCAMP A has 12 wells under your current vintage window").
+  // The backend excludes the facet's own column from its own count.
+  const facetsQ = useQuery({
+    queryKey: ["facets", filters],
+    queryFn: () => fetchFacets(filters),
+  });
 
   return (
     <aside className="panel panel-left">
@@ -30,7 +37,7 @@ export function FilterPanel() {
 
       <FormationSection
         selected={filters.formations}
-        availableNames={facetsQ.data?.formations.map((f) => f.value) ?? []}
+        facets={facetsQ.data?.formations ?? []}
         onChange={setFormations}
       />
 
@@ -53,56 +60,223 @@ export function FilterPanel() {
       />
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
+
+      <Api14Section selected={filters.api14s} onChange={setApi14s} />
     </aside>
   );
 }
 
-// ---------------- Formation (grouped checkboxes) ----------------
-function FormationSection({
+// ---------------- API14 paste filter ----------------
+// Paste a multiline list of API14s from another tool's well-list export.
+// When non-empty, the map is filtered to ONLY those wells (intersected
+// with the other active filters). Empty textarea = no filter.
+function Api14Section({
   selected,
-  availableNames,
   onChange,
 }: {
   selected: string[];
-  availableNames: string[];
   onChange: (next: string[]) => void;
 }) {
-  const groups = useMemo(() => groupedFormations(), []);
-  const have = new Set(availableNames);
+  // Local draft state — only commits to the store on blur / Apply, so
+  // we don't refetch tiles on every keystroke during a multi-thousand-
+  // character paste.
+  const [draft, setDraft] = useState<string>(() => selected.join("\n"));
+
+  // If the store value changes from outside (e.g. resetFilters), pull
+  // it back into the textarea.
+  useEffect(() => {
+    setDraft(selected.join("\n"));
+  }, [selected.join(",")]);
+
+  // Extract every 14-digit run, regardless of separator. Tolerates
+  // dashes (TX format like 42-301-36707-0000 = 14 digits when stripped),
+  // commas, tabs, newlines, and leading/trailing junk.
+  const parsed = useMemo(() => extractApi14s(draft), [draft]);
+  const dirty = !arraysEqual(parsed, selected);
+
+  return (
+    <section className="filter-section">
+      <h3>API14 list</h3>
+      <textarea
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="paste api14s (one per line or comma-separated)"
+        rows={5}
+        spellCheck={false}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
+      />
+      <div
+        className="muted"
+        style={{ fontSize: 11, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}
+      >
+        {parsed.length === 0
+          ? <span>no api14s parsed</span>
+          : <span>{parsed.length} api14{parsed.length === 1 ? "" : "s"} parsed</span>}
+        {parsed.length > 500 && (
+          <span style={{ color: "#dc2626" }}>
+            — over 500 will likely overflow the tile URL
+          </span>
+        )}
+      </div>
+      <div className="param-actions" style={{ marginTop: 4 }}>
+        <button
+          type="button"
+          className="btn-primary"
+          onClick={() => onChange(parsed)}
+          disabled={!dirty}
+          title={dirty ? "Apply this list as the filter" : "List is already applied"}
+        >
+          apply
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => {
+            setDraft("");
+            onChange([]);
+          }}
+          disabled={selected.length === 0 && draft === ""}
+        >
+          clear
+        </button>
+      </div>
+    </section>
+  );
+}
+
+const API14_RE = /\d{14}/g;
+
+function extractApi14s(text: string): string[] {
+  // Strip dashes so "42-301-36707-0000" → "42301367070000" before matching.
+  const compact = text.replace(/-/g, "");
+  const matches = compact.match(API14_RE) ?? [];
+  // De-dupe while preserving paste order so the user can tell which
+  // entries collapsed if they expected a different count.
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const m of matches) {
+    if (!seen.has(m)) {
+      seen.add(m);
+      out.push(m);
+    }
+  }
+  return out;
+}
+
+function arraysEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+// ---------------- Formation (grouped checkboxes) ----------------
+// Data-driven: render exactly the formations that exist in the DB,
+// grouped by name prefix. Faded when count === 0 under the current
+// filters (the formation has wells in the DB, but none match the
+// active vintage / lateral / status / etc).
+function FormationSection({
+  selected,
+  facets,
+  onChange,
+}: {
+  selected: string[];
+  facets: FacetCount[];
+  onChange: (next: string[]) => void;
+}) {
+  // Group by name prefix. Enverus is inconsistent about subdivision —
+  // we just classify by the leading token so new variants land in the
+  // right section automatically.
+  const groups = useMemo(() => {
+    const out: Record<FormationGroup, FacetCount[]> = {
+      Wolfcamp: [],
+      "Bone Spring": [],
+      Spraberry: [],
+      Other: [],
+    };
+    for (const f of facets) {
+      out[groupForName(f.value)].push(f);
+    }
+    // Inside each group, sort by count desc then name asc so the bulk
+    // formations bubble up.
+    for (const k of Object.keys(out) as FormationGroup[]) {
+      out[k].sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+    }
+    return out;
+  }, [facets]);
 
   function toggle(name: string) {
     if (selected.includes(name)) onChange(selected.filter((x) => x !== name));
     else onChange([...selected, name]);
   }
 
+  // Render groups in fixed order, skipping empty ones. "Other" only
+  // appears when there's something unclassified in the data.
+  const order: FormationGroup[] = ["Wolfcamp", "Bone Spring", "Spraberry", "Other"];
+
   return (
     <section className="filter-section">
       <h3>Formation</h3>
-      {(["Wolfcamp", "Bone Spring", "Spraberry"] as const).map((g) => (
-        <fieldset key={g} className="formation-group">
-          <legend>{g}</legend>
-          {groups[g].map((f) => {
-            const present = have.size === 0 || have.has(f.name);
-            return (
-              <label
-                key={f.name}
-                className={`chk ${present ? "" : "chk-faded"}`}
-                title={present ? "" : "no wells with this formation in the DB"}
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.includes(f.name)}
-                  onChange={() => toggle(f.name)}
-                />
-                <span className="swatch" style={{ background: f.color }} />
-                {f.name}
-              </label>
-            );
-          })}
-        </fieldset>
-      ))}
+      {order.map((g) => {
+        const items = groups[g];
+        if (items.length === 0) return null;
+        return (
+          <fieldset key={g} className="formation-group">
+            <legend>{g}</legend>
+            {items.map((f) => {
+              const matches = f.count > 0;
+              return (
+                <label
+                  key={f.value}
+                  className={`chk ${matches ? "" : "chk-faded"}`}
+                  title={
+                    matches
+                      ? `${f.count} well${f.count === 1 ? "" : "s"} under current filters`
+                      : "no wells match the current filters"
+                  }
+                >
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(f.value)}
+                    onChange={() => toggle(f.value)}
+                  />
+                  <span
+                    className="swatch"
+                    style={{ background: colorForFormation(f.value) }}
+                  />
+                  {f.value}
+                  <span className="muted" style={{ marginLeft: 4 }}>
+                    ({f.count})
+                  </span>
+                </label>
+              );
+            })}
+          </fieldset>
+        );
+      })}
     </section>
   );
+}
+
+// Classify a formation name into a UI group by leading token. Case-
+// insensitive to absorb Enverus inconsistency. Order matters: a name
+// like "BONE SPRING,WOLFCAMP" mentions both intervals, but we group it
+// under Bone Spring (the shallower one) since that's typically the
+// primary producer in a dual-interval completion.
+function groupForName(name: string): FormationGroup {
+  const u = name.toUpperCase();
+  if (u.includes("BONE SPRING") || u.includes("AVALON")) return "Bone Spring";
+  // "WLFCMP" catches the abbreviated form Enverus occasionally uses
+  // (e.g. "WLFCMP\\PENN CONS"). Without this, those rows fall through
+  // to Other even though the operator clearly meant Wolfcamp.
+  if (u.includes("WOLFCAMP") || u.includes("WLFCMP")) return "Wolfcamp";
+  if (
+    u.includes("SPRABERRY") ||
+    u.includes("JO MILL") ||
+    u.startsWith("DEAN")
+  ) {
+    return "Spraberry";
+  }
+  return "Other";
 }
 
 // ---------------- Vintage (date range) ----------------

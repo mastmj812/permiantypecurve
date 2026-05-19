@@ -21,6 +21,7 @@ from typing import Any
 @dataclass(frozen=True)
 class WellHeader:
     api14: str
+    name: str | None = None
     operator: str | None = None
     formation: str | None = None
     first_prod_date: date | None = None
@@ -46,7 +47,8 @@ class ProductionRecord:
     oil_bbl: float | None = None
     gas_mcf: float | None = None
     water_bbl: float | None = None
-    producing_days: int | None = None
+    # Float — Enverus reports fractional days for partial first months.
+    producing_days: float | None = None
     source: str | None = None
 
 
@@ -90,3 +92,18 @@ class EnverusClient(ABC):
 
     @abstractmethod
     def fetch_directional_survey(self, api14: str) -> DirectionalSurvey | None: ...
+
+    def fetch_directional_surveys(
+        self, api14s: Iterable[str]
+    ) -> Iterator[DirectionalSurvey]:
+        """Batch survey fetch.
+
+        Default implementation loops the per-well method. Adapters that
+        support multi-id queries (PrismClient does) override this for
+        far fewer API round-trips — critical when the per-well rate
+        limit would otherwise bite.
+        """
+        for api14 in api14s:
+            survey = self.fetch_directional_survey(api14)
+            if survey is not None:
+                yield survey

@@ -21,6 +21,7 @@ class NormalizationBasis(str, enum.Enum):
 
 class AlignmentMethod(str, enum.Enum):
     PEAK_MONTH = "peak_month"
+    FIRST_PROD_MONTH = "first_prod_month"
 
 
 class TypeCurve(Base):
@@ -60,4 +61,10 @@ class TypeCurve(Base):
     # Self-ref pointer: "save as new version of X" sets version_of = X.id.
     version_of: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("type_curves.id", ondelete="SET NULL")
+    )
+
+    # Optional deal grouping. A deal owns 0..N curves; deleting a deal
+    # un-assigns its curves (ON DELETE SET NULL) rather than cascading.
+    deal_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("deals.id", ondelete="SET NULL"), index=True
     )

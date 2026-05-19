@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import Forecast, ProductionMonthly, Stream
-from app.forecasting.fit import fit_rate_cum, fit_rate_time
+from app.forecasting.fit import fit_rate_cum, fit_rate_time, fit_with_fallback
 from app.forecasting.peak_detection import PeakResult, detect_oil_peak
 from app.forecasting.types import ForecastConfig, ForecastResult
 
@@ -84,6 +84,7 @@ def _persist(
         "fit_method": result.fit_method,
         "fit_r2": result.fit_r2,
         "fit_rmse": result.fit_rmse,
+        "downtime_ratio": result.downtime_ratio,
         "manual_override": False,
         "locked": False,
         "updated_at": datetime.now(timezone.utc),
@@ -131,7 +132,16 @@ def forecast_well(
         log.warning("no_oil_peak", api14=api14)
         return out
 
-    fit_fn = fit_rate_cum if cfg.fit_method == "rate_cum" else fit_rate_time
+    # Default "rate_cum" runs the wrapper that retries with rate-time
+    # when Di pins at a bound (cum-fit's low b-sensitivity often leaves
+    # b at 1.0 and absorbs misfit into Di). Explicit "rate_time" or
+    # "rate_cum_strict" opt out — useful for tests and per-well overrides.
+    if cfg.fit_method == "rate_time":
+        fit_fn = fit_rate_time
+    elif cfg.fit_method == "rate_cum_strict":
+        fit_fn = fit_rate_cum
+    else:
+        fit_fn = fit_with_fallback
 
     for stream in STREAMS:
         # Use oil's peak for ALL streams — they share t=0 by construction.

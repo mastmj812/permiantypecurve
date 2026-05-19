@@ -1,8 +1,13 @@
 // Forecast API typed client.
 // Mirrors app/api/forecasts.py response shapes — keep in sync.
 
+import { apiFetch } from "./auth";
+
 export type Stream = "oil" | "gas" | "water";
-export type FitMethod = "rate_cum" | "rate_time";
+// "rate_time_fallback" = the default rate_cum fit pinned Di at a bound,
+// so the orchestrator re-ran with rate_time and adopted that result.
+// See backend forecasting/fit.py::fit_with_fallback.
+export type FitMethod = "rate_cum" | "rate_time" | "rate_time_fallback";
 export type ModelType =
   | "arps_exponential"
   | "arps_hyperbolic"
@@ -51,9 +56,20 @@ export interface ForecastRow {
   fit_rmse: number | null;
   fit_at_bound: boolean;     // qi/Di/b pinned at a bound — engineer should review
   bound_note: string | null; // human-readable specifics when fit_at_bound is true
+  // Fraction of post-peak months excluded as downtime (0–1). null on
+  // forecasts persisted before the column existed.
+  downtime_ratio: number | null;
   manual_override: boolean;
   locked: boolean;
   updated_at: string;
+  // Joined well attributes — populated by /list (the review/forecast
+  // grids use these for sort + display); null when fetched by id.
+  well_name: string | null;
+  well_operator: string | null;
+  well_formation: string | null;
+  well_lateral_ft: number | null;
+  well_vintage_year: number | null;
+  well_county: string | null;
 }
 
 // Client-side conversion mirroring app/forecasting/metrics.py.
@@ -64,6 +80,19 @@ export function effectiveDecline(Di: number, b: number | null | undefined): numb
   if (b == null || Math.abs(b) < 1e-6) return 1 - Math.exp(-Di);
   if (Math.abs(b - 1) < 1e-4) return Di / (1 + Di);
   return 1 - 1 / Math.pow(1 + b * Di, 1 / b);
+}
+
+// Inverse of effectiveDecline — solve for nominal Di given first-year
+// effective decline (0–1) and b. Lets the UI present Di in industry
+// convention (% effective) while keeping the Arps formula in nominal
+// units. Cap eff at 0.999 so the hyperbolic branch doesn't divide by
+// (1 - eff)^b at the singularity.
+export function nominalDecline(diEffective: number, b: number | null | undefined): number {
+  if (!Number.isFinite(diEffective) || diEffective <= 0) return 0;
+  const eff = Math.min(diEffective, 0.999);
+  if (b == null || Math.abs(b) < 1e-6) return -Math.log(1 - eff);
+  if (Math.abs(b - 1) < 1e-4) return eff / (1 - eff);
+  return (Math.pow(1 - eff, -b) - 1) / b;
 }
 
 export interface BatchResponse {
@@ -112,7 +141,7 @@ export async function batchForecast(
   api14s: string[],
   config?: Partial<ForecastConfig>,
 ): Promise<BatchResponse> {
-  const r = await fetch("/api/forecasts/batch", {
+  const r = await apiFetch("/api/forecasts/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ api14s, config }),
@@ -125,13 +154,13 @@ export async function listForecasts(api14s: string[]): Promise<ForecastRow[]> {
   if (api14s.length === 0) return [];
   const q = new URLSearchParams();
   api14s.forEach((a) => q.append("api14", a));
-  const r = await fetch(`/api/forecasts?${q}`);
+  const r = await apiFetch(`/api/forecasts?${q}`);
   if (!r.ok) throw new Error(`list forecasts failed: ${r.status}`);
   return (await r.json()) as ForecastRow[];
 }
 
 export async function fetchSyncStatus(): Promise<SyncStatus> {
-  const r = await fetch("/api/sync/status");
+  const r = await apiFetch("/api/sync/status");
   if (!r.ok) throw new Error(`sync status failed: ${r.status}`);
   return (await r.json()) as SyncStatus;
 }
@@ -140,7 +169,7 @@ export async function fetchWellCurves(
   api14: string,
   horizonYears = 50,
 ): Promise<WellCurvesResponse> {
-  const r = await fetch(`/api/forecasts/${api14}/curves?horizon_years=${horizonYears}`);
+  const r = await apiFetch(`/api/forecasts/${api14}/curves?horizon_years=${horizonYears}`);
   if (!r.ok) throw new Error(`well curves failed: ${r.status}`);
   return (await r.json()) as WellCurvesResponse;
 }
@@ -152,7 +181,7 @@ export async function previewForecast(args: {
   horizon_years?: number;
   n_points?: number;
 }): Promise<PreviewResponse> {
-  const r = await fetch("/api/forecasts/preview", {
+  const r = await apiFetch("/api/forecasts/preview", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(args),
@@ -170,7 +199,7 @@ export async function patchForecast(
     economic_limit?: number;
   },
 ): Promise<ForecastRow> {
-  const r = await fetch(`/api/forecasts/${id}`, {
+  const r = await apiFetch(`/api/forecasts/${id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),

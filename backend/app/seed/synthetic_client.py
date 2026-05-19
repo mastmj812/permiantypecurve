@@ -36,10 +36,28 @@ from app.enverus_client.base import (
 )
 from app.ingest.rates import calendar_days_in
 
-# Loving County, TX — rough geographic envelope. Tight enough that 50 wells
-# don't sprawl across neighboring counties on the map.
-COUNTY_LAT_MIN, COUNTY_LAT_MAX = 31.62, 32.00
-COUNTY_LON_MIN, COUNTY_LON_MAX = -104.05, -103.40
+# Per-county geographic envelopes + 3-digit TX FIPS code. Tight enough
+# that wells don't sprawl into neighboring counties on the map.
+# api14 = state-FIPS (42 for TX) + county-FIPS (3 digits) + 5-digit well
+# num + 4-digit suffix → ``f"42{fips}{n:05d}0000"``.
+#
+# Loving County  (TX 48-301, API state-county prefix 42-301): the
+#   original sandbox. ~120 producing wells.
+# Reeves County  (TX 48-389, API state-county prefix 42-389): the bigger
+#   neighbor to the south; thousands of wells in real data, kept under
+#   the same n_wells cap here for synthetic mode.
+COUNTY_BOUNDS: dict[str, dict[str, float | str]] = {
+    "Loving": {
+        "fips": "301",
+        "lat_min": 31.62, "lat_max": 32.00,
+        "lon_min": -104.05, "lon_max": -103.40,
+    },
+    "Reeves": {
+        "fips": "389",
+        "lat_min": 31.00, "lat_max": 31.85,
+        "lon_min": -104.20, "lon_max": -103.30,
+    },
+}
 
 # Clearly-synthetic operator names so nobody mistakes these for real wells.
 SYNTHETIC_OPERATORS = (
@@ -98,8 +116,14 @@ class SyntheticEnverusClient(EnverusClient):
         seed: int = 42,
         as_of: date | None = None,
     ) -> None:
+        if county not in COUNTY_BOUNDS:
+            known = ", ".join(sorted(COUNTY_BOUNDS))
+            raise ValueError(
+                f"synthetic client doesn't know county {county!r}; known: {known}"
+            )
         self._n = n_wells
         self._county = county
+        self._bounds = COUNTY_BOUNDS[county]
         self._basin = basin
         self._rnd = random.Random(seed)
         self._as_of = as_of or date.today()
@@ -150,13 +174,20 @@ class SyntheticEnverusClient(EnverusClient):
 
     # ---------- well generator ----------
     def _generate_wells(self) -> Iterator[WellHeader]:
+        fips = self._bounds["fips"]
+        lat_min = float(self._bounds["lat_min"])
+        lat_max = float(self._bounds["lat_max"])
+        lon_min = float(self._bounds["lon_min"])
+        lon_max = float(self._bounds["lon_max"])
         for i in range(self._n):
-            # Texas state FIPS 42 + Loving County 301 + 5-digit well num.
-            # (Real TX API14 format is 42-301-XXXXX-SS-WW — this matches.)
-            api14 = f"42301{i:05d}0000"
+            # Texas state FIPS 42 + 3-digit county FIPS + 5-digit well num
+            # + 4-digit suffix. (Real TX API14 format is 42-XXX-NNNNN-SS-WW
+            # — this matches.) Per-county FIPS keeps the api14 prefix
+            # honest when both Loving and Reeves are seeded into one DB.
+            api14 = f"42{fips}{i:05d}0000"
 
-            sh_lat = self._rnd.uniform(COUNTY_LAT_MIN, COUNTY_LAT_MAX)
-            sh_lon = self._rnd.uniform(COUNTY_LON_MIN, COUNTY_LON_MAX)
+            sh_lat = self._rnd.uniform(lat_min, lat_max)
+            sh_lon = self._rnd.uniform(lon_min, lon_max)
             azimuth = self._rnd.choice(AZIMUTHS_DEG)
             lateral_ft = self._rnd.choice([5000, 7500, 10000, 10000, 10000, 12000])
             bh_lat, bh_lon = _offset_latlon(
@@ -179,8 +210,15 @@ class SyntheticEnverusClient(EnverusClient):
             day = self._rnd.randint(1, 28)
             first_prod_date = date(year, month, day)
 
+            # Mimic the operator+lease+number+H pattern typical of Permian
+            # unconventional well names (e.g. "STATE 36 #1H"). Purely
+            # decorative for synthetic data — there's no underlying lease.
+            pad = self._rnd.choice(("STATE", "FEDERAL", "RANCH", "MESA", "BLUFF"))
+            well_name = f"SYNTH {pad} {i:03d} #{(i % 8) + 1}H"
+
             yield WellHeader(
                 api14=api14,
+                name=well_name,
                 operator=self._rnd.choice(SYNTHETIC_OPERATORS),
                 formation=self._rnd.choice(DELAWARE_FORMATIONS),
                 first_prod_date=first_prod_date,
@@ -279,11 +317,15 @@ class SyntheticEnverusClient(EnverusClient):
     def _production_for(
         self, w: WellHeader, start_date: date | None
     ) -> Iterator[ProductionRecord]:
-        """Hyperbolic decline, qi scaled by lateral length.
+        """Hyperbolic decline with a 1-3 month ramp-up to peak.
 
-        Forecast-friendly: peak is in the first reported month (after the
-        month-1 rate rule lands), declining smoothly thereafter. GOR and WOR
-        drift up over time the way real Delaware Basin wells do.
+        Permian Wolfcamp/Bone Spring wells typically don't hit peak rate
+        immediately — frac fluid recovery, gas break-out, and choke
+        management mean month 0 produces at 25-50% of peak rate, month 1
+        ramps to 60-85%, and peak is reached around month 1-3. After the
+        ramp, hyperbolic decline kicks in from peak.
+
+        GOR and WOR drift up linearly the way real Delaware Basin wells do.
         """
         assert w.first_prod_date is not None
         # Per-well RNG keyed off the seed_index in raw_payload so production
@@ -299,6 +341,19 @@ class SyntheticEnverusClient(EnverusClient):
         gor_start = rnd.uniform(4.0, 9.0)        # mcf/bbl
         wor_start = rnd.uniform(1.5, 4.5)        # bbl water / bbl oil
 
+        # Ramp-up parameters. Most wells reach peak in ~2 months; a few
+        # ramp fast (1 month) or slow (3 months). Month-0 cleanup fraction
+        # spans 0.25–0.50 of peak rate — wide enough to make the
+        # well-to-well variation visible in the type-curve band.
+        ramp_months = rnd.choice([1, 2, 2, 2, 3])
+        m0_fraction = rnd.uniform(0.25, 0.50)
+
+        def _ramp_factor(idx: int) -> float:
+            if idx >= ramp_months:
+                return 1.0
+            # Linear from m0_fraction at idx=0 to 1.0 at idx=ramp_months.
+            return m0_fraction + (1.0 - m0_fraction) * (idx / ramp_months)
+
         d = w.first_prod_date.replace(day=1)
         end = self._as_of
         for month_idx in range(0, 12 * 8):  # up to 8 years
@@ -308,8 +363,16 @@ class SyntheticEnverusClient(EnverusClient):
                 d = _add_month(d)
                 continue
 
-            t_years = month_idx / 12.0
-            rate_bopd = qi_bopd / (1 + b * di_yr * t_years) ** (1.0 / b)
+            if month_idx < ramp_months:
+                # Ramp phase: rate is a fraction of qi. The Arps clock
+                # doesn't start until peak is reached.
+                rate_bopd = qi_bopd * _ramp_factor(month_idx)
+            else:
+                # Decline phase: hyperbolic, with t=0 at the end of ramp.
+                t_post_peak_years = (month_idx - ramp_months) / 12.0
+                rate_bopd = (
+                    qi_bopd / (1 + b * di_yr * t_post_peak_years) ** (1.0 / b)
+                )
 
             cal_days = calendar_days_in(d)
             if month_idx == 0:

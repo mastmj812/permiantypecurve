@@ -3,20 +3,24 @@
   GET /api/wells/{api14}                 → full attributes + geometry as GeoJSON
   GET /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
   GET /api/wells/filters/facets          → formation + status counts for the left rail
+  GET /api/wells/wellsticks?api14s=...   → GeoJSON FeatureCollection for the review-tab map
 """
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Well, WellstickSource, WellStatus
 from app.db.session import get_session
+from app.wells_api.filters import FilterSpec, parse_filter_query
 
 router = APIRouter(prefix="/wells", tags=["wells"])
 
@@ -43,6 +47,48 @@ class WellDetail(BaseModel):
     heel_lat: float | None
     heel_lon: float | None
     last_synced_at: datetime | None
+
+
+@router.get("/wellsticks")
+def wellsticks_geojson(
+    api14s: str = Query(..., description="CSV of api14s to fetch wellsticks for"),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    """Return wellstick LineStrings as a GeoJSON FeatureCollection.
+
+    Used by the Review-tab map to show only the wells currently being
+    reviewed, colored by EUR/ft (the join happens client-side against
+    the forecasts list the page already has in state). Skips wells
+    whose wellstick is null (surveys not yet synced) — they just don't
+    appear on the map; their row still shows in the table.
+
+    The api14s list is bounded by the same 500-well cap as the
+    forecast workflow, so we don't worry about query-string overflow.
+    """
+    ids = [a.strip() for a in api14s.split(",") if a.strip()]
+    if not ids:
+        return {"type": "FeatureCollection", "features": []}
+    rows = session.execute(
+        select(
+            Well.api14,
+            Well.formation,
+            Well.operator,
+            func.ST_AsGeoJSON(Well.wellstick).label("geom"),
+        ).where(Well.api14.in_(ids), Well.wellstick.is_not(None))
+    ).all()
+    features = [
+        {
+            "type": "Feature",
+            "geometry": json.loads(r.geom),
+            "properties": {
+                "api14": r.api14,
+                "formation": r.formation,
+                "operator": r.operator,
+            },
+        }
+        for r in rows
+    ]
+    return {"type": "FeatureCollection", "features": features}
 
 
 @router.get("/{api14}", response_model=WellDetail)
@@ -145,23 +191,97 @@ class FilterFacets(BaseModel):
     first_prod_year_max: int | None
 
 
+def _facet_clauses_excluding(
+    spec: FilterSpec, *, exclude_attr: str
+) -> list[ColumnElement[bool]]:
+    """Build the WHERE clauses for one facet's count.
+
+    Standard faceted-search pattern: each facet's counts are computed
+    with every filter applied EXCEPT the user's selection on that facet
+    itself. Otherwise, selecting "WOLFCAMP A" would zero out every other
+    formation's count and the user couldn't see "if I switch to
+    WOLFCAMP B, how many wells would match?" anymore.
+
+    Setting a tuple-valued FilterSpec field to `()` drops it from the
+    WHERE chain because `to_sqlalchemy_clauses()` guards each clause on
+    truthiness. That works for statuses too — replacing with `()` here
+    is a deliberate override of the PDP default.
+    """
+    return replace(spec, **{exclude_attr: ()}).to_sqlalchemy_clauses()
+
+
 @router.get("/filters/facets", response_model=FilterFacets)
-def filter_facets(session: Session = Depends(get_session)) -> FilterFacets:
-    formations_rows = session.execute(
-        select(Well.formation, func.count())
-        .where(Well.formation.isnot(None))
-        .group_by(Well.formation)
-        .order_by(func.count().desc())
-    ).all()
-    statuses_rows = session.execute(
-        select(Well.status, func.count()).group_by(Well.status)
-    ).all()
-    counties_rows = session.execute(
-        select(Well.county, func.count())
-        .where(Well.county.isnot(None))
-        .group_by(Well.county)
-        .order_by(func.count().desc())
-    ).all()
+def filter_facets(
+    spec: FilterSpec = Depends(parse_filter_query),
+    session: Session = Depends(get_session),
+) -> FilterFacets:
+    """Return counts for each facet under the current filter state.
+
+    For the formations / statuses / counties facets, the count is computed
+    with the user's selection on THAT facet excluded — so each row reads
+    as "would-match if you toggled this on". Universe coverage is ensured
+    by joining the per-facet counts against the global distinct-values
+    set; formations that exist in the DB but match zero wells under the
+    current filters appear with count=0 (the frontend renders those
+    faded).
+
+    lateral_ft / first_prod_year extremes stay global so the slider
+    bounds don't jitter as the user filters.
+    """
+    # --- universe of values (independent of filters) ---
+    all_formations: list[str] = [
+        v for (v,) in session.execute(
+            select(Well.formation).where(Well.formation.isnot(None)).distinct()
+        ).all()
+    ]
+    all_counties: list[str] = [
+        v for (v,) in session.execute(
+            select(Well.county).where(Well.county.isnot(None)).distinct()
+        ).all()
+    ]
+    all_statuses: list[Any] = [
+        v for (v,) in session.execute(select(Well.status).distinct()).all()
+    ]
+
+    def _counts_under(clauses: list[ColumnElement[bool]], col: Any) -> dict[Any, int]:
+        stmt = select(col, func.count()).group_by(col)
+        for c in clauses:
+            stmt = stmt.where(c)
+        return {r[0]: int(r[1]) for r in session.execute(stmt).all() if r[0] is not None}
+
+    formations_count = _counts_under(
+        _facet_clauses_excluding(spec, exclude_attr="formations"), Well.formation
+    )
+    statuses_count = _counts_under(
+        _facet_clauses_excluding(spec, exclude_attr="statuses"), Well.status
+    )
+    counties_count = _counts_under(
+        _facet_clauses_excluding(spec, exclude_attr="counties"), Well.county
+    )
+
+    formations_out = sorted(
+        (
+            FacetCount(value=v, count=formations_count.get(v, 0))
+            for v in all_formations
+        ),
+        key=lambda f: (-f.count, f.value),
+    )
+    counties_out = sorted(
+        (
+            FacetCount(value=v, count=counties_count.get(v, 0))
+            for v in all_counties
+        ),
+        key=lambda f: (-f.count, f.value),
+    )
+    statuses_out = [
+        FacetCount(
+            value=s.value if hasattr(s, "value") else str(s),
+            count=statuses_count.get(s, 0),
+        )
+        for s in all_statuses
+        if s is not None
+    ]
+
     extremes = session.execute(
         select(
             func.min(Well.lateral_ft),
@@ -171,22 +291,10 @@ def filter_facets(session: Session = Depends(get_session)) -> FilterFacets:
         )
     ).first()
 
-    def _to_facets(rows: list[Any]) -> list[FacetCount]:
-        out: list[FacetCount] = []
-        for r in rows:
-            val = r[0]
-            count = r[1]
-            if val is None:
-                continue
-            out.append(
-                FacetCount(value=val.value if hasattr(val, "value") else str(val), count=count)
-            )
-        return out
-
     return FilterFacets(
-        formations=_to_facets(formations_rows),
-        statuses=_to_facets(statuses_rows),
-        counties=_to_facets(counties_rows),
+        formations=formations_out,
+        statuses=statuses_out,
+        counties=counties_out,
         lateral_ft_min=float(extremes[0]) if extremes and extremes[0] is not None else None,
         lateral_ft_max=float(extremes[1]) if extremes and extremes[1] is not None else None,
         first_prod_year_min=int(extremes[2]) if extremes and extremes[2] is not None else None,

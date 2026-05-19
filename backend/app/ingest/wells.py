@@ -63,6 +63,7 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
     for h in headers:
         values: dict[str, Any] = {
             "api14": h.api14,
+            "name": h.name,
             "operator": h.operator,
             "formation": h.formation,
             "first_prod_date": h.first_prod_date,

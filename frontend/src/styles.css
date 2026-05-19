@@ -36,6 +36,10 @@ body {
   display: grid;
   grid-template-columns: 280px 1fr 320px;
 }
+.page-two-col {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+}
 
 .app-nav { display: flex; gap: 8px; }
 .nav-tab {
@@ -197,6 +201,280 @@ body {
   padding-top: 12px;
   border-top: 1px dashed #e5e7eb;
 }
+
+/* ---------- review page ---------- */
+.review-table-wrap {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.review-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #fafafa;
+  font-size: 13px;
+}
+.review-header select { width: auto; }
+.review-table {
+  flex: 1;
+  overflow: auto;
+  background: #fff;
+}
+.review-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.review-table th,
+.review-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  text-align: right;
+  white-space: nowrap;
+}
+.review-table th { background: #f9fafb; position: sticky; top: 0; z-index: 1; }
+.review-table th:nth-child(2),
+.review-table td:nth-child(2),
+.review-table th:nth-child(3),
+.review-table td:nth-child(3),
+.review-table th:nth-child(4),
+.review-table td:nth-child(4) {
+  text-align: left;
+}
+.review-table td:nth-child(2) { font-family: ui-monospace, monospace; }
+.review-table th.sortable { cursor: pointer; user-select: none; }
+.review-table th.sortable:hover { background: #f3f4f6; }
+.review-table th.sortable.active { color: #1f2937; font-weight: 600; }
+.sort-arrow { margin-left: 4px; font-size: 10px; }
+.review-table tbody tr.row-clickable { cursor: pointer; }
+.review-table tbody tr.row-clickable:hover td { background: #f9fafb; }
+/* Checkbox cell keeps default cursor — propagation is stopped at the cell
+   so toggling include/exclude doesn't trigger the row-click modal. */
+.review-table tbody tr.row-clickable td:first-child { cursor: default; }
+
+.row-outlier td { background: #fef3c7; }
+.row-excluded td { background: #f3f4f6; opacity: 0.6; }
+.row-outlier.row-excluded td { background: #fde68a; }
+
+/* ---------- type curve page ---------- */
+.type-curve-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+}
+.type-curve-eur {
+  padding: 0 16px;
+}
+.eur-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.eur-table th,
+.eur-table td {
+  padding: 4px 8px;
+  border: 1px solid #e5e7eb;
+  text-align: right;
+}
+.eur-table th { background: #f9fafb; color: #4b5563; font-weight: 500; }
+.type-curve-chart { background: #fff; border: 1px solid #e5e7eb; border-radius: 4px; }
+
+.fitted-params {
+  margin-top: 8px;
+  font-size: 12px;
+  color: #374151;
+  background: #f9fafb;
+  padding: 6px 10px;
+  border-radius: 4px;
+  border-left: 3px solid #0f172a;
+}
+.fitted-params strong { color: #0f172a; margin-right: 4px; }
+.fitted-params span { white-space: nowrap; }
+.tweak-panel { display: flex; flex-direction: column; gap: 6px; }
+.tweak-header { display: flex; align-items: center; gap: 6px; }
+.tweak-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 6px 10px;
+}
+.tweak-input {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.tweak-label { font-weight: 600; color: #0f172a; min-width: 50px; }
+.tweak-input input {
+  width: 70px;
+  font: inherit;
+  padding: 2px 4px;
+  border: 1px solid #d1d5db;
+  border-radius: 3px;
+  background: #fff;
+}
+.tweak-unit { font-size: 11px; }
+.tweak-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.tweak-actions .err { color: #b91c1c; }
+
+/* Type-curve legend lives inline within the main column, between the
+   chart row and the EUR table — full-width, not floating like the map
+   page legend. */
+.type-curve-legend {
+  position: static;
+  margin: 8px 16px 12px 16px;
+  background: #fafafa;
+  max-width: none;
+  box-shadow: none;
+}
+.type-curve-legend .legend-section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 6px;
+}
+.type-curve-legend .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  margin: 0;
+}
+
+.line-sample {
+  display: inline-block;
+  width: 22px;
+  height: 0;
+  border-top-width: 1.5px;
+  border-top-style: solid;
+}
+.band-sample {
+  display: inline-block;
+  width: 22px;
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.library-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+.library-list li button {
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid #f3f4f6;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.library-list li button:hover { background: #eff6ff; }
+.library-list li button.active { background: #dbeafe; }
+.lib-name { font-weight: 500; color: #1f2937; }
+/* Deal rows differ from library rows: they're not click-to-load, they
+   carry per-deal actions (export, delete) so the layout is name on the
+   left, action buttons on the right. */
+.library-list li.deal-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  font-size: 12px;
+}
+.library-list li.deal-row:last-child { border-bottom: none; }
+.deal-row-info { min-width: 0; }
+.deal-row-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.deal-row-actions .tb-btn { padding: 2px 6px; font-size: 11px; }
+textarea {
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+/* ---------- login page ---------- */
+.boot-splash {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #6b7280;
+  font-size: 13px;
+}
+.login-shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: #f4f4f4;
+}
+.login-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 32px;
+  width: 360px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+}
+.login-card h1 {
+  font-size: 18px;
+  margin: 0 0 4px;
+}
+.login-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #6b7280;
+  margin: 14px 0 4px;
+}
+.login-card input[type="email"],
+.login-card input[type="password"] {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  font-size: 13px;
+}
+.login-card .btn-primary {
+  margin-top: 16px;
+}
+.login-help {
+  margin-top: 18px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.login-help code {
+  display: block;
+  margin-top: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  background: #f3f4f6;
+  padding: 6px 8px;
+  border-radius: 4px;
+  word-break: break-all;
+}
+
+/* ---------- header user area ---------- */
+.app-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.app-user .muted { font-size: 11px; }
 
 .health-badge {
   font-size: 12px;
@@ -503,3 +781,120 @@ input[type="date"], input[type="number"], input[type="search"] {
 }
 .wellstick-sample.solid { border-top-style: solid; }
 .wellstick-sample.dashed { border-top-style: dashed; }
+
+/* ---------- map hover tooltip ----------
+   Shared by MapView (Map tab) and ReviewMap. MapLibre's default popup
+   chrome is hidden so the tooltip reads as a small info card. Pointer
+   events disabled so the underlying click handlers still fire. */
+.maplibregl-popup.map-tooltip { pointer-events: none; max-width: 260px; }
+.maplibregl-popup.map-tooltip .maplibregl-popup-tip { display: none; }
+.maplibregl-popup.map-tooltip .maplibregl-popup-content {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #d1d5db;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+  font-size: 11px;
+  color: #1f2937;
+}
+.mtt-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: #0f172a;
+  margin-bottom: 2px;
+}
+.mtt-api {
+  font-size: 10px;
+  color: #6b7280;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.mtt-table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.mtt-table td {
+  padding: 1px 0;
+  vertical-align: top;
+}
+.mtt-table td:first-child {
+  color: #6b7280;
+  padding-right: 10px;
+  white-space: nowrap;
+}
+.mtt-table td:last-child {
+  font-variant-numeric: tabular-nums;
+}
+.mtt-badge {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+.mtt-badge-excluded {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fca5a5;
+}
+
+/* ---------- review-map color-ramp legend ----------
+   Floats over the bottom-left of the review-tab map, mirroring the
+   Map-tab legend's visual treatment but tuned for the EUR/ft ramp. */
+.map-legend {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #1f2937;
+  z-index: 5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  min-width: 160px;
+}
+.map-legend-title {
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: #0f172a;
+}
+.map-legend-ramp {
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid #d1d5db;
+}
+.map-legend-ticks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: #4b5563;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.map-legend-unit {
+  font-size: 10px;
+  color: #6b7280;
+  margin-bottom: 6px;
+}
+.map-legend-empty {
+  font-size: 10px;
+  margin-bottom: 6px;
+}
+.map-legend-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+.map-legend-swatch {
+  display: inline-block;
+  width: 14px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px solid #d1d5db;
+}
