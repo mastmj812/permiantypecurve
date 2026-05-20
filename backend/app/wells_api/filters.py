@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import Query
 from sqlalchemy import ColumnElement
@@ -86,17 +86,37 @@ def _parse_statuses(raw: str | None) -> tuple[WellStatus, ...]:
 
 
 def parse_filter_query(
-    formations: str | None = Query(default=None, description="CSV of formation names"),
-    operators: str | None = Query(default=None, description="CSV of operator names"),
-    counties: str | None = Query(default=None),
-    statuses: str | None = Query(default=None, description="CSV of WellStatus codes"),
-    first_prod_start: date | None = Query(default=None, alias="first_prod_start"),
-    first_prod_end: date | None = Query(default=None, alias="first_prod_end"),
-    lateral_min_ft: float | None = Query(default=None, ge=0),
-    lateral_max_ft: float | None = Query(default=None, ge=0),
-    api14s: str | None = Query(default=None, description="CSV of 14-digit API numbers (allow-list)"),
+    formations: Annotated[
+        str | None, Query(description="CSV of formation names")
+    ] = None,
+    operators: Annotated[
+        str | None, Query(description="CSV of operator names")
+    ] = None,
+    counties: Annotated[str | None, Query()] = None,
+    statuses: Annotated[
+        str | None, Query(description="CSV of WellStatus codes")
+    ] = None,
+    first_prod_start: Annotated[
+        date | None, Query(alias="first_prod_start")
+    ] = None,
+    first_prod_end: Annotated[
+        date | None, Query(alias="first_prod_end")
+    ] = None,
+    lateral_min_ft: Annotated[float | None, Query(ge=0)] = None,
+    lateral_max_ft: Annotated[float | None, Query(ge=0)] = None,
+    api14s: Annotated[
+        str | None, Query(description="CSV of 14-digit API numbers (allow-list)")
+    ] = None,
 ) -> FilterSpec:
-    """FastAPI dependency — turns query params into a FilterSpec."""
+    """FastAPI dependency — turns query params into a FilterSpec.
+
+    Using ``Annotated[..., Query(...)]`` with real ``None`` defaults
+    (rather than ``= Query(default=None)``) keeps the function naturally
+    callable as plain Python — unfilled params resolve to ``None``
+    instead of a ``Query()`` sentinel object that explodes when
+    downstream code tries to ``.split()`` it. Critical for unit tests
+    that exercise the parser without standing up a FastAPI request.
+    """
     return FilterSpec(
         formations=tuple(_split_csv(formations)),
         operators=tuple(_split_csv(operators)),
