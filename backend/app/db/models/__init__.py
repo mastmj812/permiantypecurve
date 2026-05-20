@@ -3,7 +3,6 @@
 """
 
 from app.db.models.deals import Deal
-from app.db.models.directional_surveys import DirectionalSurveyStation
 from app.db.models.forecasts import FitMethod, Forecast, ModelType, Stream
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.models.sync_state import SyncEntity, SyncJob, SyncJobStatus, SyncWatermark
@@ -14,7 +13,6 @@ from app.db.models.wells import Well, WellstickSource, WellStatus
 __all__ = [
     "AlignmentMethod",
     "Deal",
-    "DirectionalSurveyStation",
     "FitMethod",
     "Forecast",
     "ModelType",

@@ -8,6 +8,12 @@ Defaults to the project's canonical multi-county scope
 (``DEFAULT_COUNTIES`` in ``app.sync.orchestrator``). The legacy singular
 ``--county`` flag still works for one-off pulls — if both are passed,
 ``--counties`` wins.
+
+Phase 2 of the LateralLine migration retired the survey-fetch phase —
+``--no-surveys`` is preserved as a no-op so old shell history doesn't
+break, but the orchestrator no longer pulls surveys for any well.
+Wellstick now comes from ``LateralLine`` on the wells endpoint
+(~99% horizontal coverage) with a surface→BH straight-line fallback.
 """
 
 from __future__ import annotations
@@ -52,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-surveys",
         action="store_true",
-        help="Skip the directional survey pull",
+        help="(no-op — survey phase retired in Phase 2 of LateralLine migration)",
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
@@ -77,7 +83,6 @@ def main(argv: list[str] | None = None) -> int:
         basin=args.basin,
         counties=counties,
         pull_production=not args.no_production,
-        pull_surveys=not args.no_surveys,
     )
     log.info("seed_complete", basin=args.basin, counties=list(counties), counts=counts)
     return 0

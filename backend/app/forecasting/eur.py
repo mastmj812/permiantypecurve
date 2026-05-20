@@ -119,15 +119,24 @@ def compute_eur(
     params: dict[str, float],
     *,
     horizon_years: float = DEFAULT_FORECAST_HORIZON_YEARS,
-    economic_limit: float = DEFAULT_ECONOMIC_LIMIT_BOPD,
+    economic_limit: float = 0.0,
 ) -> float:
-    """Cumulative production from t=0 to min(horizon, t_econ_limit).
+    """Cumulative production from t=0 to ``horizon_years``.
+
+    This tool is intentionally a technical type-curve / decline generator
+    — no economic cutoff is applied. The default ``economic_limit=0`` means
+    "integrate the full horizon"; passing a positive value still truncates
+    at the rate floor for any caller that needs that semantic, but no
+    in-tree caller should. Economics happens downstream on the export.
 
     Returned units match the rate's per-day unit aggregated to total volume
     (BOPD → BBL, MCFD → MCF, BWPD → BBL).
     """
-    t_econ = _solve_t_at_rate(economic_limit, model_type, params)
-    t_end = min(horizon_years, t_econ)
+    if economic_limit > 0:
+        t_econ = _solve_t_at_rate(economic_limit, model_type, params)
+        t_end = min(horizon_years, t_econ)
+    else:
+        t_end = horizon_years
     if t_end <= 0:
         return 0.0
 

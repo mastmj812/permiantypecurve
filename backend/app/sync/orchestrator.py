@@ -32,7 +32,6 @@ from app.db.session import SessionLocal
 from app.enverus_client.base import EnverusClient
 from app.enverus_client.prism import PrismClient
 from app.ingest.production import upsert_production_records
-from app.ingest.surveys import upsert_survey
 from app.ingest.wells import upsert_well_headers
 
 log = get_logger("sync.orchestrator")
@@ -44,8 +43,9 @@ DEFAULT_BASIN = "Permian"
 DEFAULT_COUNTY = "Loving"
 # Multi-county default. Anything that wants the canonical project scope
 # — `python -m app.seed.seed_county` with no args, the default body of
-# /api/sync/run — pulls both of these.
-DEFAULT_COUNTIES: tuple[str, ...] = ("Loving", "Reeves")
+# /api/sync/run — pulls all four. Add more counties here as they come
+# into deal scope.
+DEFAULT_COUNTIES: tuple[str, ...] = ("Loving", "Reeves", "Ward", "Winkler")
 
 T = TypeVar("T")
 
@@ -124,15 +124,21 @@ def sync_county(
     basin: str = DEFAULT_BASIN,
     county: str = DEFAULT_COUNTY,
     pull_production: bool = True,
-    pull_surveys: bool = True,
     client: EnverusClient | None = None,
 ) -> dict[str, int]:
     """Synchronous entry — called from CLI and from the background task hook.
 
     Returns a dict of upsert counts for the caller (and the sync status
     endpoint) to surface.
+
+    Phase 2 of the LateralLine migration removed the survey-fetch phase —
+    Enverus's `LateralLine` column populates the wellstick at header
+    upsert time (~99% horizontal coverage), and `header_to_upsert_values`
+    falls back to a surface→BH straight line for the remainder with both
+    endpoints known. `SyncEntity.SURVEYS` is preserved in the enum for
+    historical sync_jobs rows but no new rows of that entity are emitted.
     """
-    counts = {"headers": 0, "production": 0, "surveys": 0}
+    counts = {"headers": 0, "production": 0}
     cli = client or _build_client()
     scope_key = f"basin={basin};county={county}"
 
@@ -181,29 +187,6 @@ def sync_county(
                     datetime.now(timezone.utc),
                 )
 
-    # ---- 3. surveys (batched by api12 chunks) ----
-    if pull_surveys:
-        with SessionLocal() as session:
-            api14s = [
-                r[0]
-                for r in session.execute(
-                    select(Well.api14).where(Well.county == county)
-                ).all()
-            ]
-            with _job(session, SyncEntity.SURVEYS, scope_key) as job:
-                # items_seen = how many wells we asked for (some may have
-                # no survey on file → no row yielded). items_upserted =
-                # how many surveys actually came back and were stored.
-                job.items_seen = len(api14s)
-                for survey in cli.fetch_directional_surveys(api14s):
-                    upsert_survey(session, survey)
-                    job.items_upserted += 1
-                    session.commit()
-                counts["surveys"] = job.items_upserted
-                _watermark_set(
-                    session, SyncEntity.SURVEYS, scope_key, datetime.now(timezone.utc)
-                )
-
     log.info("sync_county_done", basin=basin, county=county, **counts)
     return counts
 
@@ -213,7 +196,6 @@ def sync_counties(
     basin: str = DEFAULT_BASIN,
     counties: tuple[str, ...] | list[str] = DEFAULT_COUNTIES,
     pull_production: bool = True,
-    pull_surveys: bool = True,
     client: EnverusClient | None = None,
 ) -> dict[str, dict[str, int]]:
     """Run ``sync_county`` for each county in sequence.
@@ -231,7 +213,6 @@ def sync_counties(
             basin=basin,
             county=county,
             pull_production=pull_production,
-            pull_surveys=pull_surveys,
             client=cli,
         )
     log.info(

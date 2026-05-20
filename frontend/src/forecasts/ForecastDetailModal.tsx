@@ -127,25 +127,33 @@ export function ForecastDetailModal({
 
   // Cumulative-vs-time series. History plots at t = i (months from first
   // production). The /curves endpoint emits forecast_cum starting at 0
-  // (peak-month boundary, by backend convention), so we shift the
-  // forecast cum line to pick up from the history line:
-  //   x: peak-month index in the history timeline + forecast i
-  //   y: history_cum at the peak month + forecast_cum[i]
-  // Without this shift the forecast cum line restarts at (0, 0), which
-  // visually reads as the cum-actual line "jumping" off the cum-forecast
-  // line whenever the live-preview overlay clears (e.g. after Save Override).
+  // at the peak-month boundary; we plot the forecast across the full
+  // peak..peak+600 window, vertically shifted by history_cum at the
+  // peak so the forecast line picks up from the history line AT THE
+  // PEAK MONTH and runs through the data window into the future. This
+  // exposes the model's predicted cum trajectory across the same months
+  // the data covers — Di / b / Df edits visibly change the slope of the
+  // forecast line across that region, the same way the rate chart shows
+  // the model rate alongside the actual dots.
+  //
+  // (An earlier version of this code clipped the forecast to start at
+  // the seam (end-of-history) with the y rebaselined to match actuals
+  // exactly — that hid the forecast in the data window and made it look
+  // like Di edits "did nothing" because they only changed the future
+  // asymptote. Any vertical gap between forecast and actual cum lines
+  // at end-of-history is real fit-quality info; not a bug to hide.)
   const cumChartOffset = useMemo(() => {
-    if (!curves) return { xOffset: 0, yOffset: 0 };
+    if (!curves || curves.history_cum.length === 0) {
+      return { peakIdx: 0, peakCum: 0 };
+    }
     const peakMonth = curves.forecast_months[0];
     const idx = peakMonth ? curves.months.indexOf(peakMonth) : -1;
-    // Peak inside the history window → place forecast at that index.
-    // Peak past the last reported month (rare; would mean the fit's peak
-    // is in the future) → drop the forecast at the end of history so the
-    // line still continues without a y-jump.
-    const xOffset = idx >= 0 ? idx : Math.max(0, curves.history_cum.length - 1);
-    const yOffset =
-      curves.history_cum[Math.min(xOffset, curves.history_cum.length - 1)] ?? 0;
-    return { xOffset, yOffset };
+    // Peak inside history → anchor there. Peak outside (pre-peak well,
+    // very rare) → anchor at end-of-history so the forecast still picks
+    // up cleanly without a y-jump.
+    const peakIdx = idx >= 0 ? idx : Math.max(0, curves.history_cum.length - 1);
+    const peakCum = curves.history_cum[peakIdx] ?? 0;
+    return { peakIdx, peakCum };
   }, [curves]);
 
   const historyCum = useMemo<SeriesPoint[]>(() => {
@@ -157,10 +165,10 @@ export function ForecastDetailModal({
 
   const forecastCum = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
-    const { xOffset, yOffset } = cumChartOffset;
+    const { peakIdx, peakCum } = cumChartOffset;
     return curves.forecast_cum.map((y, i) => ({
-      t: xOffset + i,
-      y: y + yOffset,
+      t: peakIdx + i,
+      y: y + peakCum,
     }));
   }, [curves, cumChartOffset]);
 
@@ -180,20 +188,20 @@ export function ForecastDetailModal({
       const p = await previewForecast({
         model_type: forecastForStream.model_type,
         params,
-        economic_limit:
-          stream === "oil" ? 5 : stream === "gas" ? 30 : 50,
+        // economic_limit omitted intentionally — this tool integrates
+        // the full 50-yr horizon (technical EUR, no econ cutoff).
       });
       const points = p.rate.map((y, i) => ({ t: p.t_years[i]! * 12, y }));
-      // Apply the same peak-anchored offset the saved cum line uses so
-      // the live preview stays continuous with history_cum. Without this
-      // the preview line would sit at (0,0)-and-up while the saved line
-      // (post-fix) sits at (peakOffset, cumAtPeak)-and-up, and the
-      // user would see the cum-forecast line "jump" the instant they
-      // hit Save Override.
-      const { xOffset, yOffset } = cumChartOffset;
-      const cumPoints = p.cum.map((y, i) => ({
-        t: xOffset + (p.t_years[i]! * 12),
-        y: y + yOffset,
+      // Peak-anchor the preview cum the same way the saved series does
+      // (see the `forecastCum` useMemo comment): forecast_cum[0] = 0 at
+      // the peak month, vertically shifted by history_cum at the peak.
+      // The forecast then runs across the data window into the future
+      // and Di / b / Df edits visibly change its slope in the same
+      // region the actual cum line is drawn.
+      const { peakIdx, peakCum } = cumChartOffset;
+      const cumPoints: SeriesPoint[] = p.cum.map((y, i) => ({
+        t: peakIdx + (p.t_years[i] ?? 0) * 12,
+        y: y + peakCum,
       }));
       setPreviewPoints(points);
       setPreviewCumPoints(cumPoints);

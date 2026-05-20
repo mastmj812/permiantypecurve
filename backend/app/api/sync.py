@@ -35,7 +35,10 @@ class RunSyncRequest(BaseModel):
     # If ``counties`` is set this is ignored.
     county: str | None = Field(default=None)
     pull_production: bool = Field(default=True)
-    pull_surveys: bool = Field(default=True)
+    # Legacy: the survey-fetch phase was retired in Phase 2 of the
+    # LateralLine migration. Field kept so old curl scripts don't 422
+    # on a stale request body; it has no effect.
+    pull_surveys: bool = Field(default=True, deprecated=True)
 
 
 class RunSyncResponse(BaseModel):
@@ -84,7 +87,6 @@ def _run_sync_bg(req: RunSyncRequest, counties: tuple[str, ...]) -> None:
             basin=req.basin,
             counties=counties,
             pull_production=req.pull_production,
-            pull_surveys=req.pull_surveys,
         )
     except Exception:
         log.exception(

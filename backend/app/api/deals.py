@@ -29,10 +29,13 @@ from sqlalchemy.orm import Session
 
 from app.api.type_curves import (
     TypeCurveSummary,
+    _FITTED_PARAM_KEYS,
     _FORECAST_N_MONTHS,
     _PERCENTILE_KEYS_WITH_MEAN,
     _DAYS_PER_MONTH,
     _evaluate_fitted_rates,
+    _fitted_eur_per_1000ft,
+    _fitted_p50_params,
 )
 from app.core.logging import get_logger
 from app.db.models import Deal, TypeCurve
@@ -232,6 +235,19 @@ def _sheet_slug(name: str, used: set[str]) -> str:
     return candidate
 
 
+# Humanize the normalization-basis enum for export labels. The DB enum
+# value "per_lateral_ft" is historical — the actual aggregation math
+# (aggregate.py::_normalizer) divides by lateral_ft / 1000, so rates and
+# EUR are expressed PER 1,000 LATERAL FT. The chart axes and the EUR
+# table header already say "1,000 ft"; this brings the export metadata
+# sheet into line so the downstream economics tool isn't misled.
+_NORMALIZATION_LABEL: dict[str, str] = {
+    "per_lateral_ft": "per_1000_lateral_ft",
+    "per_proppant_lb": "per_million_proppant_lb",
+    "per_well": "per_well",
+}
+
+
 def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
     """Two-column field/value layout mirroring ``_metadata_csv`` so the
     Excel export and the CSV-zip export carry the same fields in the
@@ -247,7 +263,12 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
     ws.append(["id", str(tc.id)])
     ws.append(["name", tc.name])
     ws.append(["notes", tc.notes or ""])
-    ws.append(["normalization_basis", tc.normalization_basis.value])
+    ws.append([
+        "normalization_basis",
+        _NORMALIZATION_LABEL.get(
+            tc.normalization_basis.value, tc.normalization_basis.value
+        ),
+    ])
     ws.append(["alignment_method", tc.alignment_method.value])
     ws.append(["created_at", tc.created_at.isoformat()])
     ws.append(["version_of", str(tc.version_of) if tc.version_of else ""])
@@ -264,7 +285,13 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
         ws.append([k, v if isinstance(v, (str, int, float, bool)) else str(v)])
     ws.append([])
 
-    ws.append(["implied_eur_per_1000ft (BBL or MCF)"])
+    # 50-yr Arps projection per percentile — the EUR the downstream
+    # economics tool actually wants. Computed at export time from the
+    # persisted fitted_per_percentile params (no econ cutoff; this tool
+    # is technical-only). The previous block here reported the
+    # data-window cumsum, which is a look-back QC artifact and was
+    # easily mistaken for an EUR — dropped on purpose.
+    ws.append(["fitted_eur_per_1000ft (50-yr Arps projection)"])
     ws.cell(row=ws.max_row, column=1).font = bold
     header = ["stream", *PERCENTILE_KEYS, "mean"]
     ws.append(header)
@@ -273,10 +300,32 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
     streams = (tc.series or {}).get("streams", {})
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name, {})
-        eur = s.get("implied_eur_per_1000ft", {})
+        eur = _fitted_eur_per_1000ft(s)
         ws.append(
             [s_name, *(eur.get(k) for k in PERCENTILE_KEYS), eur.get("mean")]
         )
+    ws.append([])
+
+    # Raw P50 Arps params per stream — same shape the
+    # `app.type_curves.fit_p50.evaluate_fit` helper produces. Lets the
+    # downstream econ tool re-evaluate the curve at its own time grid or
+    # apply economic-limit cutoffs without re-fitting from rate columns.
+    # Units: qi/qo in BOPD or MCFD per 1000 ft (matches the
+    # normalization_basis row above); Di/Df in per-year nominal; b
+    # dimensionless; peak_index in months.
+    ws.append(["fitted_p50_params (per stream)"])
+    ws.cell(row=ws.max_row, column=1).font = bold
+    param_header = ["stream", *_FITTED_PARAM_KEYS]
+    ws.append(param_header)
+    for col_idx in range(1, len(param_header) + 1):
+        ws.cell(row=ws.max_row, column=col_idx).font = bold
+    for s_name in ("oil", "gas", "water"):
+        s = streams.get(s_name, {})
+        params = _fitted_p50_params(s)
+        if params is None:
+            ws.append([s_name, *[None for _ in _FITTED_PARAM_KEYS]])
+            continue
+        ws.append([s_name, *(params.get(k) for k in _FITTED_PARAM_KEYS)])
     ws.append([])
 
     ws.append(["included_api14s"])

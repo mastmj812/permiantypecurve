@@ -127,7 +127,6 @@ def evaluate_fit(
     peak_index: int,
     n_months: int,
     horizon_years: float = 50.0,
-    economic_limit: float = 5.0,
 ) -> dict[str, Any]:
     """Build a `fitted` dict from an explicit parameter set.
 
@@ -137,6 +136,9 @@ def evaluate_fit(
     auto and manual identically. `r2` / `rmse` are omitted (no data to
     score against here); callers that need them can still inspect
     the auto-fit those came with.
+
+    EUR is the raw 50-yr integral of the model — no economic cutoff.
+    Economics is a downstream concern; this tool is technical-only.
     """
     smoothed = build_ramp_arps_rate(
         n_months=n_months,
@@ -147,7 +149,6 @@ def evaluate_fit(
         "modified_hyperbolic",
         {"qi": qi, "Di": Di, "b": b, "Df": Df},
         horizon_years=horizon_years,
-        economic_limit=economic_limit,
     )
     ramp_eur = compute_ramp_eur(qo=qo, qi=qi, peak_index=peak_index)
     return {

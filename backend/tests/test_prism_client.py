@@ -19,7 +19,6 @@ import pytest
 
 from app.enverus_client.prism import (
     DATASET_PRODUCTION,
-    DATASET_SURVEYS,
     DATASET_WELLS,
     PrismClient,
 )
@@ -183,81 +182,6 @@ def test_production_parser_maps_known_columns() -> None:
     assert rec.water_bbl == 8700.0
     assert rec.producing_days == 30
     assert rec.source == "prism"
-
-
-# ============================ surveys ============================
-
-
-def test_survey_empty_response_returns_none() -> None:
-    fake = FakeSDK()
-    fake.enqueue(DATASET_SURVEYS, [])
-    assert _cli(fake).fetch_directional_survey("42475300010000") is None
-
-
-def test_survey_filter_uses_api12_not_api14() -> None:
-    """Survey dataset is keyed on api12 (wellbore). We truncate the
-    last 2 digits (recompletion suffix) before querying."""
-    fake = FakeSDK()
-    fake.enqueue(DATASET_SURVEYS, [])
-    _cli(fake).fetch_directional_survey("42475300010000")  # 14 digits
-    assert fake.calls[0][0] == DATASET_SURVEYS
-    assert fake.calls[0][1]["API_UWI_12_Unformatted"] == "424753000100"
-
-
-def test_survey_batch_chunks_by_api12_and_groups_stations() -> None:
-    """Batched survey fetch sends one query per CHUNK of api12s and
-    splits the interleaved response back by api12. Avoids the 429 we
-    saw on per-well calls."""
-    fake = FakeSDK()
-    # Two api12s in the response; stations interleaved.
-    fake.enqueue(DATASET_SURVEYS, [
-        {"StationNumber": 1, "API_UWI_12_Unformatted": "424753000100",
-         "MeasuredDepth_FT": 0, "Inclination_DEG": 0,
-         "Latitude": 31.5, "Longitude": -103.5},
-        {"StationNumber": 1, "API_UWI_12_Unformatted": "424753000200",
-         "MeasuredDepth_FT": 0, "Inclination_DEG": 0,
-         "Latitude": 31.6, "Longitude": -103.4},
-        {"StationNumber": 2, "API_UWI_12_Unformatted": "424753000100",
-         "MeasuredDepth_FT": 9000, "Inclination_DEG": 88,
-         "Latitude": 31.52, "Longitude": -103.48},
-    ])
-    surveys = list(_cli(fake).fetch_directional_surveys([
-        "42475300010000", "42475300020000",
-    ]))
-    by_api14 = {s.api14: s for s in surveys}
-    assert set(by_api14.keys()) == {"42475300010000", "42475300020000"}
-    assert len(by_api14["42475300010000"].stations) == 2
-    # Stations re-sorted by station_seq even though they arrived interleaved.
-    assert [s.station_seq for s in by_api14["42475300010000"].stations] == [1, 2]
-    assert len(by_api14["42475300020000"].stations) == 1
-    # One API call covered both wells.
-    assert len(fake.calls) == 1
-    dataset, filters = fake.calls[0]
-    assert dataset == DATASET_SURVEYS
-    assert filters["API_UWI_12_Unformatted"] == "424753000100,424753000200"
-
-
-def test_survey_parses_enverus_unit_suffixed_columns() -> None:
-    """Surveys come back with names like MeasuredDepth_FT / Inclination_DEG
-    — parser must pick those up (and the response carries no api14)."""
-    fake = FakeSDK()
-    fake.enqueue(DATASET_SURVEYS, [
-        {"StationNumber": 1, "MeasuredDepth_FT": 0, "Inclination_DEG": 0,
-         "Azimuth_DEG": 90, "TVD_FT": 0,
-         "Latitude": 31.5, "Longitude": -103.5},
-        {"StationNumber": 12, "MeasuredDepth_FT": 9000, "Inclination_DEG": 88,
-         "Azimuth_DEG": 92, "TVD_FT": 8800,
-         "Latitude": 31.52, "Longitude": -103.48},
-    ])
-    survey = _cli(fake).fetch_directional_survey("42475300010000")
-    assert survey is not None
-    assert survey.api14 == "42475300010000"  # preserved on the way back out
-    assert len(survey.stations) == 2
-    assert survey.stations[0].md_ft == 0
-    assert survey.stations[1].md_ft == 9000
-    assert survey.stations[1].inclination_deg == 88
-    assert survey.stations[1].azimuth_deg == 92
-    assert survey.stations[1].tvd_ft == 8800
 
 
 # ============================ guardrails ============================

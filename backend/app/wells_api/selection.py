@@ -55,6 +55,11 @@ class FilterSpecBody(BaseModel):
     first_prod_end: date | None = None
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
+    # Allow-list pasted in the FilterPanel. Must be honored here too so a
+    # box/lasso select after the user has narrowed the map to a specific
+    # well set doesn't reach back and pick up filtered-out wells inside
+    # the same geometry.
+    api14s: list[str] = Field(default_factory=list)
 
     def to_spec(self) -> FilterSpec:
         from app.db.models import WellStatus
@@ -71,6 +76,7 @@ class FilterSpecBody(BaseModel):
             first_prod_end=self.first_prod_end,
             lateral_min_ft=self.lateral_min_ft,
             lateral_max_ft=self.lateral_max_ft,
+            api14s=tuple(self.api14s),
         )
 
 

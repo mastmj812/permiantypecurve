@@ -12,7 +12,6 @@ from collections.abc import Iterable, Iterator
 from datetime import date, datetime
 
 from app.enverus_client.base import (
-    DirectionalSurvey,
     EnverusClient,
     ProductionRecord,
     WellHeader,
@@ -41,6 +40,3 @@ class DIDirectClient(EnverusClient):
     ) -> Iterator[ProductionRecord]:
         raise NotImplementedError("DI Direct adapter not wired yet")
         yield  # pragma: no cover
-
-    def fetch_directional_survey(self, api14: str) -> DirectionalSurvey | None:
-        raise NotImplementedError("DI Direct adapter not wired yet")

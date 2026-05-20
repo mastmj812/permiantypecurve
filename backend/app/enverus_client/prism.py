@@ -23,10 +23,8 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.enverus_client.base import (
-    DirectionalSurvey,
     EnverusClient,
     ProductionRecord,
-    SurveyStation,
     WellHeader,
 )
 
@@ -34,7 +32,6 @@ log = get_logger("enverus.prism")
 
 DATASET_WELLS = "wells"
 DATASET_PRODUCTION = "production"
-DATASET_SURVEYS = "full-directional-surveys"
 
 # Chunk size for the production endpoint when filtering by an api14 list —
 # the SDK paginates within a single query, but very long filter strings
@@ -146,63 +143,6 @@ class PrismClient(EnverusClient):
     # recompletion). A directional survey is a property of the borehole,
     # so recompletions (api14 differs in the trailing 2 digits) share it.
 
-    @staticmethod
-    def _api14_to_api12(api14: str) -> str:
-        return api14[:12] if len(api14) >= 12 else api14
-
-    def fetch_directional_survey(self, api14: str) -> DirectionalSurvey | None:
-        """Single-well lookup — kept for the per-well detail-modal path."""
-        api12 = self._api14_to_api12(api14)
-        stations: list[SurveyStation] = []
-        for row in self._get_sdk().query(
-            DATASET_SURVEYS, API_UWI_12_Unformatted=api12
-        ):
-            stations.append(_parse_station(row))
-        if not stations:
-            return None
-        return DirectionalSurvey(api14=api14, stations=stations)
-
-    def fetch_directional_surveys(
-        self, api14s: Iterable[str]
-    ) -> Iterator[DirectionalSurvey]:
-        """Batched survey fetch — what the sync orchestrator uses.
-
-        50 wells per Enverus call instead of one call per well. Cuts API
-        round-trips by ~50× and avoids the 429 rate limit that per-well
-        calls trip on Permian-scale syncs.
-
-        Stations come back interleaved across the requested api12s, so
-        we group them by `API_UWI_12_Unformatted` before constructing
-        the typed `DirectionalSurvey` objects. Multiple api14s sharing
-        an api12 each receive their own DirectionalSurvey with the same
-        station list (recompletions of the same wellbore).
-        """
-        # api12 → all api14s that map to it (recompletions etc.)
-        api12_to_api14s: dict[str, list[str]] = {}
-        for api14 in api14s:
-            api12 = self._api14_to_api12(api14)
-            api12_to_api14s.setdefault(api12, []).append(api14)
-
-        api12_list = list(api12_to_api14s.keys())
-        for i in range(0, len(api12_list), _API14_CHUNK_SIZE):
-            chunk = api12_list[i : i + _API14_CHUNK_SIZE]
-            stations_by_api12: dict[str, list[SurveyStation]] = {}
-            for row in self._get_sdk().query(
-                DATASET_SURVEYS, API_UWI_12_Unformatted=",".join(chunk)
-            ):
-                api12 = str(_g(row, "API_UWI_12_Unformatted") or "")
-                if not api12:
-                    continue
-                stations_by_api12.setdefault(api12, []).append(_parse_station(row))
-
-            for api12, stations in stations_by_api12.items():
-                # Sort by station_seq so heel detection sees the same
-                # order regardless of how Enverus interleaved rows.
-                stations.sort(key=lambda s: s.station_seq)
-                for api14 in api12_to_api14s.get(api12, []):
-                    yield DirectionalSurvey(api14=api14, stations=list(stations))
-
-
 # ---------------- parsers (the boundary that's most likely to drift) ----------------
 # Each parser is forgiving: a missing/None field becomes None. Update these
 # when Enverus renames a column or you discover an alternate spelling in
@@ -274,8 +214,34 @@ def _parse_well_header(item: dict[str, Any]) -> WellHeader:
         sh_lon=_as_float(_g(item, "Longitude", "surfaceLongitude", "sh_lon")),
         bh_lat=_as_float(_g(item, "Latitude_BH", "BottomLatitude", "bottomholeLatitude", "bh_lat")),
         bh_lon=_as_float(_g(item, "Longitude_BH", "BottomLongitude", "bottomholeLongitude", "bh_lon")),
+        # Enverus delivers `LateralLine` as a WKT LINESTRING in EPSG:4326
+        # already — same SRID and shape we'd build internally via
+        # ST_MakeLine(heel, BH). When non-empty, ingest uses this as the
+        # wellstick directly instead of fetching the survey + computing
+        # a heel point. Strings only; the WKB hex fallback Enverus emits
+        # for some other geom columns isn't seen on this field, but we
+        # defensively reject non-string values rather than guessing.
+        lateral_line_wkt=_as_lateral_line_wkt(
+            _g(item, "LateralLine", "lateralLine")
+        ),
         raw=item,
     )
+
+
+def _as_lateral_line_wkt(v: Any) -> str | None:
+    if not isinstance(v, str):
+        return None
+    stripped = v.strip()
+    # Enverus occasionally emits empty strings or whitespace for wells
+    # where the lateral geometry isn't populated; treat as missing.
+    if not stripped:
+        return None
+    # Cheap shape sanity check — anything else gets dropped so a bad row
+    # can't break the ingest. The PostGIS layer will reject malformed WKT
+    # on insert as a second guard.
+    if not stripped.upper().startswith("LINESTRING"):
+        return None
+    return stripped
 
 
 def _parse_production_record(item: dict[str, Any]) -> ProductionRecord:
@@ -292,25 +258,4 @@ def _parse_production_record(item: dict[str, Any]) -> ProductionRecord:
             _g(item, "ProducingDays", "producing_days", "producingDays", "producingdays")
         ),
         source="prism",
-    )
-
-
-def _parse_station(item: dict[str, Any]) -> SurveyStation:
-    # Enverus' surveys dataset uses `<Name>_<Unit>` column names —
-    # `MeasuredDepth_FT`, `Inclination_DEG`, etc. Bare names (MD, TVD)
-    # are kept as fallbacks for other potential sources.
-    return SurveyStation(
-        station_seq=_as_int(
-            _g(item, "StationNumber", "stationSeq", "station_seq", "stationnumber")
-        ) or 0,
-        md_ft=_as_float(
-            _g(item, "MeasuredDepth_FT", "MD", "md_ft", "measuredDepth")
-        ) or 0.0,
-        inclination_deg=_as_float(
-            _g(item, "Inclination_DEG", "Inclination", "inclination_deg")
-        ) or 0.0,
-        azimuth_deg=_as_float(_g(item, "Azimuth_DEG", "Azimuth", "azimuth_deg")),
-        tvd_ft=_as_float(_g(item, "TVD_FT", "TVD", "tvd_ft")),
-        lat=_as_float(_g(item, "Latitude", "lat")),
-        lon=_as_float(_g(item, "Longitude", "lon")),
     )

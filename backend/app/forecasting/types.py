@@ -14,13 +14,18 @@ from typing import Any
 
 # Per the brief: modified-hyperbolic terminal decline defaults to 8%/yr.
 DEFAULT_DF_TERMINAL_PER_YEAR: float = 0.08
-# Forecast horizon cap (still subject to economic-limit cutoff per-stream).
+# Forecast horizon cap.
 DEFAULT_FORECAST_HORIZON_YEARS: float = 50.0
-# Oil economic-limit default — user-adjustable in the detail modal.
-DEFAULT_ECONOMIC_LIMIT_BOPD: float = 5.0
-# Per-stream economic limits used during EUR integration.
-DEFAULT_ECONOMIC_LIMIT_MCFD: float = 30.0  # 5 BOPD × 6 mcf/bbl
-DEFAULT_ECONOMIC_LIMIT_BWPD: float = 50.0  # generous; water rarely binds
+# Economic-limit defaults are 0 — this tool is a TECHNICAL type-curve /
+# decline generator and EUR is the raw 50-yr integral. Economics happens
+# downstream on the exported workbook in the user's cash-flow tool.
+# Callers that need the original rate-floor semantic (b ≥ 1 hyperbolic
+# divergence guard, late-life ROI cutoff) can still pass an explicit
+# positive value — see ``compute_eur(economic_limit=...)`` and the
+# `test_eur.py` regression tests for that path.
+DEFAULT_ECONOMIC_LIMIT_BOPD: float = 0.0
+DEFAULT_ECONOMIC_LIMIT_MCFD: float = 0.0
+DEFAULT_ECONOMIC_LIMIT_BWPD: float = 0.0
 
 
 @dataclass(frozen=True)

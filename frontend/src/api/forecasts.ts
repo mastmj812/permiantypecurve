@@ -31,9 +31,12 @@ export const DEFAULT_FORECAST_CONFIG: ForecastConfig = {
   fit_method: "rate_cum",
   df_terminal_per_year: 0.08,
   horizon_years: 50,
-  economic_limit_bopd: 5,
-  economic_limit_mcfd: 30,
-  economic_limit_bwpd: 50,
+  // Economic-limit defaults are 0 — this tool is a TECHNICAL type-curve /
+  // decline generator and EUR is the raw 50-yr integral. Economics
+  // happens downstream on the exported workbook.
+  economic_limit_bopd: 0,
+  economic_limit_mcfd: 0,
+  economic_limit_bwpd: 0,
   min_post_peak_months: 6,
 };
 

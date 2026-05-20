@@ -44,8 +44,6 @@ class WellDetail(BaseModel):
     sh_lon: float | None
     bh_lat: float | None
     bh_lon: float | None
-    heel_lat: float | None
-    heel_lon: float | None
     last_synced_at: datetime | None
 
 
@@ -114,8 +112,6 @@ def well_detail(api14: str, session: Session = Depends(get_session)) -> WellDeta
             func.ST_X(Well.sh_geom).label("sh_lon"),
             func.ST_Y(Well.bh_geom).label("bh_lat"),
             func.ST_X(Well.bh_geom).label("bh_lon"),
-            Well.heel_lat,
-            Well.heel_lon,
             Well.last_synced_at,
         ).where(Well.api14 == api14)
     ).first()
@@ -141,8 +137,6 @@ def well_detail(api14: str, session: Session = Depends(get_session)) -> WellDeta
         sh_lon=row.sh_lon,
         bh_lat=row.bh_lat,
         bh_lon=row.bh_lon,
-        heel_lat=row.heel_lat,
-        heel_lon=row.heel_lon,
         last_synced_at=row.last_synced_at,
     )
 

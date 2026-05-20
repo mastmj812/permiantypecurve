@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { type ForecastRow, listForecasts } from "../api/forecasts";
+import { eurFromForecastParams } from "../forecasts/arps";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { computeOutliers, type OutlierStats } from "../forecasts/outliers";
 import { ReviewMap } from "../components/ReviewMap";
@@ -45,11 +46,29 @@ export function ReviewPage() {
       .finally(() => setLoading(false));
   }, [api14s.join(",")]);
 
+  // Override each forecast's stored `eur` with a client-side recompute
+  // from the persisted Arps params. The stored value was written at fit
+  // time with the old 5-BOPD econ-limit cutoff baked in, which clipped
+  // ~20% of the late-time tail. The Type Curve tab moved to the raw
+  // 50-yr integral (no cutoff) — this brings every EUR shown on the
+  // Review tab (table, EUR/ft sort, outlier stats, map-color ramp, the
+  // per-well modal's stat row) onto the same convention without forcing
+  // a re-fit of every saved forecast. Falls back to the stored value
+  // when params are missing/non-finite.
+  const allForecastsCorrected = useMemo(
+    () =>
+      allForecasts.map((f) => {
+        const recomputed = eurFromForecastParams(f.params);
+        return recomputed != null ? { ...f, eur: recomputed } : f;
+      }),
+    [allForecasts],
+  );
+
   // Show one row per WELL (use the oil forecast — the brief frames type
   // curves as per-well, and gas/water inherit oil's peak).
   const oilRows = useMemo(
-    () => allForecasts.filter((f) => f.stream === "oil"),
-    [allForecasts],
+    () => allForecastsCorrected.filter((f) => f.stream === "oil"),
+    [allForecastsCorrected],
   );
 
   // Outliers + summary stats are computed from the currently-INCLUDED
@@ -340,7 +359,7 @@ export function ReviewPage() {
         return (
           <ForecastDetailModal
             api14={openApi14}
-            forecasts={allForecasts.filter((f) => f.api14 === openApi14)}
+            forecasts={allForecastsCorrected.filter((f) => f.api14 === openApi14)}
             onClose={() => setOpenApi14(null)}
             onSaved={(updated) =>
               setAllForecasts((prev) =>

@@ -12,10 +12,8 @@ network calls in CI.
 """
 
 from app.enverus_client.base import (
-    DirectionalSurvey,
     EnverusClient,
     ProductionRecord,
-    SurveyStation,
     WellHeader,
 )
 from app.enverus_client.di_direct import DIDirectClient
@@ -28,13 +26,11 @@ from app.enverus_client.prism import PrismClient
 
 __all__ = [
     "DIDirectClient",
-    "DirectionalSurvey",
     "EnverusAuthError",
     "EnverusClient",
     "EnverusClientError",
     "EnverusRateLimitError",
     "PrismClient",
     "ProductionRecord",
-    "SurveyStation",
     "WellHeader",
 ]

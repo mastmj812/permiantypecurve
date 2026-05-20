@@ -1,0 +1,113 @@
+// Pure Arps math, mirrored from the backend's `app.forecasting.models` +
+// `app.type_curves.fit_p50`. Shared between the Review and Type Curve
+// pages so both tabs agree on what "EUR" means: the raw 50-yr integral
+// of the persisted fit, no economic-limit cutoff. This tool is strictly
+// for technical type-curve / decline generation — economics is done
+// downstream on the exported workbook.
+
+export const DAYS_PER_MONTH = 30.4375;
+export const FULL_FORECAST_N_MONTHS = 600;
+
+export interface RampArpsParams {
+  qi: number;
+  Di: number;
+  b: number;
+  Df: number;
+  // Optional ramp prefix — used by type-curve fits where the aggregated
+  // P50 includes the ramp-up months. Per-well forecasts start at peak
+  // (peak_index = 0, qo = qi) and don't supply these.
+  qo?: number;
+  peak_index?: number;
+}
+
+// Modified-hyperbolic decline: hyperbolic phase until the instantaneous
+// nominal decline D(t) drops to the terminal Df, then exponential.
+// Continuous at the switchover point.
+export function evalModifiedHyperbolicRate(
+  tYears: number,
+  qi: number,
+  Di: number,
+  b: number,
+  Df: number,
+): number {
+  if (tYears <= 0) return qi;
+  if (Df <= 0 || Di <= 0 || Df >= Di || Math.abs(b) < 1e-6) {
+    const bSafe = Math.max(b, 1e-6);
+    return qi / Math.pow(1 + bSafe * Di * tYears, 1 / bSafe);
+  }
+  const tSwitch = (Di / Df - 1) / (b * Di);
+  if (tYears <= tSwitch) {
+    return qi / Math.pow(1 + b * Di * tYears, 1 / b);
+  }
+  const qSwitch = qi * Math.pow(Df / Di, 1 / b);
+  return qSwitch * Math.exp(-Df * (tYears - tSwitch));
+}
+
+// Linear ramp from qo at month 0 up to qi at peak_index, then modified-
+// hyperbolic from peak forward. Returns a number[] of length nMonths.
+export function buildRampArpsRate(
+  fit: RampArpsParams,
+  nMonths: number,
+): number[] {
+  const out: number[] = [];
+  const peakIndex = fit.peak_index ?? 0;
+  const qo = fit.qo ?? fit.qi;
+  if (peakIndex > 0) {
+    const ramp = Math.min(peakIndex + 1, nMonths);
+    for (let i = 0; i < ramp; i++) {
+      out.push(qo + (fit.qi - qo) * (i / peakIndex));
+    }
+  } else {
+    out.push(fit.qi);
+  }
+  const remaining = nMonths - out.length;
+  for (let k = 1; k <= remaining; k++) {
+    out.push(evalModifiedHyperbolicRate(k / 12, fit.qi, fit.Di, fit.b, fit.Df));
+  }
+  return out.slice(0, nMonths);
+}
+
+// 50-yr raw integral of an Arps fit. Monthly trapezoid (rate * DAYS_PER_MONTH).
+// No economic-limit cutoff — see module header.
+export function eurFromArpsParams(
+  fit: RampArpsParams | null | undefined,
+): number | null {
+  if (!fit) return null;
+  if (
+    !Number.isFinite(fit.qi) ||
+    !Number.isFinite(fit.Di) ||
+    !Number.isFinite(fit.b) ||
+    !Number.isFinite(fit.Df)
+  ) {
+    return null;
+  }
+  const rates = buildRampArpsRate(fit, FULL_FORECAST_N_MONTHS);
+  let cum = 0;
+  for (const r of rates) {
+    if (Number.isFinite(r)) cum += r * DAYS_PER_MONTH;
+  }
+  return cum;
+}
+
+// Convenience for per-well decline rows: pulls qi/Di/b/Df out of the
+// `Forecast.params` dict and integrates over 50 years (no econ cutoff).
+// Returns null when any of the four core Arps params are missing/non-
+// finite — caller should fall back to the stored `eur` in that case.
+export function eurFromForecastParams(
+  params: Record<string, number> | null | undefined,
+): number | null {
+  if (!params) return null;
+  const qi = params.qi;
+  const Di = params.Di;
+  const b = params.b;
+  const Df = params.Df;
+  if (
+    qi === undefined || !Number.isFinite(qi) ||
+    Di === undefined || !Number.isFinite(Di) ||
+    b === undefined || !Number.isFinite(b) ||
+    Df === undefined || !Number.isFinite(Df)
+  ) {
+    return null;
+  }
+  return eurFromArpsParams({ qi, Di, b, Df });
+}

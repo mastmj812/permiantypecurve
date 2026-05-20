@@ -592,7 +592,20 @@ export function TypeCurvePage() {
                 <tbody>
                   <tr>
                     {PERCENTILES.map((p) => {
-                      const v = currentStream.fitted_eur_per_unit?.[p.key];
+                      // Compute EUR from the persisted Arps params on the
+                      // client using the same monthly integration path the
+                      // Full-forecast cum chart uses. This guarantees the
+                      // table value equals the chart's cum asymptote — and
+                      // surfaces the technical (no-econ-cutoff) EUR even
+                      // for curves saved before the backend defaults were
+                      // flipped to no-cutoff. Falls back to the stored
+                      // value when params for a percentile are missing
+                      // (very old saves predate fitted_per_percentile).
+                      const fit = currentStream.fitted_per_percentile?.[p.key];
+                      const v =
+                        eurFromParams(fit) ??
+                        currentStream.fitted_eur_per_unit?.[p.key] ??
+                        null;
                       return (
                         <td key={p.key}>
                           {v != null ? fmtEur(v) : "—"}
@@ -603,7 +616,10 @@ export function TypeCurvePage() {
                       {previewEur[stream] != null
                         ? fmtEur(previewEur[stream]!)
                         : currentStream.fitted
-                          ? fmtEur(currentStream.fitted.eur_per_unit)
+                          ? fmtEur(
+                              eurFromParams(currentStream.fitted) ??
+                                currentStream.fitted.eur_per_unit,
+                            )
                           : "—"}
                     </td>
                   </tr>
@@ -972,10 +988,16 @@ function fmtEur(v: number | null | undefined): string {
 // totals the backend would compute for an EUR.
 const DAYS_PER_MONTH = 30.4375;
 
-// Horizon for the full-forecast charts in the right column. Matches the
-// 50-year horizon used by the backend's per-percentile EUR calc and the
-// CSV export's fitted_forecast.csv, so the on-screen cum asymptote
-// equals the EUR table value when both have settled.
+// Horizon for the full-forecast charts in the right column. 50 yr × 12 mo
+// matches the backend's per-percentile evaluation horizon and the CSV
+// export's fitted_forecast.csv so cums computed on either side of the
+// API match to within trapezoid-vs-quad numerical noise.
+//
+// Note: this tool is intentionally a TECHNICAL type-curve generator.
+// No economic-limit cutoff is applied anywhere — cum integrations run
+// the full 50-yr horizon regardless of how low the modeled rate goes.
+// Economics happens downstream on the exported workbook in the user's
+// separate cash-flow tool.
 const FULL_FORECAST_N_MONTHS = 600;
 
 // Force CSS grid for the type-curve chart rows so the third (full-
@@ -1028,6 +1050,21 @@ interface RampArpsParams {
   Df: number;
   qo?: number;
   peak_index?: number;
+}
+
+// 50-yr cumulative integral of a fit, using the same monthly trapezoid
+// the cum chart uses. Returns null if `fit` is null/undefined so the
+// EUR-table cell can fall back to the stored value. Drives the EUR
+// table directly so the displayed number can't drift from the cum
+// chart's asymptote: same params → same integration → same number.
+function eurFromParams(fit: RampArpsParams | null | undefined): number | null {
+  if (!fit) return null;
+  const rates = buildRampArpsRate(fit, FULL_FORECAST_N_MONTHS);
+  let cum = 0;
+  for (const r of rates) {
+    if (Number.isFinite(r)) cum += r * DAYS_PER_MONTH;
+  }
+  return cum;
 }
 
 // Mirror of backend `app.type_curves.fit_p50.build_ramp_arps_rate`:

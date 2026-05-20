@@ -37,6 +37,13 @@ class WellHeader:
     sh_lon: float | None = None
     bh_lat: float | None = None
     bh_lon: float | None = None
+    # Enverus-supplied lateral geometry as a WKT LINESTRING in EPSG:4326.
+    # When present, the ingest layer uses this directly as the wellstick,
+    # skipping the survey-fetch + heel-from-inclination computation
+    # pipeline. ~91% coverage on horizontal Permian wells (vs ~53% via
+    # our survey fetch); when missing, we fall back to the existing
+    # survey or surface→BH paths.
+    lateral_line_wkt: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -52,26 +59,15 @@ class ProductionRecord:
     source: str | None = None
 
 
-@dataclass(frozen=True)
-class SurveyStation:
-    station_seq: int
-    md_ft: float
-    inclination_deg: float
-    azimuth_deg: float | None = None
-    tvd_ft: float | None = None
-    lat: float | None = None
-    lon: float | None = None
-
-
-@dataclass(frozen=True)
-class DirectionalSurvey:
-    api14: str
-    stations: list[SurveyStation]
-
-
 class EnverusClient(ABC):
     """Adapter interface. Methods return Iterators so callers can stream
-    arbitrarily large result sets without buffering."""
+    arbitrarily large result sets without buffering.
+
+    Survey fetch was retired in Phase 2 of the LateralLine migration —
+    `LateralLine` on the wells endpoint replaces the heel-from-stations
+    pipeline. The `surveys` dataset is still available upstream if a
+    future need arises; just not surfaced here.
+    """
 
     @abstractmethod
     def fetch_well_headers(
@@ -89,21 +85,3 @@ class EnverusClient(ABC):
         *,
         start_date: date | None = None,
     ) -> Iterator[ProductionRecord]: ...
-
-    @abstractmethod
-    def fetch_directional_survey(self, api14: str) -> DirectionalSurvey | None: ...
-
-    def fetch_directional_surveys(
-        self, api14s: Iterable[str]
-    ) -> Iterator[DirectionalSurvey]:
-        """Batch survey fetch.
-
-        Default implementation loops the per-well method. Adapters that
-        support multi-id queries (PrismClient does) override this for
-        far fewer API round-trips — critical when the per-well rate
-        limit would otherwise bite.
-        """
-        for api14 in api14s:
-            survey = self.fetch_directional_survey(api14)
-            if survey is not None:
-                yield survey

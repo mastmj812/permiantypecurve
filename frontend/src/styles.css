@@ -322,21 +322,28 @@ body {
 
 /* Type-curve legend lives inline within the main column, between the
    chart row and the EUR table — full-width, not floating like the map
-   page legend. */
-.type-curve-legend {
+   page legend. The base `.legend` block at the bottom of the file sets
+   `position: absolute; bottom: 24px; right: 12px;`, and same-specificity
+   later rules win in CSS, so this rule has to either move below
+   `.legend` or use a tighter selector. Using `.legend.type-curve-legend`
+   gives it specificity 0,2,0 (vs `.legend`'s 0,1,0) so it overrides
+   regardless of source order. */
+.legend.type-curve-legend {
   position: static;
   margin: 8px 16px 12px 16px;
   background: #fafafa;
   max-width: none;
   box-shadow: none;
+  bottom: auto;
+  right: auto;
 }
-.type-curve-legend .legend-section {
+.legend.type-curve-legend .legend-section {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
   margin-bottom: 6px;
 }
-.type-curve-legend .legend-item {
+.legend.type-curve-legend .legend-item {
   display: flex;
   align-items: center;
   gap: 6px;

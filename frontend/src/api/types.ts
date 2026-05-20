@@ -86,7 +86,5 @@ export interface WellDetail {
   sh_lon: number | null;
   bh_lat: number | null;
   bh_lon: number | null;
-  heel_lat: number | null;
-  heel_lon: number | null;
   last_synced_at: string | null;
 }

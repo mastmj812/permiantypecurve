@@ -79,9 +79,6 @@ class Well(Base):
         Geometry(geometry_type="POINT", srid=4326)
     )
 
-    heel_lat: Mapped[float | None] = mapped_column(Float)
-    heel_lon: Mapped[float | None] = mapped_column(Float)
-
     wellstick: Mapped[Any | None] = mapped_column(
         Geometry(geometry_type="LINESTRING", srid=4326)
     )

@@ -84,6 +84,12 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
     if spec.lateral_max_ft is not None:
         parts.append("w.lateral_ft <= :lateral_max_ft")
         params["lateral_max_ft"] = spec.lateral_max_ft
+    if spec.api14s:
+        # Explicit allow-list pasted in the FilterPanel. Mirrors the
+        # selection endpoint's behavior so the same paste produces the
+        # same wells on the map and in /api/wells/select.
+        parts.append("w.api14 = ANY((:api14s)::TEXT[])")
+        params["api14s"] = list(spec.api14s)
 
     if not parts:
         return "TRUE", params
