@@ -292,7 +292,11 @@ export function ReviewPage() {
             </tbody>
           </table>
         </div>
-        <ReviewMap forecasts={oilRows} excludedApi14s={excluded} />
+        <ReviewMap
+          forecasts={oilRows}
+          excludedApi14s={excluded}
+          formationFilter={formationFilter}
+        />
       </div>
 
       <aside className="panel panel-right">

@@ -25,6 +25,50 @@ const SOURCE_ID = "review-wellsticks";
 const LAYER_ID = "review-wellsticks-line";
 const PERMIAN_CENTER: [number, number] = [-102.5, 32.0];
 
+// Block + Section overlay layers — same data + same zoom thresholds as
+// MapView's overlays. Kept as separate source IDs (review-blocks /
+// review-sections) so the two map components don't fight over a shared
+// MapLibre source registration if they ever live in the DOM at once.
+// Always-on here (no toolbar toggle); the Review map is a passive
+// spatial-context view, not a workflow surface.
+const BLOCKS_SOURCE_ID = "review-blocks";
+const BLOCKS_FILL_LAYER = "review-blocks-fill";
+const BLOCKS_LINE_LAYER = "review-blocks-line";
+const BLOCKS_LABEL_LAYER = "review-blocks-label";
+const BLOCKS_MIN_ZOOM = 8;
+
+const SECTIONS_SOURCE_ID = "review-sections";
+const SECTIONS_FILL_LAYER = "review-sections-fill";
+const SECTIONS_LINE_LAYER = "review-sections-line";
+const SECTIONS_LABEL_LAYER = "review-sections-label";
+const SECTIONS_MIN_ZOOM = 11;
+
+// Same label-key fallback chain MapView uses — OTLS GLO export columns
+// vary in casing across vintages.
+const BLOCK_LABEL_EXPR = [
+  "coalesce",
+  ["get", "BLOCK_NO"],
+  ["get", "BLOCK"],
+  ["get", "BlockNo"],
+  ["get", "Block"],
+  ["get", "block"],
+  ["get", "BLOCKID"],
+  "",
+] as unknown as ExpressionSpecification;
+
+const SECTION_LABEL_EXPR = [
+  "coalesce",
+  ["get", "LEVEL3_SUR"],
+  ["get", "SECTION_NO"],
+  ["get", "SECTION"],
+  ["get", "SEC"],
+  ["get", "SectionNo"],
+  ["get", "Section"],
+  ["get", "section"],
+  ["get", "SECTIONID"],
+  "",
+] as unknown as ExpressionSpecification;
+
 // Module-level guard mirrors MapView's pattern — addProtocol is safe to
 // call more than once, but the boolean keeps the construction of a new
 // Protocol() to once per page load.
@@ -77,9 +121,15 @@ interface Props {
   // Excluded wells render gray rather than disappearing — keeps spatial
   // context as the engineer prunes the set.
   excludedApi14s: Set<string>;
+  // Currently-selected formation from the Review-tab dropdown. "all"
+  // means no formation restriction; anything else narrows the map to
+  // wells whose joined `formation` matches. Applied via MapLibre's
+  // layer-level `filter` expression so changing it doesn't re-fetch
+  // the wellsticks GeoJSON.
+  formationFilter: string;
 }
 
-export function ReviewMap({ forecasts, excludedApi14s }: Props) {
+export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   // Persistent popup instance. Reusing one popup across mousemoves avoids
@@ -88,6 +138,12 @@ export function ReviewMap({ forecasts, excludedApi14s }: Props) {
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [data, setData] = useState<WellstickFeatureCollection | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Overlay-fetch errors are surfaced inline (small muted text in the
+  // header) rather than as map-warning banners — the Review map is a
+  // glance view, not a workflow surface, and a missing-GeoJSON message
+  // doesn't need the same prominence it gets on the Map tab.
+  const [blocksError, setBlocksError] = useState<string | null>(null);
+  const [sectionsError, setSectionsError] = useState<string | null>(null);
 
   // Oil forecast lookup keyed by api14. The table uses oil as the
   // headline stream (per the brief), so EUR/ft on the map is oil EUR
@@ -322,6 +378,153 @@ export function ReviewMap({ forecasts, excludedApi14s }: Props) {
     }
   }, [styleLoaded, joined, ramp]);
 
+  // -------------- formation filter --------------
+  // Applied via setFilter on the wellsticks line layer so toggling the
+  // dropdown is instant — no wellsticks re-fetch and no source-data
+  // mutation. "all" clears the filter; anything else restricts to
+  // matching `formation` values. The hover tooltip already reads
+  // properties off the queried feature, so it stays in sync.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map || !map.getLayer(LAYER_ID)) return;
+    if (formationFilter === "all") {
+      map.setFilter(LAYER_ID, null);
+    } else {
+      map.setFilter(LAYER_ID, [
+        "==",
+        ["get", "formation"],
+        formationFilter,
+      ]);
+    }
+  }, [styleLoaded, formationFilter, joined]);
+
+  // -------------- Blocks overlay (zoom 8+) --------------
+  // Always-on context layer. Fetch once on first styleLoaded; subsequent
+  // re-renders just rely on the layer's existing zoom-gated visibility.
+  // A 404 means the GeoJSON wasn't built; log inline rather than
+  // banner-warning, since this is a glance view not a workflow surface.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map || map.getSource(BLOCKS_SOURCE_ID)) return;
+    fetch("/api/basemap/blocks_tx_nm.geojson")
+      .then((r) => {
+        if (r.status === 404) {
+          setBlocksError("blocks GeoJSON not built");
+          return null;
+        }
+        if (!r.ok) throw new Error(`blocks fetch ${r.status}`);
+        return r.json();
+      })
+      .then((geo) => {
+        if (!geo) return;
+        setBlocksError(null);
+        map.addSource(BLOCKS_SOURCE_ID, { type: "geojson", data: geo });
+        map.addLayer({
+          id: BLOCKS_FILL_LAYER,
+          type: "fill",
+          source: BLOCKS_SOURCE_ID,
+          minzoom: BLOCKS_MIN_ZOOM,
+          paint: { "fill-color": "#1e293b", "fill-opacity": 0.04 },
+        });
+        map.addLayer({
+          id: BLOCKS_LINE_LAYER,
+          type: "line",
+          source: BLOCKS_SOURCE_ID,
+          minzoom: BLOCKS_MIN_ZOOM,
+          paint: {
+            "line-color": "#1e293b",
+            "line-width": 0.9,
+            "line-opacity": 0.55,
+          },
+        });
+        map.addLayer({
+          id: BLOCKS_LABEL_LAYER,
+          type: "symbol",
+          source: BLOCKS_SOURCE_ID,
+          minzoom: BLOCKS_MIN_ZOOM,
+          layout: {
+            "text-field": BLOCK_LABEL_EXPR,
+            "text-size": 12,
+            "text-font": ["Noto Sans Regular"],
+            "text-allow-overlap": false,
+            "symbol-placement": "point",
+          },
+          paint: {
+            "text-color": "#0f172a",
+            "text-halo-color": "rgba(255,255,255,0.9)",
+            "text-halo-width": 1.5,
+          },
+        });
+      })
+      .catch((e) => {
+        console.error(e);
+        setBlocksError(String(e));
+      });
+  }, [styleLoaded]);
+
+  // -------------- Sections overlay (zoom 11+) --------------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map || map.getSource(SECTIONS_SOURCE_ID)) return;
+    fetch("/api/basemap/sections_tx_nm.geojson")
+      .then((r) => {
+        if (r.status === 404) {
+          setSectionsError("sections GeoJSON not built");
+          return null;
+        }
+        if (!r.ok) throw new Error(`sections fetch ${r.status}`);
+        return r.json();
+      })
+      .then((geo) => {
+        if (!geo) return;
+        setSectionsError(null);
+        map.addSource(SECTIONS_SOURCE_ID, { type: "geojson", data: geo });
+        map.addLayer({
+          id: SECTIONS_FILL_LAYER,
+          type: "fill",
+          source: SECTIONS_SOURCE_ID,
+          minzoom: SECTIONS_MIN_ZOOM,
+          paint: { "fill-color": "#475569", "fill-opacity": 0.03 },
+        });
+        map.addLayer({
+          id: SECTIONS_LINE_LAYER,
+          type: "line",
+          source: SECTIONS_SOURCE_ID,
+          minzoom: SECTIONS_MIN_ZOOM,
+          paint: {
+            "line-color": "#475569",
+            "line-width": 0.6,
+            "line-opacity": 0.5,
+          },
+        });
+        map.addLayer({
+          id: SECTIONS_LABEL_LAYER,
+          type: "symbol",
+          source: SECTIONS_SOURCE_ID,
+          minzoom: SECTIONS_MIN_ZOOM,
+          layout: {
+            "text-field": SECTION_LABEL_EXPR,
+            "text-size": 10,
+            "text-font": ["Noto Sans Regular"],
+            "text-allow-overlap": false,
+            "symbol-placement": "point",
+          },
+          paint: {
+            "text-color": "#334155",
+            "text-halo-color": "rgba(255,255,255,0.9)",
+            "text-halo-width": 1.25,
+          },
+        });
+      })
+      .catch((e) => {
+        console.error(e);
+        setSectionsError(String(e));
+      });
+  }, [styleLoaded]);
+
   // -------------- fit bounds once data arrives --------------
   const fittedRef = useRef(false);
   useEffect(() => {
@@ -371,6 +574,16 @@ export function ReviewMap({ forecasts, excludedApi14s }: Props) {
           wells colored by oil EUR / lateral ft — hover for well info
         </span>
         {error && <span className="muted err">{error}</span>}
+        {blocksError && (
+          <span className="muted err" style={{ fontSize: 11 }}>
+            blocks: {blocksError}
+          </span>
+        )}
+        {sectionsError && (
+          <span className="muted err" style={{ fontSize: 11 }}>
+            sections: {sectionsError}
+          </span>
+        )}
       </header>
       <div
         style={{
