@@ -16,12 +16,23 @@ import { selectWellsSpatial, summaryForApi14s, tileUrlTemplate } from "../api/we
 import { DrawingController } from "../map/drawing";
 import {
   WELLS_INTERACTIVE_LAYERS,
+  WELLS_LINES_DASHED_COHORT_LAYER,
+  WELLS_LINES_SOLID_COHORT_LAYER,
+  WELLS_POINTS_COHORT_LAYER,
   WELLS_SOURCE_ID,
+  cohortLineFilter,
+  cohortPointFilter,
+  wellsLinesDashedCohortLayer,
   wellsLinesDashedLayer,
+  wellsLinesSolidCohortLayer,
   wellsLinesSolidLayer,
+  wellsPointsCohortLayer,
   wellsPointsLayer,
 } from "../map/wellsLayers";
 import { useMapStore } from "../store/mapStore";
+import { activeCohort, useCohortStore } from "../store/cohortStore";
+
+const EMPTY_COHORT_API14S: string[] = [];
 
 // Register the pmtiles:// protocol once per page. MapLibre's addProtocol is
 // idempotent in practice but we guard anyway since StrictMode double-invokes.
@@ -143,6 +154,11 @@ export function MapView() {
   const selectedApi14s = useMapStore((s) => s.selectedApi14s);
   const setSelection = useMapStore((s) => s.setSelection);
   const toggleApi14 = useMapStore((s) => s.toggleApi14);
+  // Cohort api14s drive the sky-blue halo. Stable empty-array fallback
+  // so React doesn't re-run the effect just because there's no cohort.
+  const cohortApi14s = useCohortStore(
+    (s) => activeCohort(s)?.api14s ?? EMPTY_COHORT_API14S,
+  );
 
   // -------------- init map (once) --------------
   useEffect(() => {
@@ -181,8 +197,14 @@ export function MapView() {
         maxzoom: 14,
         promoteId: { wells_points: "api14", wells_lines: "api14" },
       });
+      // Cohort halos are added BEFORE the matching regular layer so
+      // they paint underneath — the formation-colored stroke/circle
+      // ends up centered inside the sky-blue halo for cohort wells.
+      map.addLayer(wellsPointsCohortLayer);
       map.addLayer(wellsPointsLayer);
+      map.addLayer(wellsLinesSolidCohortLayer);
       map.addLayer(wellsLinesSolidLayer);
+      map.addLayer(wellsLinesDashedCohortLayer);
       map.addLayer(wellsLinesDashedLayer);
 
       const drawer = new DrawingController(map, {
@@ -306,6 +328,33 @@ export function MapView() {
     }
   }, [selectedApi14s, styleLoaded]);
 
+  // -------------- active cohort → halo layer filters --------------
+  // Drives the sky-blue halo by swapping each cohort halo layer's
+  // filter to match only api14s in the active cohort. Filter-based
+  // (vs feature-state) so membership doesn't depend on tiles being
+  // loaded at write time — MapLibre re-evaluates the filter every
+  // time tiles render.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (map.getLayer(WELLS_POINTS_COHORT_LAYER)) {
+      map.setFilter(WELLS_POINTS_COHORT_LAYER, cohortPointFilter(cohortApi14s));
+    }
+    if (map.getLayer(WELLS_LINES_SOLID_COHORT_LAYER)) {
+      map.setFilter(
+        WELLS_LINES_SOLID_COHORT_LAYER,
+        cohortLineFilter(cohortApi14s, "heel_to_bh"),
+      );
+    }
+    if (map.getLayer(WELLS_LINES_DASHED_COHORT_LAYER)) {
+      map.setFilter(
+        WELLS_LINES_DASHED_COHORT_LAYER,
+        cohortLineFilter(cohortApi14s, "surface_to_bh"),
+      );
+    }
+  }, [cohortApi14s, styleLoaded]);
+
   // -------------- wellsticks toggle --------------
   useEffect(() => {
     if (!styleLoaded) return;
@@ -313,6 +362,15 @@ export function MapView() {
     if (!map) return;
     const vis = showWellsticks ? "visible" : "none";
     for (const id of WELLS_INTERACTIVE_LAYERS) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+    }
+    // Halo layers track the same toggle so cohort wells don't keep
+    // glowing after the user hides the underlying wellsticks.
+    for (const id of [
+      WELLS_POINTS_COHORT_LAYER,
+      WELLS_LINES_SOLID_COHORT_LAYER,
+      WELLS_LINES_DASHED_COHORT_LAYER,
+    ]) {
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
     }
   }, [showWellsticks, styleLoaded]);

@@ -1,0 +1,435 @@
+// GunBarrel — cross-section view of the staged wells, oriented
+// perpendicular to the cohort's mean lateral azimuth. Each well
+// projects to a single point: X = perpendicular offset from the cohort
+// centroid (ft), Y = TVD (ft, inverted so deeper draws lower). Solid
+// circles for known TVD; open circles for wells whose TVD is missing
+// (placed at the cohort mean as a fallback so they still show up).
+//
+// The user clicks circles to toggle whether each well will be added to
+// the cohort when they hit "Add N selected" in the inspect modal.
+// Hover surfaces a small tooltip with the bits that matter for
+// parent/child + formation-validation decisions.
+//
+// Pure SVG, no charting library — same approach as DeclineChart.
+
+import { useMemo, useState } from "react";
+
+import type { WellDetailLite } from "../api/wells";
+import { colorForFormation } from "../map/formations";
+
+export interface GunBarrelProps {
+  wells: WellDetailLite[];
+  // api14s of wells that will be added when the user commits. The
+  // unchecked wells render at lowered opacity. Toggle via onToggle.
+  selectedApi14s: Set<string>;
+  onToggle: (api14: string) => void;
+  width?: number;
+  height?: number;
+}
+
+const PAD = { top: 24, right: 32, bottom: 40, left: 56 };
+const WELL_RADIUS = 7;
+// Rough lat/lon → feet at Permian latitude (~32°N). One degree of lat
+// is ~364,000 ft anywhere; one degree of lon shrinks with latitude.
+// Inline rather than pulling a geo lib — same trick the retired
+// synthetic client used (and Phase 2 retired alongside it).
+const FT_PER_DEG_LAT = 364_000;
+
+// ---------------- math helpers ----------------
+
+interface Projected {
+  api14: string;
+  offsetFt: number;
+  tvd: number;
+  tvdEstimated: boolean;
+  well: WellDetailLite;
+}
+
+function projectWells(wells: WellDetailLite[]): {
+  projected: Projected[];
+  axisLabel: string;
+} {
+  // Wells with no surface OR no bottomhole coordinates are dropped
+  // entirely — we can't place them on the cross-section without a
+  // lateral vector. (TVD missing is OK; we estimate. Coords missing
+  // is not.)
+  const usable = wells.filter(
+    (w) =>
+      w.sh_lat != null && w.sh_lon != null &&
+      w.bh_lat != null && w.bh_lon != null,
+  );
+  if (usable.length === 0) {
+    return { projected: [], axisLabel: "" };
+  }
+
+  // Cohort centroid in lon/lat (mean of lateral midpoints).
+  let cLon = 0, cLat = 0;
+  for (const w of usable) {
+    cLon += ((w.sh_lon! + w.bh_lon!) / 2);
+    cLat += ((w.sh_lat! + w.bh_lat!) / 2);
+  }
+  cLon /= usable.length;
+  cLat /= usable.length;
+
+  // Mean azimuth via vector average of normalized sh→bh vectors.
+  // Vector mean avoids the 0°/360° wrap-around that would bite a
+  // naive `mean(atan2(...))`.
+  let mx = 0, my = 0;
+  for (const w of usable) {
+    const dx = w.bh_lon! - w.sh_lon!;
+    const dy = w.bh_lat! - w.sh_lat!;
+    const len = Math.hypot(dx, dy);
+    if (len > 0) {
+      mx += dx / len;
+      my += dy / len;
+    }
+  }
+  // Unit vector pointing along the mean lateral direction.
+  const lateralLen = Math.hypot(mx, my) || 1;
+  const lateralX = mx / lateralLen;
+  const lateralY = my / lateralLen;
+  // Perpendicular vector (90° rotation to the left). Doesn't matter
+  // which sign we pick as long as we're consistent — the compass-rose
+  // glyph below tells the engineer which direction is +X.
+  const perpX = -lateralY;
+  const perpY = lateralX;
+
+  // Lat/lon → ft scaling at the cohort centroid latitude.
+  const ftPerDegLon = Math.cos((cLat * Math.PI) / 180) * FT_PER_DEG_LAT;
+
+  // TVD fallback: mean of known TVDs across the cohort. Missing-TVD
+  // wells get this value + an "estimated" flag for the renderer.
+  const knownTvds = usable
+    .map((w) => w.tvd_ft)
+    .filter((v): v is number => v != null && Number.isFinite(v));
+  const meanTvd =
+    knownTvds.length > 0
+      ? knownTvds.reduce((a, b) => a + b, 0) / knownTvds.length
+      : 10_000;
+
+  const projected: Projected[] = usable.map((w) => {
+    const midLon = (w.sh_lon! + w.bh_lon!) / 2;
+    const midLat = (w.sh_lat! + w.bh_lat!) / 2;
+    // Offset vector from cohort centroid, in feet.
+    const dxFt = (midLon - cLon) * ftPerDegLon;
+    const dyFt = (midLat - cLat) * FT_PER_DEG_LAT;
+    // Signed projection onto the perpendicular axis.
+    const offsetFt = dxFt * perpX + dyFt * perpY;
+    const tvdKnown = w.tvd_ft != null && Number.isFinite(w.tvd_ft);
+    return {
+      api14: w.api14,
+      offsetFt,
+      tvd: tvdKnown ? w.tvd_ft! : meanTvd,
+      tvdEstimated: !tvdKnown,
+      well: w,
+    };
+  });
+
+  // Compass-rose label for +X. Convert perpendicular unit vector back
+  // to bearing degrees from north (0 = N, 90 = E).
+  const bearingRad = Math.atan2(perpX, perpY);
+  const bearingDeg = ((bearingRad * 180) / Math.PI + 360) % 360;
+  const axisLabel = compassLabel(bearingDeg);
+
+  return { projected, axisLabel };
+}
+
+function compassLabel(deg: number): string {
+  // 16-point compass — enough granularity for the cross-section
+  // direction note, not so much it looks pedantic.
+  const dirs = [
+    "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+    "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+  ];
+  const idx = Math.round(deg / 22.5) % 16;
+  return dirs[idx]!;
+}
+
+// ---------------- component ----------------
+
+export function GunBarrel({
+  wells,
+  selectedApi14s,
+  onToggle,
+  width = 880,
+  height = 320,
+}: GunBarrelProps) {
+  const { projected, axisLabel } = useMemo(() => projectWells(wells), [wells]);
+  const [hover, setHover] = useState<Projected | null>(null);
+
+  const plotArea = {
+    x: PAD.left,
+    y: PAD.top,
+    w: width - PAD.left - PAD.right,
+    h: height - PAD.top - PAD.bottom,
+  };
+
+  // Auto-fit axes. Pad x range by 10% per side so circles at the
+  // extremes aren't clipped by the chart border. Pad y likewise.
+  // Empty-cohort guard: render an explanatory message rather than NaN.
+  if (projected.length === 0) {
+    return (
+      <svg
+        width={width}
+        height={height}
+        className="gun-barrel-svg"
+        role="img"
+      >
+        <text
+          x={width / 2}
+          y={height / 2}
+          textAnchor="middle"
+          fontSize="12"
+          fill="#6b7280"
+        >
+          No wells with surface + bottomhole coordinates to render.
+        </text>
+      </svg>
+    );
+  }
+
+  const offsets = projected.map((p) => p.offsetFt);
+  const tvds = projected.map((p) => p.tvd);
+  const xMin0 = Math.min(...offsets);
+  const xMax0 = Math.max(...offsets);
+  // Always give the chart at least 1000 ft of x range so a tight pad
+  // of co-located wells still renders with breathing room. Avoids the
+  // "single dot in the middle" degenerate case.
+  const xSpan = Math.max(xMax0 - xMin0, 1000);
+  const xPad = xSpan * 0.1;
+  const xMin = xMin0 - xPad;
+  const xMax = xMax0 + xPad;
+  const xRange = xMax - xMin;
+
+  const yMin0 = Math.min(...tvds);
+  const yMax0 = Math.max(...tvds);
+  const ySpan = Math.max(yMax0 - yMin0, 200);
+  const yPad = ySpan * 0.15;
+  const yMin = yMin0 - yPad;
+  const yMax = yMax0 + yPad;
+  const yRange = yMax - yMin;
+
+  // X: left→right = -offset → +offset. Y inverted: shallower at top.
+  const xScale = (v: number) =>
+    plotArea.x + ((v - xMin) / xRange) * plotArea.w;
+  const yScale = (v: number) =>
+    plotArea.y + ((v - yMin) / yRange) * plotArea.h;
+
+  const xTicks = niceTicks(xMin, xMax, 6);
+  const yTicks = niceTicks(yMin, yMax, 5);
+
+  return (
+    <svg
+      width={width}
+      height={height}
+      className="gun-barrel-svg"
+      role="img"
+      aria-label="Gun-barrel cross-section of staged wells"
+    >
+      {/* Plot frame */}
+      <rect
+        x={plotArea.x}
+        y={plotArea.y}
+        width={plotArea.w}
+        height={plotArea.h}
+        fill="#fff"
+        stroke="#e5e7eb"
+      />
+
+      {/* Y grid + tick labels (TVD, ft) */}
+      {yTicks.map((t) => (
+        <g key={`y${t}`}>
+          <line
+            x1={plotArea.x}
+            x2={plotArea.x + plotArea.w}
+            y1={yScale(t)}
+            y2={yScale(t)}
+            stroke="#f3f4f6"
+          />
+          <text
+            x={plotArea.x - 6}
+            y={yScale(t)}
+            textAnchor="end"
+            dominantBaseline="middle"
+            fontSize="10"
+            fill="#6b7280"
+          >
+            {Math.round(t).toLocaleString()}
+          </text>
+        </g>
+      ))}
+
+      {/* X grid + tick labels (offset, ft) */}
+      {xTicks.map((t) => (
+        <g key={`x${t}`}>
+          <line
+            x1={xScale(t)}
+            x2={xScale(t)}
+            y1={plotArea.y}
+            y2={plotArea.y + plotArea.h}
+            stroke="#f3f4f6"
+          />
+          <text
+            x={xScale(t)}
+            y={plotArea.y + plotArea.h + 14}
+            textAnchor="middle"
+            fontSize="10"
+            fill="#6b7280"
+          >
+            {Math.round(t).toLocaleString()}
+          </text>
+        </g>
+      ))}
+
+      {/* Well circles */}
+      {projected.map((p) => {
+        const color = colorForFormation(p.well.formation);
+        const selected = selectedApi14s.has(p.api14);
+        return (
+          <circle
+            key={p.api14}
+            cx={xScale(p.offsetFt)}
+            cy={yScale(p.tvd)}
+            r={WELL_RADIUS}
+            className="gun-barrel-well-circle"
+            fill={p.tvdEstimated ? "none" : color}
+            stroke={color}
+            strokeWidth={1.5}
+            opacity={selected ? 1 : 0.35}
+            style={{ cursor: "pointer" }}
+            onClick={() => onToggle(p.api14)}
+            onMouseEnter={() => setHover(p)}
+            onMouseLeave={() => setHover((h) => (h?.api14 === p.api14 ? null : h))}
+          />
+        );
+      })}
+
+      {/* Axis labels */}
+      <text
+        x={plotArea.x + plotArea.w / 2}
+        y={height - 6}
+        textAnchor="middle"
+        fontSize="11"
+        fill="#374151"
+      >
+        Cross-section offset (ft) — +X is {axisLabel}
+      </text>
+      <text
+        x={14}
+        y={plotArea.y + plotArea.h / 2}
+        transform={`rotate(-90 14 ${plotArea.y + plotArea.h / 2})`}
+        textAnchor="middle"
+        fontSize="11"
+        fill="#374151"
+      >
+        TVD (ft)
+      </text>
+
+      {/* Tooltip — rendered last so it sits on top of the well circles */}
+      {hover && (
+        <GunBarrelTooltip
+          point={hover}
+          x={xScale(hover.offsetFt)}
+          y={yScale(hover.tvd)}
+          chartWidth={width}
+          chartHeight={height}
+        />
+      )}
+    </svg>
+  );
+}
+
+// ---------------- tooltip ----------------
+
+function GunBarrelTooltip({
+  point,
+  x,
+  y,
+  chartWidth,
+  chartHeight,
+}: {
+  point: Projected;
+  x: number;
+  y: number;
+  chartWidth: number;
+  chartHeight: number;
+}) {
+  const w = point.well;
+  // Position the tooltip to the right of the circle by default; flip
+  // to the left if it'd run off the chart's right edge. Same trick for
+  // top/bottom so a circle near the y-axis edges doesn't push the box
+  // off-screen.
+  const TT_WIDTH = 220;
+  const TT_HEIGHT = 96;
+  const placeLeft = x + WELL_RADIUS + 8 + TT_WIDTH > chartWidth;
+  const placeAbove = y + TT_HEIGHT + 8 > chartHeight;
+  const tx = placeLeft ? x - WELL_RADIUS - 8 - TT_WIDTH : x + WELL_RADIUS + 8;
+  const ty = placeAbove ? y - TT_HEIGHT - 4 : y + 4;
+
+  return (
+    <g pointerEvents="none">
+      <rect
+        x={tx}
+        y={ty}
+        width={TT_WIDTH}
+        height={TT_HEIGHT}
+        fill="rgba(255,255,255,0.97)"
+        stroke="#d1d5db"
+        strokeWidth={1}
+        rx={6}
+      />
+      <text
+        x={tx + 10}
+        y={ty + 18}
+        fontSize="12"
+        fontWeight={600}
+        fill="#0f172a"
+      >
+        {w.name ?? w.api14}
+      </text>
+      <text x={tx + 10} y={ty + 34} fontSize="11" fill="#374151">
+        {w.formation ?? "(no formation)"}
+      </text>
+      <text x={tx + 10} y={ty + 50} fontSize="11" fill="#374151">
+        TVD {Math.round(point.tvd).toLocaleString()} ft
+        {point.tvdEstimated ? " (estimated)" : ""}
+      </text>
+      <text x={tx + 10} y={ty + 66} fontSize="11" fill="#374151">
+        Lateral{" "}
+        {w.lateral_ft != null
+          ? `${Math.round(w.lateral_ft).toLocaleString()} ft`
+          : "—"}
+      </text>
+      <text x={tx + 10} y={ty + 82} fontSize="11" fill="#374151">
+        First prod {w.first_prod_date ?? "—"}
+      </text>
+    </g>
+  );
+}
+
+// ---------------- tick math ----------------
+
+function niceTicks(min: number, max: number, count: number): number[] {
+  if (min === max) return [min];
+  const step = niceStep((max - min) / count);
+  const start = Math.ceil(min / step) * step;
+  const out: number[] = [];
+  for (let v = start; v <= max + 1e-9; v += step) out.push(round(v));
+  return out;
+}
+
+function niceStep(rough: number): number {
+  if (rough <= 0) return 1;
+  const exp = Math.floor(Math.log10(rough));
+  const frac = rough / Math.pow(10, exp);
+  let mult: number;
+  if (frac < 1.5) mult = 1;
+  else if (frac < 3) mult = 2;
+  else if (frac < 7) mult = 5;
+  else mult = 10;
+  return mult * Math.pow(10, exp);
+}
+
+function round(x: number): number {
+  return Math.round(x * 1e6) / 1e6;
+}

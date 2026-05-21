@@ -67,6 +67,31 @@ export async function fetchWellsticks(api14s: string[]): Promise<WellstickFeatur
   return (await r.json()) as WellstickFeatureCollection;
 }
 
+// Lightweight per-well bundle for the gun-barrel inspect modal. Mirrors
+// backend WellDetailLite — just the fields the cross-section + tooltip
+// render. Heavier `fetchWellDetail` stays for the single-well modal on
+// the map tab.
+export interface WellDetailLite {
+  api14: string;
+  name: string | null;
+  formation: string | null;
+  operator: string | null;
+  lateral_ft: number | null;
+  tvd_ft: number | null;
+  sh_lat: number | null;
+  sh_lon: number | null;
+  bh_lat: number | null;
+  bh_lon: number | null;
+  first_prod_date: string | null;
+}
+
+export async function fetchWellDetails(api14s: string[]): Promise<WellDetailLite[]> {
+  if (api14s.length === 0) return [];
+  const r = await apiFetch(`/api/wells/details?api14s=${api14s.join(",")}`);
+  if (!r.ok) throw new Error(`well details fetch failed: ${r.status}`);
+  return (await r.json()) as WellDetailLite[];
+}
+
 export async function fetchFacets(spec?: FilterSpec): Promise<FilterFacets> {
   // Pass the current filters so the backend can compute per-facet counts
   // under "all filters except this facet's own column". The endpoint

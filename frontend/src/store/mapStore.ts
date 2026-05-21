@@ -24,6 +24,15 @@ export interface MapState {
   // api14s carried across nav from map → forecast page
   forecastApi14s: string[];
   setForecastApi14s: (api14s: string[]) => void;
+  // Cohort-handoff metadata that rides alongside forecastApi14s when
+  // the user clicks "Forecast" on the cohort bar. The Type Curve save
+  // form pre-fills its name + deal dropdown from these when present;
+  // both stay null when the user reaches Forecast via the legacy
+  // lasso → "Forecast selected" right-rail flow. Cleared explicitly
+  // when the user starts a new non-cohort selection.
+  activeCohortName: string | null;
+  activeCohortDealId: string | null;
+  setCohortHandoff: (name: string | null, deal_id: string | null) => void;
   // Wells the engineer un-ticked on the Review page. Stays out of any
   // type-curve aggregation (step 6) but stays in the forecasts table.
   excludedApi14s: Set<string>;
@@ -66,6 +75,10 @@ export const useMapStore = create<MapState>((set) => ({
   setCurrentPage: (currentPage) => set({ currentPage }),
   forecastApi14s: [],
   setForecastApi14s: (forecastApi14s) => set({ forecastApi14s }),
+  activeCohortName: null,
+  activeCohortDealId: null,
+  setCohortHandoff: (activeCohortName, activeCohortDealId) =>
+    set({ activeCohortName, activeCohortDealId }),
 
   excludedApi14s: new Set<string>(),
   toggleExcluded: (api14) =>

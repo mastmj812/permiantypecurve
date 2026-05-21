@@ -47,6 +47,29 @@ class WellDetail(BaseModel):
     last_synced_at: datetime | None
 
 
+class WellDetailLite(BaseModel):
+    """Lightweight bundle for the gun-barrel inspect modal.
+
+    Just the fields the cross-section renderer + tooltip need —
+    sh/bh coords (for the perpendicular-offset math), TVD, lateral_ft,
+    formation, first_prod_date (for parent/child eyeballing). No
+    proppant / fluid / stages / status / wellstick_source — those
+    don't show in the gun-barrel view.
+    """
+
+    api14: str
+    name: str | None
+    formation: str | None
+    operator: str | None
+    lateral_ft: float | None
+    tvd_ft: float | None
+    sh_lat: float | None
+    sh_lon: float | None
+    bh_lat: float | None
+    bh_lon: float | None
+    first_prod_date: date | None
+
+
 @router.get("/wellsticks")
 def wellsticks_geojson(
     api14s: str = Query(..., description="CSV of api14s to fetch wellsticks for"),
@@ -87,6 +110,54 @@ def wellsticks_geojson(
         for r in rows
     ]
     return {"type": "FeatureCollection", "features": features}
+
+
+@router.get("/details", response_model=list[WellDetailLite])
+def well_details(
+    api14s: str = Query(..., description="CSV of api14s to fetch detail bundles for"),
+    session: Session = Depends(get_session),
+) -> list[WellDetailLite]:
+    """Batched well-detail bundle for the gun-barrel inspect modal.
+
+    Single query against the wells table; reuses the same ST_X/ST_Y
+    lat/lon extraction pattern the single-well endpoint uses below.
+    Registered before ``/{api14}`` so FastAPI matches the literal path
+    instead of treating "details" as an api14 value.
+    """
+    ids = [a.strip() for a in api14s.split(",") if a.strip()]
+    if not ids:
+        return []
+    rows = session.execute(
+        select(
+            Well.api14,
+            Well.name,
+            Well.formation,
+            Well.operator,
+            Well.lateral_ft,
+            Well.tvd_ft,
+            func.ST_Y(Well.sh_geom).label("sh_lat"),
+            func.ST_X(Well.sh_geom).label("sh_lon"),
+            func.ST_Y(Well.bh_geom).label("bh_lat"),
+            func.ST_X(Well.bh_geom).label("bh_lon"),
+            Well.first_prod_date,
+        ).where(Well.api14.in_(ids))
+    ).all()
+    return [
+        WellDetailLite(
+            api14=r.api14,
+            name=r.name,
+            formation=r.formation,
+            operator=r.operator,
+            lateral_ft=float(r.lateral_ft) if r.lateral_ft is not None else None,
+            tvd_ft=float(r.tvd_ft) if r.tvd_ft is not None else None,
+            sh_lat=r.sh_lat,
+            sh_lon=r.sh_lon,
+            bh_lat=r.bh_lat,
+            bh_lon=r.bh_lon,
+            first_prod_date=r.first_prod_date,
+        )
+        for r in rows
+    ]
 
 
 @router.get("/{api14}", response_model=WellDetail)
