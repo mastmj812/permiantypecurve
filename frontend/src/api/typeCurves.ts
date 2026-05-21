@@ -199,6 +199,22 @@ export async function deleteTypeCurve(id: string): Promise<void> {
   if (!r.ok && r.status !== 204) throw new Error(`delete failed: ${r.status}`);
 }
 
+export interface TypeCurveWellStat {
+  api14: string;
+  name: string | null;
+  lateral_ft: number | null;
+  oil_eur: number | null;
+  oil_eur_per_ft: number | null;
+}
+
+export async function fetchTypeCurveWellStats(
+  id: string,
+): Promise<TypeCurveWellStat[]> {
+  const r = await apiFetch(`/api/type-curves/${id}/well-stats`);
+  if (!r.ok) throw new Error(`well-stats failed: ${r.status}`);
+  return (await r.json()) as TypeCurveWellStat[];
+}
+
 // CSV export — auth-aware download via blob.
 // Can't use <a href download> because it won't attach the bearer header;
 // we fetch the zip with apiFetch, then synthesize a blob URL the browser

@@ -14,7 +14,25 @@ import { LoginPage } from "./pages/LoginPage";
 import { MapPage } from "./pages/MapPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TypeCurvePage } from "./pages/TypeCurvePage";
+import { TypeCurveSlidePage } from "./pages/TypeCurveSlidePage";
 import { useMapStore } from "./store/mapStore";
+
+// Hash-based slide route. We don't use a router library; the slide
+// is the only route that exits the normal app shell, so detecting it
+// inline keeps the surface area small.
+//   #/type-curves/<id>/slide
+//   #/type-curves/<id>/slide?compareWith=<id>
+function parseSlideHash(): { typeCurveId: string; compareWithId: string | null } | null {
+  const hash = window.location.hash || "";
+  const m = hash.match(/^#\/type-curves\/([^/?]+)\/slide(?:\?(.+))?$/);
+  if (!m) return null;
+  let compareWithId: string | null = null;
+  if (m[2]) {
+    const params = new URLSearchParams(m[2]);
+    compareWithId = params.get("compareWith");
+  }
+  return { typeCurveId: m[1]!, compareWithId };
+}
 
 const TABS: Array<{ id: "map" | "forecast" | "review" | "type_curve"; label: string }> = [
   { id: "map", label: "Map" },
@@ -29,6 +47,17 @@ export function App() {
 
   const [user, setUser] = useState<AuthUser | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
+  const [slideRoute, setSlideRoute] = useState(() => parseSlideHash());
+
+  // The slide tab is opened with window.open() into a new tab whose
+  // URL already carries the hash, so hashchange isn't strictly needed
+  // for the export flow — but listening for it keeps in-tab navigation
+  // working if anyone deep-links via a manual edit.
+  useEffect(() => {
+    const onHash = () => setSlideRoute(parseSlideHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
 
   // On mount, if a token exists, verify it via /me. Otherwise stay logged out.
   useEffect(() => {
@@ -61,6 +90,17 @@ export function App() {
   }
   if (!user) {
     return <LoginPage onAuthenticated={setUser} />;
+  }
+
+  // Slide route bypasses the app shell entirely so print output is
+  // chrome-free. Authentication still required (handled above).
+  if (slideRoute) {
+    return (
+      <TypeCurveSlidePage
+        typeCurveId={slideRoute.typeCurveId}
+        compareWithId={slideRoute.compareWithId}
+      />
+    );
   }
 
   return (

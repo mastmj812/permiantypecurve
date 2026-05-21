@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.logging import get_logger
-from app.db.models import AlignmentMethod, Deal, NormalizationBasis, TypeCurve
+from app.db.models import AlignmentMethod, Deal, Forecast, NormalizationBasis, Stream, TypeCurve, Well
 from app.db.session import get_session
 from app.type_curves.aggregate import (
     AlignmentMethod as AggAlign,
@@ -148,6 +148,21 @@ class TypeCurveSummary(BaseModel):
     created_at: datetime
     version_of: uuid.UUID | None
     deal_id: uuid.UUID | None
+
+
+class TypeCurveWellStat(BaseModel):
+    """Per-well oil EUR + lateral, for the slide-export probit chart.
+
+    EUR is the persisted 50-yr Arps integral on the well's oil forecast
+    (forecasts.eur). EUR/ft is EUR divided by lateral_ft — undefined and
+    returned null when either is missing or lateral_ft <= 0.
+    """
+
+    api14: str
+    name: str | None
+    lateral_ft: float | None
+    oil_eur: float | None
+    oil_eur_per_ft: float | None
 
 
 class PatchRequest(BaseModel):
@@ -806,6 +821,104 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
     for a in tc.included_api14s or []:
         writer.writerow([a])
     return buf.getvalue().encode()
+
+
+@router.get("/{type_curve_id}/well-stats", response_model=list[TypeCurveWellStat])
+def get_type_curve_well_stats(
+    type_curve_id: uuid.UUID, session: Session = Depends(get_session)
+) -> list[TypeCurveWellStat]:
+    """Per-well oil EUR + lateral_ft for the wells in this curve.
+
+    Drives the slide-export probit chart. Single join: wells ⨝ forecasts
+    (oil stream) filtered by api14 ∈ included_api14s. Wells missing an
+    oil forecast or a lateral_ft are still returned, with nulls for the
+    fields they can't supply, so the frontend can report a well count
+    that matches included_api14s exactly.
+
+    EUR is recomputed on the fly from ``forecasts.params`` using the
+    same monthly-trapezoid sum the Review tab's
+    ``eurFromArpsParams`` uses: evaluate the modified-hyperbolic fit
+    out to 600 monthly samples and sum ``rate * DAYS_PER_MONTH``. The
+    persisted ``forecasts.eur`` column was written via
+    ``scipy.integrate.quad`` (continuous integral), which gives a
+    ~3% lower number than the discrete monthly sum on typical Permian
+    unconventionals — reading it directly puts the per-well dots on the
+    probit systematically below the Review summary's mean and would
+    make the slide and the Review tab disagree. Falls back to the
+    stored value when params are missing or non-finite (old forecasts
+    that predate the params column population).
+    """
+    from app.type_curves.fit_p50 import evaluate_fit
+
+    # Same constant the frontend uses (frontend/src/forecasts/arps.ts).
+    DAYS_PER_MONTH = 30.4375
+    N_MONTHS = 600
+
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    api14s = list(tc.included_api14s or [])
+    if not api14s:
+        return []
+    rows = session.execute(
+        select(
+            Well.api14,
+            Well.name,
+            Well.lateral_ft,
+            Forecast.eur,
+            Forecast.model_type,
+            Forecast.params,
+        )
+        .outerjoin(
+            Forecast,
+            (Forecast.api14 == Well.api14) & (Forecast.stream == Stream.OIL),
+        )
+        .where(Well.api14.in_(api14s))
+    ).all()
+    out: list[TypeCurveWellStat] = []
+    for r in rows:
+        lat = float(r.lateral_ft) if r.lateral_ft is not None else None
+        # Recompute via monthly-trapezoid sum so the probit's per-well
+        # values match what the Review tab + EUR-table cells display.
+        eur: float | None = None
+        if r.params:
+            required = ("qi", "Di", "b", "Df")
+            if all(
+                k in r.params
+                and isinstance(r.params[k], (int, float))
+                and math.isfinite(float(r.params[k]))
+                for k in required
+            ):
+                try:
+                    fit = evaluate_fit(
+                        qi=float(r.params["qi"]),
+                        Di=float(r.params["Di"]),
+                        b=float(r.params["b"]),
+                        Df=float(r.params["Df"]),
+                        # Per-well forecasts start at peak — no ramp prefix.
+                        qo=float(r.params["qi"]),
+                        peak_index=0,
+                        n_months=N_MONTHS,
+                    )
+                    eur = sum(
+                        rate * DAYS_PER_MONTH for rate in fit["smoothed_rate"]
+                    )
+                except Exception:
+                    eur = None
+        if eur is None and r.eur is not None:
+            # Fallback: older forecasts without a populated params dict.
+            eur = float(r.eur)
+        per_ft = eur / lat if (eur is not None and lat and lat > 0) else None
+        out.append(
+            TypeCurveWellStat(
+                api14=r.api14,
+                name=r.name,
+                lateral_ft=lat,
+                oil_eur=eur,
+                oil_eur_per_ft=per_ft,
+            )
+        )
+    return out
 
 
 @router.get("/{type_curve_id}/export")

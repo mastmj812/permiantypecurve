@@ -36,6 +36,18 @@ interface Props {
   // series prop. Length should match series.p50; xMaxMonths slicing is
   // applied here too.
   smoothedOverride?: number[] | null;
+  // Per-well rate histories rendered as thin gray polylines behind the
+  // bands. Drives the slide-export "rep wells" overlay — one faint line
+  // per included well, peak-aligned, lateral-normalized by the caller.
+  // Index 0 of each `rate` array maps to month 0 on the x-axis; nulls
+  // break the polyline. Contributes to y-axis range so an outlier well
+  // doesn't escape the plot area.
+  wellHistories?: Array<{ api14: string; rate: Array<number | null> }> | null;
+  // When set on a log Y axis, clamp the visible y-min to this value
+  // (e.g. yMinFloor=1.0 stops the slide rate chart from extending the
+  // axis down into single-digit decimals where a few late-life tails
+  // would otherwise compress the readable portion of the curve).
+  yMinFloor?: number;
 }
 
 const PAD = { top: 26, right: 18, bottom: 48, left: 60 };
@@ -54,6 +66,8 @@ export function TypeCurveChart({
   xMaxMonths,
   xTickStep,
   smoothedOverride,
+  wellHistories,
+  yMinFloor,
 }: Props) {
   // Slice every series to the first xMaxMonths if provided. This is the
   // mechanism the early-time inspection chart uses to zoom into the
@@ -75,10 +89,29 @@ export function TypeCurveChart({
       displayCompare ? mergeSeriesForAxes(displaySeries, displayCompare) : displaySeries,
     [displaySeries, displayCompare],
   );
+  // Slice per-well histories to the same x-domain. Pulled into its own
+  // memo so we don't recompute on every prop change.
+  const displayWells = useMemo(() => {
+    if (!wellHistories || wellHistories.length === 0) return null;
+    const lim = xMaxMonths != null ? Math.max(1, xMaxMonths) : null;
+    return wellHistories.map((w) => ({
+      api14: w.api14,
+      rate: lim != null ? w.rate.slice(0, lim) : w.rate,
+    }));
+  }, [wellHistories, xMaxMonths]);
   const { mainArea, ribbonArea, xScale, yScale, yTicks, xTicks, countScale } =
     useMemo(
-      () => computeAxes(seriesForAxes, yAxisType, width, height, xTickStep),
-      [seriesForAxes, yAxisType, width, height, xTickStep],
+      () =>
+        computeAxes(
+          seriesForAxes,
+          yAxisType,
+          width,
+          height,
+          xTickStep,
+          displayWells,
+          yMinFloor,
+        ),
+      [seriesForAxes, yAxisType, width, height, xTickStep, displayWells, yMinFloor],
     );
 
   const bandOuter = bandPath(displaySeries.p10, displaySeries.p90, xScale, yScale, yAxisType);
@@ -158,6 +191,26 @@ export function TypeCurveChart({
           </text>
         </g>
       ))}
+
+      {/* Per-well histories — thin gray polylines, sit behind the
+          bands so the aggregates and fit dominate the visual hierarchy.
+          Opacity is per-line so a 20-well cohort doesn't crowd the
+          foreground. */}
+      {displayWells &&
+        displayWells.map((w) => {
+          const d = linePath(w.rate, xScale, yScale, yAxisType);
+          if (!d) return null;
+          return (
+            <path
+              key={`hist-${w.api14}`}
+              d={d}
+              fill="none"
+              stroke="#4b5563"
+              strokeWidth={0.9}
+              strokeOpacity={0.65}
+            />
+          );
+        })}
 
       {/* Band outer P10-P90 */}
       {bandOuter && (
@@ -310,6 +363,8 @@ function computeAxes(
   width: number,
   height: number,
   xTickStep?: number,
+  wellHistories?: Array<{ api14: string; rate: Array<number | null> }> | null,
+  yMinFloor?: number,
 ) {
   const mainH = height - PAD.top - PAD.bottom - RIBBON_H - 6;
   const mainArea = { x: PAD.left, y: PAD.top, w: width - PAD.left - PAD.right, h: mainH };
@@ -319,16 +374,27 @@ function computeAxes(
     w: width - PAD.left - PAD.right,
     h: RIBBON_H,
   };
-  const months = series.p50.length;
+  // x-domain reaches as far as the longest input — series or any well
+  // history. Keeps a 36-month-history well visible on a 24-month chart.
+  let months = series.p50.length;
+  if (wellHistories) {
+    for (const w of wellHistories) months = Math.max(months, w.rate.length);
+  }
 
   const xMax = Math.max(months - 1, 1);
   const xScale = (i: number) =>
     mainArea.x + (i / xMax) * mainArea.w;
 
-  // y range: pull from any percentile that's defined
+  // y range: pull from any percentile that's defined, plus every
+  // per-well rate value so an outlier well doesn't escape the plot area.
   const flat: number[] = [];
   for (const arr of [series.p10, series.p25, series.p50, series.p75, series.p90, series.mean]) {
     for (const v of arr) if (v != null && Number.isFinite(v)) flat.push(v);
+  }
+  if (wellHistories) {
+    for (const w of wellHistories) {
+      for (const v of w.rate) if (v != null && Number.isFinite(v)) flat.push(v);
+    }
   }
   const xTicks =
     xTickStep != null && xTickStep > 0
@@ -344,7 +410,18 @@ function computeAxes(
       countScale: () => ribbonArea.y + ribbonArea.h,
     };
   }
-  const yMin = axis === "log" ? Math.max(1e-3, Math.min(...flat)) : 0;
+  // yMinFloor pins the y-axis bottom (log only) at a fixed value
+  // regardless of the data min — the slide rate chart sets this to
+  // 1.0 so the visible band stays at "type-curve magnitudes" rather
+  // than zooming in on a couple of single-digit late-life tails.
+  // Without the floor we fall back to data-driven min, clamped at
+  // 1e-3 so a stray zero doesn't blow up Math.log10.
+  const yMin =
+    axis === "log"
+      ? yMinFloor != null && yMinFloor > 0
+        ? yMinFloor
+        : Math.max(1e-3, Math.min(...flat))
+      : 0;
   const yMax = Math.max(...flat);
   const yScale = (y: number) => {
     if (axis === "log") {

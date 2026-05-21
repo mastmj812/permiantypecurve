@@ -58,7 +58,17 @@ body {
   border-color: #4b5563;
 }
 
-.map-stage { position: relative; min-width: 0; }
+.map-stage {
+  position: relative;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.map-stage-canvas {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
 
 /* ---- forecast page ---- */
 .forecast-page {
@@ -905,3 +915,451 @@ input[type="date"], input[type="number"], input[type="search"] {
   border-radius: 2px;
   border: 1px solid #d1d5db;
 }
+
+/* ---------- cohort bar ---------- */
+.cohort-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 12px;
+  border-bottom: 1px solid #1e293b;
+  flex-wrap: wrap;
+}
+.cohort-bar-title {
+  font-weight: 600;
+  color: #f8fafc;
+}
+.cohort-bar-meta {
+  color: #94a3b8;
+}
+.cohort-bar-button {
+  background: #1e293b;
+  color: #e2e8f0;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.cohort-bar-button:hover:not(:disabled) {
+  background: #334155;
+}
+.cohort-bar-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cohort-bar-button.is-primary {
+  background: #0ea5e9;
+  border-color: #0ea5e9;
+  color: #0f172a;
+  font-weight: 600;
+}
+.cohort-bar-spacer { flex: 1; }
+
+.cohort-bar-empty {
+  background: #1e293b;
+  color: #94a3b8;
+}
+.cohort-bar .tb-btn {
+  color: #fff;
+  font-weight: 600;
+}
+.cohort-bar-empty .tb-btn {
+  font-weight: 700;
+}
+.cohort-bar-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.cohort-bar-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+  align-items: center;
+  flex-wrap: wrap;
+  /* Anchor the overflow popover (.cohort-overflow-menu) which is
+     position: absolute and renders as a sibling of the ⋯ button. */
+  position: relative;
+}
+/* Switcher + overflow popovers — both anchor below their .tb-btn. */
+.cohort-switcher-menu,
+.cohort-overflow-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  background: #fff;
+  color: #0f172a;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.18);
+  min-width: 220px;
+  padding: 4px 0;
+  z-index: 30;
+}
+.cohort-switcher-empty {
+  padding: 8px 12px;
+  color: #94a3b8;
+  font-size: 12px;
+}
+.cohort-switcher-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  background: transparent;
+  border: none;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: #0f172a;
+  cursor: pointer;
+}
+.cohort-switcher-item:hover { background: #f1f5f9; }
+.cohort-switcher-item.active {
+  background: #e0f2fe;
+  font-weight: 600;
+}
+.cohort-switcher-name {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cohort-switcher-divider {
+  height: 1px;
+  background: #e5e7eb;
+  margin: 4px 0;
+}
+.cohort-switcher-danger { color: #b91c1c; }
+.cohort-overflow-deal {
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+}
+.cohort-overflow-deal select {
+  width: 100%;
+}
+.cohort-new-modal {
+  max-width: 420px;
+}
+
+/* ---------- inspect modal ---------- */
+.inspect-modal {
+  width: calc(100% - 48px);
+  max-width: 1180px;
+  display: flex;
+  flex-direction: column;
+}
+.inspect-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.inspect-modal-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #0f172a;
+}
+.inspect-modal-subtitle {
+  font-weight: 400;
+  color: #6b7280;
+  margin-left: 8px;
+  font-size: 12px;
+}
+.inspect-modal-close {
+  background: transparent;
+  border: none;
+  font-size: 16px;
+  cursor: pointer;
+  color: #64748b;
+  line-height: 1;
+}
+.inspect-modal-body {
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+}
+.inspect-modal-section {
+  display: flex;
+  justify-content: center;
+}
+.inspect-modal-loading,
+.inspect-modal-error {
+  padding: 24px;
+  text-align: center;
+  color: #6b7280;
+  font-size: 13px;
+}
+.inspect-modal-error { color: #b91c1c; }
+.inspect-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+.inspect-modal-count {
+  font-size: 12px;
+  color: #475569;
+}
+.inspect-modal-actions {
+  display: flex;
+  gap: 8px;
+}
+/* Local btn variants — the global .btn-primary forces full-width
+   for the filter panel context, which doesn't fit here. Scoped to
+   the modal footer so neither side affects the other. */
+.inspect-modal-actions .btn {
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.inspect-modal-actions .btn-secondary {
+  background: #fff;
+  color: #1f2937;
+  border-color: #d1d5db;
+}
+.inspect-modal-actions .btn-primary {
+  background: #1f2937;
+  color: #fff;
+  margin-top: 0;
+  width: auto;
+}
+.inspect-modal-actions .btn-primary:disabled {
+  background: #9ca3af;
+  cursor: not-allowed;
+}
+
+/* ---------- gun-barrel ---------- */
+.gun-barrel-svg {
+  display: block;
+  background: #fafafa;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+.gun-barrel-well-circle {
+  transition: opacity 80ms linear;
+}
+
+/* ---------- inspect production overlay ---------- */
+.inspect-charts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.inspect-charts-controls {
+  display: flex;
+  gap: 16px;
+  font-size: 11px;
+  color: #475569;
+  align-items: center;
+}
+.inspect-charts-control-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.inspect-charts-control-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #94a3b8;
+  margin-right: 4px;
+}
+.inspect-charts-pill {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.inspect-charts-pill.is-active {
+  background: #0f172a;
+  color: #fff;
+  border-color: #0f172a;
+}
+.inspect-charts-row {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+}
+.inspect-overlay-svg {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+.inspect-charts-empty {
+  padding: 14px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 12px;
+  font-style: italic;
+}
+
+/* ------------------------ slide export ------------------------ */
+/* Single-page printable type-curve summary. Routed from
+   #/type-curves/<id>/slide and rendered without the app shell. */
+
+.slide-page {
+  width: 100%;
+  min-height: 100vh;
+  padding: 18px 24px 24px 24px;
+  box-sizing: border-box;
+  background: #ffffff;
+  color: #111827;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+}
+
+.slide-loading, .slide-error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  height: 80vh;
+  color: #6b7280;
+}
+.slide-error h2 { color: #dc2626; }
+
+.slide-title {
+  margin: 0 0 10px 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.slide-title-stream {
+  font-weight: 500;
+  color: #6b7280;
+  margin-left: 6px;
+}
+
+/* Parameter comparison table — header blue, two rows of stats. */
+.slide-param-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 12px;
+  font-size: 11px;
+  table-layout: fixed;
+}
+.slide-param-table thead th {
+  background: #3b82f6;
+  color: #ffffff;
+  font-weight: 600;
+  padding: 4px 4px;
+  border: 1px solid #2563eb;
+  text-align: center;
+  white-space: nowrap;
+  font-size: 10px;
+}
+.slide-param-table tbody td {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  padding: 4px 6px;
+  color: #1f2937;
+}
+.slide-param-table .slide-param-name {
+  text-align: left;
+  font-weight: 600;
+}
+.slide-param-table .slide-param-num {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Two-column slide grid. Left column stacks Rate over Cum across two
+   rows; the Map (`.slide-panel-map`) spans both rows on the right
+   side. Probit was removed; if it comes back, drop the row-span and
+   add it as the 4th grid cell. */
+.slide-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 12px;
+}
+.slide-panel-map {
+  grid-row: 1 / span 2;
+  grid-column: 2;
+}
+.slide-panel {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Stop panels from expanding when their child SVG is intrinsically
+     larger than the column — the SVGs scale to fit. */
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Map cell: position relative so the snapshot <img> overlays cleanly
+   on the live canvas underneath. */
+.slide-map {
+  position: relative;
+}
+.slide-map-canvas {
+  position: relative;
+}
+.slide-map-img {
+  pointer-events: none;
+}
+
+/* Probit "no data" fallback panel — same border treatment as the
+   chart so the slot doesn't visually collapse when wells are missing
+   EUR/ft. */
+.slide-probit-empty {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+}
+
+/* Print: letter landscape, no chrome, edge-to-edge within margins. */
+@media print {
+  @page {
+    size: letter landscape;
+    margin: 0.35in;
+  }
+  body {
+    background: #ffffff !important;
+  }
+  /* Hide the normal app shell in case the user prints from a
+     non-slide tab (defensive; the slide bypasses .app-shell). */
+  .app-header, .app-nav, .app-user { display: none !important; }
+  .slide-page {
+    padding: 0;
+    min-height: auto;
+  }
+  .slide-panel {
+    break-inside: avoid;
+    border-color: #d1d5db;
+  }
+  /* Force-print background colors on the table — without this most
+     browsers strip the blue header for ink-saving. */
+  .slide-param-table thead th,
+  .slide-param-table tbody td {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+}
+

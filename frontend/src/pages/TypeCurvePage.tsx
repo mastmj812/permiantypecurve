@@ -29,6 +29,7 @@ import {
 } from "../api/deals";
 import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
+import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 import { effectiveDecline, nominalDecline } from "../api/forecasts";
 import { useMapStore } from "../store/mapStore";
 
@@ -52,6 +53,12 @@ const PERCENTILES: Array<{ key: string; label: string }> = [
 export function TypeCurvePage() {
   const forecastApi14s = useMapStore((s) => s.forecastApi14s);
   const excluded = useMapStore((s) => s.excludedApi14s);
+  // Cohort-handoff prefill: when the user reached this page via the
+  // cohort bar's Forecast button, these are populated. The save form
+  // pre-fills its name input, and onSave auto-assigns the saved curve
+  // to the cohort's deal so the engineer doesn't have to retype.
+  const activeCohortName = useMapStore((s) => s.activeCohortName);
+  const activeCohortDealId = useMapStore((s) => s.activeCohortDealId);
 
   const included = useMemo(
     () => forecastApi14s.filter((a) => !excluded.has(a)),
@@ -129,6 +136,15 @@ export function TypeCurvePage() {
     void refreshDeals();
   }, [refreshLibrary, refreshDeals]);
 
+  // Cohort-handoff prefill. Fires whenever saveName goes empty (initial
+  // mount, after a successful save) and there's an active cohort name —
+  // gives v2/v3/... of the same cohort the same pre-fill behavior as v1.
+  useEffect(() => {
+    if (activeCohortName && !saveName && forecastApi14s.length > 0) {
+      setSaveName(activeCohortName);
+    }
+  }, [activeCohortName, saveName, forecastApi14s.length]);
+
   // Lazily load the comparison curve when the user picks one.
   useEffect(() => {
     if (!compareWithId) {
@@ -198,12 +214,19 @@ export function TypeCurvePage() {
         version_of: versionOf,
         fit_overrides: collectOverrides(),
       });
+      // Auto-assign to the handoff deal if the cohort had one preset.
+      // Verifies the deal still exists in case the user deleted it
+      // between cohort creation and save.
+      let final = saved;
+      if (activeCohortDealId && deals.some((d) => d.id === activeCohortDealId)) {
+        final = await patchTypeCurve(saved.id, { deal_id: activeCohortDealId });
+      }
       setSaveName("");
       setSaveNotes("");
       setVersionOf(null);
       await refreshLibrary();
-      setSelectedSaved(saved);
-      setAgg(saved.series);
+      setSelectedSaved(final);
+      setAgg(final.series);
       clearTweakState();
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : String(e));
@@ -638,6 +661,39 @@ export function TypeCurvePage() {
                 />
               )}
             </section>
+
+            {/* Per-well EUR/ft probit. Sits below the Preview/Tweak panel
+                so it doesn't disrupt the multi-chart row layout above.
+                Uses the same "active fit" (preview override → fitted →
+                null) and the same Compare With curve as the rate/cum
+                charts, so the vertical reference lines agree visually
+                across the page. */}
+            <section className="filter-section">
+              <h3>
+                Probit — {stream.charAt(0).toUpperCase() + stream.slice(1)} EUR / ft
+                <span
+                  className="muted"
+                  style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}
+                  title="Lognormal probit of per-well 50-yr EUR / lateral_ft for the wells in scope. The vertical Type Curve line is the displayed fit's EUR / ft."
+                >
+                  per-well distribution vs. type curve
+                </span>
+              </h3>
+              <TypeCurveProbit
+                api14s={included}
+                tcEurPerUnit={
+                  previewEur[stream] ??
+                  currentStream.fitted?.eur_per_unit ??
+                  null
+                }
+                prevEurPerUnit={
+                  compareWith?.series?.streams?.[stream]?.fitted?.eur_per_unit ??
+                  null
+                }
+                prevLabel={compareWith?.name ?? null}
+                stream={stream}
+              />
+            </section>
           </>
         ) : (
           <div className="muted" style={{ padding: 24 }}>
@@ -825,6 +881,23 @@ export function TypeCurvePage() {
                 }
               >
                 export CSV
+              </button>
+              <button
+                type="button"
+                className="tb-btn"
+                onClick={() => {
+                  const qs = compareWithId
+                    ? `?compareWith=${encodeURIComponent(compareWithId)}`
+                    : "";
+                  // Open in a new tab so the user's working state on
+                  // this page survives the export. The slide route
+                  // lives at the hash so it works without a router.
+                  const url = `${window.location.origin}${window.location.pathname}#/type-curves/${encodeURIComponent(selectedSaved.id)}/slide${qs}`;
+                  window.open(url, "_blank", "noopener");
+                }}
+                title="Open a print-ready slide of this type curve in a new tab"
+              >
+                export slide
               </button>
               <button
                 type="button"
