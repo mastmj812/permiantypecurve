@@ -8,7 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { type WellCurvesResponse, fetchWellCurves } from "../api/forecasts";
+import { type Stream, type WellCurvesResponse, fetchWellCurves } from "../api/forecasts";
 import {
   type TypeCurveRow,
   type TypeCurveWellStat,
@@ -20,15 +20,13 @@ import { type WellDetailLite, fetchWellDetails } from "../api/wells";
 import { SlideCumChart } from "../components/slide/SlideCumChart";
 import { SlideMap } from "../components/slide/SlideMap";
 import { SlideParamTable } from "../components/slide/SlideParamTable";
-// SlideProbit is intentionally not imported — the probit panel was
-// pulled on 2026-05-20 pending a design decision on whether the
-// published P50 TC should match rate-aggregation or per-well-median
-// EUR. The component file is kept so we can re-enable it later.
 import { SlideRateChart } from "../components/slide/SlideRateChart";
+import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 
 interface Props {
   typeCurveId: string;
   compareWithId: string | null;
+  includeProbit?: boolean;
 }
 
 interface SlideData {
@@ -39,7 +37,11 @@ interface SlideData {
   wellCurves: WellCurvesResponse[];
 }
 
-export function TypeCurveSlidePage({ typeCurveId, compareWithId }: Props) {
+export function TypeCurveSlidePage({
+  typeCurveId,
+  compareWithId,
+  includeProbit = false,
+}: Props) {
   const [data, setData] = useState<SlideData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -138,40 +140,107 @@ export function TypeCurveSlidePage({ typeCurveId, compareWithId }: Props) {
     );
   }
 
+  const STREAMS: Stream[] = ["oil", "gas", "water"];
+  const api14s = data.curve.included_api14s ?? [];
+  // Map dimensions match the placement in PowerPoint so the captured
+  // PNG aspect matches the picture box and PowerPoint doesn't have
+  // to stretch / letterbox.
+  //   probit off → 6.93" × 4.34" (~665 × 418 px)
+  //   probit on  → 5.42" × 2.16" (~520 × 207 px)
+  const mapWidth = includeProbit ? 520 : 665;
+  const mapHeight = includeProbit ? 207 : 418;
+
+  // Reusable per-stream panel block. Used for the visible oil section
+  // and for the off-screen gas/water sections; only the layout changes.
+  const renderStreamPanels = (stream: Stream, withMap: boolean) => (
+    <>
+      <div className="slide-panel" data-slide-panel-rate data-stream={stream}>
+        <SlideRateChart
+          current={data.curve}
+          previous={data.previous}
+          wellCurves={data.wellCurves}
+          lateralByApi14={lateralByApi14}
+          stream={stream}
+        />
+      </div>
+      {withMap && (
+        <div className="slide-panel slide-panel-map" data-slide-panel-map>
+          <SlideMap
+            api14s={api14s}
+            wellDetails={data.wellDetails}
+            width={mapWidth}
+            height={mapHeight}
+          />
+        </div>
+      )}
+      <div className="slide-panel" data-slide-panel-cum data-stream={stream}>
+        <SlideCumChart
+          current={data.curve}
+          previous={data.previous}
+          wellCurves={data.wellCurves}
+          lateralByApi14={lateralByApi14}
+          stream={stream}
+        />
+      </div>
+      {includeProbit && (
+        <div className="slide-panel" data-slide-panel-probit data-stream={stream}>
+          <TypeCurveProbit
+            api14s={api14s}
+            tcEurPerUnit={
+              (data.curve.series as { streams?: Record<string, { fitted?: { eur_per_unit?: number } | null }> }).streams?.[stream]?.fitted?.eur_per_unit ?? null
+            }
+            prevEurPerUnit={
+              data.previous
+                ? (data.previous.series as { streams?: Record<string, { fitted?: { eur_per_unit?: number } | null }> }).streams?.[stream]?.fitted?.eur_per_unit ?? null
+                : null
+            }
+            prevLabel={data.previous?.name ?? null}
+            stream={stream}
+            width={520}
+            height={207}
+          />
+        </div>
+      )}
+    </>
+  );
+
   return (
     <div className="slide-page">
+      {/* Visible (oil) section. The PPTX export captures rate/cum
+          (+ optional probit) from this section AND from the off-
+          screen gas/water sections below. The map is captured once
+          from here and the backend uses it for all 3 stream slides. */}
       <h1 className="slide-title">
         {data.curve.name} <span className="slide-title-stream">Oil</span>
       </h1>
       <SlideParamTable current={data.curve} previous={data.previous} />
-      {/* Layout: left column stacks Rate over Cum (240px each); right
-          column is the Map spanning both rows (~492px tall to cover
-          two 240-tall cells + the 12px grid gap). The probit panel
-          was pulled — see import note above. */}
-      <div className="slide-grid">
-        <div className="slide-panel">
-          <SlideRateChart
-            current={data.curve}
-            previous={data.previous}
-            wellCurves={data.wellCurves}
-            lateralByApi14={lateralByApi14}
-          />
-        </div>
-        <div className="slide-panel slide-panel-map">
-          <SlideMap
-            api14s={data.curve.included_api14s ?? []}
-            wellDetails={data.wellDetails}
-            height={492}
-          />
-        </div>
-        <div className="slide-panel">
-          <SlideCumChart
-            current={data.curve}
-            previous={data.previous}
-            wellCurves={data.wellCurves}
-            lateralByApi14={lateralByApi14}
-          />
-        </div>
+      <div
+        className={`slide-grid${includeProbit ? " slide-grid-with-probit" : ""}`}
+        data-slide-section="oil"
+      >
+        {renderStreamPanels("oil", true)}
+      </div>
+
+      {/* Off-screen gas + water variants. Rendered in the DOM so the
+          capture util can snapshot their SVGs, but positioned far
+          off-canvas so they don't visually clutter the iframe. Map
+          isn't re-rendered here — the oil section's map is reused
+          across all three PPT stream slides. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          left: -99999,
+          top: 0,
+          width: "max-content",
+          pointerEvents: "none",
+        }}
+      >
+        {STREAMS.filter((s) => s !== "oil").map((stream) => (
+          <div key={stream} data-slide-section={stream}>
+            {renderStreamPanels(stream, false)}
+          </div>
+        ))}
       </div>
     </div>
   );

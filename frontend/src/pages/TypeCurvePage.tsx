@@ -2,7 +2,7 @@
 // new curve, save / version / delete saved curves, export to CSV.
 
 import type { CSSProperties } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type AggregatePayload,
@@ -14,12 +14,14 @@ import {
   computeTypeCurve,
   deleteTypeCurve,
   downloadTypeCurveExport,
+  exportTypeCurvePptx,
   fetchTypeCurve,
   listTypeCurves,
   patchTypeCurve,
   previewTypeCurveFit,
   saveTypeCurve,
 } from "../api/typeCurves";
+import { captureSlidePanels } from "../components/slide/captureSlideComposite";
 import {
   type DealSummary,
   createDeal,
@@ -130,6 +132,44 @@ export function TypeCurvePage() {
   const refreshDeals = useCallback(async () => {
     setDeals(await listDeals());
   }, []);
+
+  // PPTX export state — drives the sticky preview dock at the page
+  // bottom. The iframe ref lets us reach into the slide's document
+  // to snapshot the chart grid when the user clicks Export.
+  const previewIframeRef = useRef<HTMLIFrameElement | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  // Optional probit panel on each stream slide of the PPTX export.
+  // Wired into the slide preview iframe URL as `?probit=1`; the iframe
+  // re-renders with the with-probit 2×2 layout (map shrunk, probit
+  // bottom-right) so what the user sees in the dock matches what
+  // they'll get on the slide.
+  const [includeProbit, setIncludeProbit] = useState(false);
+
+  const onExportPptx = useCallback(async () => {
+    if (!selectedSaved) return;
+    const iframe = previewIframeRef.current;
+    const doc = iframe?.contentDocument;
+    if (!iframe || !doc) {
+      setExportError("Preview still loading — try again in a moment.");
+      return;
+    }
+    setExporting(true);
+    setExportError(null);
+    try {
+      const panels = await captureSlidePanels(doc);
+      await exportTypeCurvePptx({
+        id: selectedSaved.id,
+        compareWithId,
+        panels,  // { oil:{rate,cum}, gas:{rate,cum}, water:{rate,cum}, map }
+        filename: `${selectedSaved.name.replace(/[^a-z0-9]+/gi, "_")}.pptx`,
+      });
+    } catch (e) {
+      setExportError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }, [selectedSaved, compareWithId]);
 
   useEffect(() => {
     void refreshLibrary();
@@ -669,18 +709,50 @@ export function TypeCurvePage() {
                 charts, so the vertical reference lines agree visually
                 across the page. */}
             <section className="filter-section">
-              <h3>
-                Probit — {stream.charAt(0).toUpperCase() + stream.slice(1)} EUR / ft
-                <span
-                  className="muted"
-                  style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}
-                  title="Lognormal probit of per-well 50-yr EUR / lateral_ft for the wells in scope. The vertical Type Curve line is the displayed fit's EUR / ft."
-                >
-                  per-well distribution vs. type curve
+              <h3
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                  flexWrap: "wrap",
+                }}
+              >
+                <span>
+                  Probit — {stream.charAt(0).toUpperCase() + stream.slice(1)} EUR / ft
+                  <span
+                    className="muted"
+                    style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}
+                    title="Lognormal probit of per-well 50-yr EUR / lateral_ft for the wells in scope. The vertical Type Curve line is the displayed fit's EUR / ft."
+                  >
+                    per-well distribution vs. type curve
+                  </span>
                 </span>
+                <label
+                  className="chk-inline"
+                  style={{ fontSize: 12, fontWeight: 400 }}
+                  title="When checked, the probit chart appears bottom-right on each stream slide of the PowerPoint export (oil/gas/water). The map shrinks to fit."
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeProbit}
+                    onChange={(e) => setIncludeProbit(e.target.checked)}
+                  />{" "}
+                  include in PowerPoint export
+                </label>
               </h3>
               <TypeCurveProbit
-                api14s={included}
+                // When a saved curve is selected, the probit should
+                // plot THAT curve's frozen cohort — not the live
+                // forecast scope from mapStore (`included`), which
+                // still reflects whatever the user last lassoed on
+                // the map. Falls back to `included` in live-preview
+                // mode (no saved curve selected).
+                api14s={
+                  selectedSaved
+                    ? selectedSaved.included_api14s ?? []
+                    : included
+                }
                 tcEurPerUnit={
                   previewEur[stream] ??
                   currentStream.fitted?.eur_per_unit ??
@@ -702,6 +774,61 @@ export function TypeCurvePage() {
               : computing
                 ? "Computing…"
                 : "No type curve to show."}
+          </div>
+        )}
+
+        {/* Sticky slide-preview dock at the bottom of the main column.
+            Embeds the existing /type-curves/<id>/slide route via an
+            iframe so the chart grid we'll snapshot for the .pptx is
+            always visible while iterating. Only renders when a saved
+            curve is selected — there's no preview to show in live-
+            preview / unsaved state. */}
+        {selectedSaved && (
+          <div className="tc-slide-preview-dock">
+            <header className="tc-slide-preview-header">
+              <div>
+                <strong>Slide preview</strong>
+                <span className="muted" style={{ marginLeft: 8 }}>
+                  {selectedSaved.name}
+                  {compareWith ? ` vs ${compareWith.name}` : ""}
+                </span>
+              </div>
+              <div className="tc-slide-preview-actions">
+                {exportError && (
+                  <span className="alert alert-error" style={{ marginRight: 8 }}>
+                    {exportError}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={onExportPptx}
+                  disabled={exporting}
+                >
+                  {exporting ? "building…" : "Export PowerPoint"}
+                </button>
+              </div>
+            </header>
+            <iframe
+              // The probit toggle changes the map's required render
+              // dimensions (520×207 with probit, 665×418 without).
+              // Hash-only URL changes don't reload an iframe, so
+              // without a key here MapLibre keeps its initial canvas
+              // size and the captured PNG gets stretched in PPT.
+              // Keying on includeProbit forces a remount → fresh
+              // MapLibre init at the right size.
+              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}`}
+              ref={previewIframeRef}
+              src={(() => {
+                const qs = new URLSearchParams();
+                if (compareWithId) qs.set("compareWith", compareWithId);
+                if (includeProbit) qs.set("probit", "1");
+                const str = qs.toString();
+                return `#/type-curves/${encodeURIComponent(selectedSaved.id)}/slide${str ? `?${str}` : ""}`;
+              })()}
+              title="slide preview"
+              className="tc-slide-preview-iframe"
+            />
           </div>
         )}
       </div>

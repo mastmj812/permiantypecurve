@@ -181,9 +181,24 @@ export function TypeCurveProbit({
   const sorted = [...wellEurPerFt].sort((a, b) => a - b);
   const n = sorted.length;
   const wellMean = sorted.reduce((s, v) => s + v, 0) / n;
+  // Cohort median EUR/ft — the operator-convention P50 reserves
+  // target. The TC vertical SHOULD land near this on a well-fit
+  // curve; if it sits far to the right, the TC is biased high
+  // (typically because the fitter chased the rate-mean line on
+  // the data-window charts).
+  const wellMedian =
+    n % 2 === 1
+      ? sorted[Math.floor(n / 2)]!
+      : (sorted[n / 2 - 1]! + sorted[n / 2]!) / 2;
 
-  const xMin = Math.min(...sorted, tcVal ?? Infinity, prevVal ?? Infinity, wellMean);
-  const xMax = Math.max(...sorted, tcVal ?? -Infinity, prevVal ?? -Infinity, wellMean);
+  const xMin = Math.min(
+    ...sorted,
+    tcVal ?? Infinity, prevVal ?? Infinity, wellMean, wellMedian,
+  );
+  const xMax = Math.max(
+    ...sorted,
+    tcVal ?? -Infinity, prevVal ?? -Infinity, wellMean, wellMedian,
+  );
   const logMin = Math.log10(xMin) - 0.04;
   const logMax = Math.log10(xMax) + 0.04;
   const yMin = probit(0.005);
@@ -303,13 +318,27 @@ export function TypeCurveProbit({
         />
       )}
 
+      {/* Cohort MEDIAN per-well EUR — the operator-convention P50
+          target the published TC should sit near. Solid thin orange
+          so it visually contrasts with the dashed mean below it. */}
+      <line
+        x1={xScale(wellMedian)}
+        x2={xScale(wellMedian)}
+        y1={PAD.top}
+        y2={PAD.top + plotH}
+        stroke="#ea580c"
+        strokeWidth={1.25}
+      />
+
+      {/* Cohort MEAN per-well EUR — context only; dashed so the
+          median above reads as the primary reference. */}
       <line
         x1={xScale(wellMean)}
         x2={xScale(wellMean)}
         y1={PAD.top}
         y2={PAD.top + plotH}
         stroke="#f59e0b"
-        strokeWidth={1.5}
+        strokeWidth={1.0}
         strokeDasharray="6 3"
       />
 
@@ -347,7 +376,7 @@ export function TypeCurveProbit({
       </text>
 
       <g transform={`translate(${PAD.left + 8}, ${PAD.top + 8})`}>
-        <rect width="128" height={prevVal != null ? 90 : 74} fill="#ffffff" stroke="#e5e7eb" />
+        <rect width="140" height={prevVal != null ? 106 : 90} fill="#ffffff" stroke="#e5e7eb" />
         <circle cx={10} cy={12} r={4} fill="#16a34a" />
         <text x={20} y={15} fontSize="10" fill="#374151">
           Wells (n={n})
@@ -361,29 +390,40 @@ export function TypeCurveProbit({
           y1={44}
           x2={16}
           y2={44}
-          stroke="#f59e0b"
-          strokeWidth={1.5}
-          strokeDasharray="3 2"
+          stroke="#ea580c"
+          strokeWidth={1.25}
         />
         <text x={20} y={47} fontSize="10" fill="#374151">
+          Wells Median ({wellMedian.toFixed(1)})
+        </text>
+        <line
+          x1={4}
+          y1={60}
+          x2={16}
+          y2={60}
+          stroke="#f59e0b"
+          strokeWidth={1.0}
+          strokeDasharray="3 2"
+        />
+        <text x={20} y={63} fontSize="10" fill="#374151">
           Wells Avg ({wellMean.toFixed(1)})
         </text>
-        <line x1={4} y1={60} x2={16} y2={60} stroke="#0f172a" strokeWidth={2} />
-        <text x={20} y={63} fontSize="10" fill="#374151">
+        <line x1={4} y1={76} x2={16} y2={76} stroke="#0f172a" strokeWidth={2} />
+        <text x={20} y={79} fontSize="10" fill="#374151">
           {tcVal != null ? `Type Curve (${tcVal.toFixed(1)})` : "Type Curve (—)"}
         </text>
         {prevVal != null && (
           <>
             <line
               x1={4}
-              y1={76}
+              y1={92}
               x2={16}
-              y2={76}
+              y2={92}
               stroke="#6b7280"
               strokeWidth={1.5}
               strokeDasharray="2 3"
             />
-            <text x={20} y={79} fontSize="10" fill="#374151">
+            <text x={20} y={95} fontSize="10" fill="#374151">
               {prevLabel ? `Prev: ${prevLabel}` : "Previous TC"}
             </text>
           </>

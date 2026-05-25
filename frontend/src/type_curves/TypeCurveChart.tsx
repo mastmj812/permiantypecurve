@@ -48,10 +48,22 @@ interface Props {
   // axis down into single-digit decimals where a few late-life tails
   // would otherwise compress the readable portion of the curve).
   yMinFloor?: number;
+  // Slide-export mode: tighter inner padding and the well-count
+  // ribbon is hidden, so the plot area maximizes within the 5.42" ×
+  // 2.16" picture box. In-app charts on TypeCurvePage leave this
+  // false and keep the ribbon + roomier margins.
+  compactLayout?: boolean;
 }
 
-const PAD = { top: 26, right: 18, bottom: 48, left: 60 };
-const RIBBON_H = 38; // well-count strip below the main panel
+const DEFAULT_PAD = { top: 26, right: 18, bottom: 48, left: 60 };
+// Slide-export padding. Left fits the rotated y-axis caption at x=14
+// + y-tick labels right-aligned at PAD.left-6=44 (max ~24px wide for
+// "1.0M" / "1.5k"). Right is just enough that the rightmost x-tick
+// label centered at xScale(35) doesn't clip the SVG edge.
+const COMPACT_PAD = { top: 8, right: 4, bottom: 32, left: 50 };
+const DEFAULT_RIBBON_H = 38; // well-count strip below the main panel
+const COMPACT_RIBBON_H = 0; // hidden in slide-export mode
+const DEFAULT_RIBBON_GAP = 6; // gap between plot and ribbon
 
 export function TypeCurveChart({
   series,
@@ -68,7 +80,11 @@ export function TypeCurveChart({
   smoothedOverride,
   wellHistories,
   yMinFloor,
+  compactLayout = false,
 }: Props) {
+  const PAD = compactLayout ? COMPACT_PAD : DEFAULT_PAD;
+  const RIBBON_H = compactLayout ? COMPACT_RIBBON_H : DEFAULT_RIBBON_H;
+  const RIBBON_GAP = RIBBON_H > 0 ? DEFAULT_RIBBON_GAP : 0;
   // Slice every series to the first xMaxMonths if provided. This is the
   // mechanism the early-time inspection chart uses to zoom into the
   // ramp + peak + early decline without forking the rendering logic.
@@ -110,8 +126,14 @@ export function TypeCurveChart({
           xTickStep,
           displayWells,
           yMinFloor,
+          PAD,
+          RIBBON_H,
+          RIBBON_GAP,
         ),
-      [seriesForAxes, yAxisType, width, height, xTickStep, displayWells, yMinFloor],
+      [
+        seriesForAxes, yAxisType, width, height, xTickStep, displayWells,
+        yMinFloor, PAD, RIBBON_H, RIBBON_GAP,
+      ],
     );
 
   const bandOuter = bandPath(displaySeries.p10, displaySeries.p90, xScale, yScale, yAxisType);
@@ -220,26 +242,30 @@ export function TypeCurveChart({
       {bandInner && (
         <path d={bandInner} fill="#60a5fa" fillOpacity={0.45} stroke="none" />
       )}
-      {/* Raw P50 — the cross-well median per month. Naturally jagged
-          when well_count tapers. Drawn thin so the fitted curve reads
-          as the headline visual. */}
+      {/* Raw P50 — the cross-well median per month. THIS is the
+          right visual fit target: for lognormal-distributed well
+          rates (typical Permian) the median is robust to high-flow
+          outliers and tracks the operator-convention P50 reserves.
+          Drawn solid + saturated so it draws the eye. */}
       {p50Path && (
         <path
           d={p50Path}
           fill="none"
-          stroke="#60a5fa"
-          strokeWidth={1.0}
-          strokeDasharray="2 2"
+          stroke="#1d4ed8"
+          strokeWidth={2.25}
         />
       )}
-      {/* Mean line */}
+      {/* Mean line — informational only. Right-skewed cohort rate
+          distributions pull the mean above the median, so fitting
+          visually to this line builds an optimistic TC. Rendered as
+          a quiet gray dashed to discourage that. */}
       {meanPath && (
         <path
           d={meanPath}
           fill="none"
-          stroke="#dc2626"
-          strokeWidth={1.25}
-          strokeDasharray="4 3"
+          stroke="#9ca3af"
+          strokeWidth={1.0}
+          strokeDasharray="2 4"
         />
       )}
       {/* Fitted Arps overlay — the actual type curve. Bold dark line so
@@ -277,43 +303,48 @@ export function TypeCurveChart({
         </g>
       )}
 
-      {/* Ribbon: well_count */}
-      <rect
-        x={ribbonArea.x}
-        y={ribbonArea.y}
-        width={ribbonArea.w}
-        height={ribbonArea.h}
-        fill="#f9fafb"
-        stroke="#e5e7eb"
-      />
-      {countPath && <path d={countPath} fill="none" stroke="#6b7280" strokeWidth={1} />}
-      <text
-        x={ribbonArea.x - 6}
-        y={ribbonArea.y + ribbonArea.h / 2}
-        textAnchor="end"
-        dominantBaseline="middle"
-        fontSize="9"
-        fill="#6b7280"
-      >
-        well count
-      </text>
-      {/* Min/max labels on the ribbon scale */}
-      <text
-        x={ribbonArea.x + ribbonArea.w + 2}
-        y={ribbonArea.y + 8}
-        fontSize="9"
-        fill="#6b7280"
-      >
-        {Math.max(...series.well_count)}
-      </text>
-      <text
-        x={ribbonArea.x + ribbonArea.w + 2}
-        y={ribbonArea.y + ribbonArea.h - 2}
-        fontSize="9"
-        fill="#6b7280"
-      >
-        0
-      </text>
+      {/* Ribbon: well_count. Hidden when compactLayout=true (slide-
+          export charts) so the plot maximizes its picture-box room. */}
+      {RIBBON_H > 0 && (
+        <>
+          <rect
+            x={ribbonArea.x}
+            y={ribbonArea.y}
+            width={ribbonArea.w}
+            height={ribbonArea.h}
+            fill="#f9fafb"
+            stroke="#e5e7eb"
+          />
+          {countPath && <path d={countPath} fill="none" stroke="#6b7280" strokeWidth={1} />}
+          <text
+            x={ribbonArea.x - 6}
+            y={ribbonArea.y + ribbonArea.h / 2}
+            textAnchor="end"
+            dominantBaseline="middle"
+            fontSize="9"
+            fill="#6b7280"
+          >
+            well count
+          </text>
+          {/* Min/max labels on the ribbon scale */}
+          <text
+            x={ribbonArea.x + ribbonArea.w + 2}
+            y={ribbonArea.y + 8}
+            fontSize="9"
+            fill="#6b7280"
+          >
+            {Math.max(...series.well_count)}
+          </text>
+          <text
+            x={ribbonArea.x + ribbonArea.w + 2}
+            y={ribbonArea.y + ribbonArea.h - 2}
+            fontSize="9"
+            fill="#6b7280"
+          >
+            0
+          </text>
+        </>
+      )}
 
       {/* Optional title above the plot */}
       {title && (
@@ -365,12 +396,15 @@ function computeAxes(
   xTickStep?: number,
   wellHistories?: Array<{ api14: string; rate: Array<number | null> }> | null,
   yMinFloor?: number,
+  PAD: { top: number; right: number; bottom: number; left: number } = DEFAULT_PAD,
+  RIBBON_H: number = DEFAULT_RIBBON_H,
+  RIBBON_GAP: number = DEFAULT_RIBBON_GAP,
 ) {
-  const mainH = height - PAD.top - PAD.bottom - RIBBON_H - 6;
+  const mainH = height - PAD.top - PAD.bottom - RIBBON_H - RIBBON_GAP;
   const mainArea = { x: PAD.left, y: PAD.top, w: width - PAD.left - PAD.right, h: mainH };
   const ribbonArea = {
     x: PAD.left,
-    y: PAD.top + mainH + 6,
+    y: PAD.top + mainH + RIBBON_GAP,
     w: width - PAD.left - PAD.right,
     h: RIBBON_H,
   };

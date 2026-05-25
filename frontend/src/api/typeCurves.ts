@@ -235,3 +235,59 @@ export async function downloadTypeCurveExport(
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// PPTX export — server-side build against the brand template.
+// Sends 7 PNGs: per-stream rate + cum (oil/gas/water) and a single
+// shared map. Backend assembles the 4-slide deck: Oil, Gas, Water,
+// Type Curve Wells. Each chart goes onto its slide as a separate
+// picture at fixed inch dimensions, so chart sizes don't depend on
+// a composite aspect surviving the template's picture-frame scale.
+export async function exportTypeCurvePptx(args: {
+  id: string;
+  compareWithId: string | null;
+  panels: {
+    oil: { rate: Blob; cum: Blob; probit?: Blob };
+    gas: { rate: Blob; cum: Blob; probit?: Blob };
+    water: { rate: Blob; cum: Blob; probit?: Blob };
+    map: Blob;
+  };
+  filename?: string;
+}): Promise<void> {
+  const fd = new FormData();
+  fd.append("rate_oil", args.panels.oil.rate, "rate_oil.png");
+  fd.append("cum_oil", args.panels.oil.cum, "cum_oil.png");
+  fd.append("rate_gas", args.panels.gas.rate, "rate_gas.png");
+  fd.append("cum_gas", args.panels.gas.cum, "cum_gas.png");
+  fd.append("rate_water", args.panels.water.rate, "rate_water.png");
+  fd.append("cum_water", args.panels.water.cum, "cum_water.png");
+  fd.append("map_image", args.panels.map, "map.png");
+  if (args.panels.oil.probit) {
+    fd.append("probit_oil", args.panels.oil.probit, "probit_oil.png");
+  }
+  if (args.panels.gas.probit) {
+    fd.append("probit_gas", args.panels.gas.probit, "probit_gas.png");
+  }
+  if (args.panels.water.probit) {
+    fd.append("probit_water", args.panels.water.probit, "probit_water.png");
+  }
+  const qs = args.compareWithId
+    ? `?compareWith=${encodeURIComponent(args.compareWithId)}`
+    : "";
+  const r = await apiFetch(`/api/type-curves/${args.id}/export.pptx${qs}`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!r.ok) {
+    const detail = await r.text().catch(() => "");
+    throw new Error(`pptx export failed: ${r.status} ${detail}`);
+  }
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = args.filename ?? "type_curve.pptx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

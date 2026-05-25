@@ -143,6 +143,10 @@ class ForecastRow(BaseModel):
     well_formation: str | None = None
     well_lateral_ft: float | None = None
     well_vintage_year: int | None = None
+    # ISO date string. The Review tab shows this directly; vintage_year
+    # is the legacy field kept for the map-tab vintage histogram which
+    # still needs an integer year for bucketing.
+    well_first_prod_date: date | None = None
     well_county: str | None = None
 
     @classmethod
@@ -281,6 +285,7 @@ def list_forecasts(
             Well.formation,
             Well.lateral_ft,
             Well.vintage_year,
+            Well.first_prod_date,
             Well.county,
         )
         .join(Well, Well.api14 == Forecast.api14)
@@ -289,7 +294,9 @@ def list_forecasts(
     if api14:
         stmt = stmt.where(Forecast.api14.in_(api14))
     out: list[ForecastRow] = []
-    for f, name, operator, formation, lateral_ft, vintage_year, county in session.execute(stmt).all():
+    for (
+        f, name, operator, formation, lateral_ft, vintage_year, first_prod_date, county,
+    ) in session.execute(stmt).all():
         row = ForecastRow.from_orm_row(f)
         # mutate in-place — model_copy(update=) would also work but allocates.
         row.well_name = name
@@ -297,6 +304,7 @@ def list_forecasts(
         row.well_formation = formation
         row.well_lateral_ft = float(lateral_ft) if lateral_ft is not None else None
         row.well_vintage_year = int(vintage_year) if vintage_year is not None else None
+        row.well_first_prod_date = first_prod_date
         row.well_county = county
         out.append(row)
     return out
@@ -324,6 +332,7 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         row.well_vintage_year = (
             int(well.vintage_year) if well.vintage_year is not None else None
         )
+        row.well_first_prod_date = well.first_prod_date
         row.well_county = well.county
     return row
 

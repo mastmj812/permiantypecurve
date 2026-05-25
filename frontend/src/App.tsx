@@ -21,17 +21,23 @@ import { useMapStore } from "./store/mapStore";
 // is the only route that exits the normal app shell, so detecting it
 // inline keeps the surface area small.
 //   #/type-curves/<id>/slide
-//   #/type-curves/<id>/slide?compareWith=<id>
-function parseSlideHash(): { typeCurveId: string; compareWithId: string | null } | null {
+//   #/type-curves/<id>/slide?compareWith=<id>&probit=1
+function parseSlideHash(): {
+  typeCurveId: string;
+  compareWithId: string | null;
+  includeProbit: boolean;
+} | null {
   const hash = window.location.hash || "";
   const m = hash.match(/^#\/type-curves\/([^/?]+)\/slide(?:\?(.+))?$/);
   if (!m) return null;
   let compareWithId: string | null = null;
+  let includeProbit = false;
   if (m[2]) {
     const params = new URLSearchParams(m[2]);
     compareWithId = params.get("compareWith");
+    includeProbit = params.get("probit") === "1";
   }
-  return { typeCurveId: m[1]!, compareWithId };
+  return { typeCurveId: m[1]!, compareWithId, includeProbit };
 }
 
 const TABS: Array<{ id: "map" | "forecast" | "review" | "type_curve"; label: string }> = [
@@ -99,6 +105,7 @@ export function App() {
       <TypeCurveSlidePage
         typeCurveId={slideRoute.typeCurveId}
         compareWithId={slideRoute.compareWithId}
+        includeProbit={slideRoute.includeProbit}
       />
     );
   }

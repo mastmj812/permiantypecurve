@@ -72,6 +72,10 @@ export interface ForecastRow {
   well_formation: string | null;
   well_lateral_ft: number | null;
   well_vintage_year: number | null;
+  // ISO date string from the wells table — drives the Review tab's
+  // First Prod Date column. Kept alongside vintage_year because the
+  // map tab still uses the integer year for histogram bucketing.
+  well_first_prod_date: string | null;
   well_county: string | null;
 }
 

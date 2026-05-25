@@ -21,16 +21,17 @@ export function TypeCurveLegend({ showCompare = false, compareName }: Props) {
         <div className="legend-item">
           <span
             className="line-sample"
-            style={{ borderTopColor: "#60a5fa", borderTopStyle: "dashed" }}
+            style={{ borderTopColor: "#1d4ed8", borderTopWidth: 2.25 }}
           />
-          P50 (raw monthly median)
+          <strong>P50 (raw monthly median)</strong>
+          <span className="muted"> &nbsp;visual fit target</span>
         </div>
         <div className="legend-item">
           <span
             className="line-sample"
-            style={{ borderTopColor: "#dc2626", borderTopStyle: "dashed" }}
+            style={{ borderTopColor: "#9ca3af", borderTopStyle: "dashed" }}
           />
-          Mean (arithmetic)
+          Mean <span className="muted">— biased high by outliers; not a good visual fit target</span>
         </div>
       </div>
 

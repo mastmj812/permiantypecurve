@@ -11,28 +11,34 @@
 //      on the saved type curve, scaled by 10 here for parity with the
 //      screenshot's "Normalized Oil" axis).
 
-import type { WellCurvesResponse } from "../../api/forecasts";
+import type { Stream, WellCurvesResponse } from "../../api/forecasts";
 
 type CurvesField = "history_rate" | "history_cum";
 
-const STREAM = "oil";
+// All three stream slides share t=0 = the well's oil-rate peak — that's
+// the cohort's convention for first-prod / peak-month alignment. The
+// `plotStream` argument selects which stream's series provides the
+// PLOTTED values (rate or cum); peak detection stays on oil regardless.
+const ANCHOR_STREAM: Stream = "oil";
 
 export function buildAlignedWellHistories(
   curves: WellCurvesResponse[],
   lateralByApi14: Map<string, number | null>,
   field: CurvesField,
+  plotStream: Stream = "oil",
 ): Array<{ api14: string; rate: Array<number | null> }> {
   const out: Array<{ api14: string; rate: Array<number | null> }> = [];
   for (const wc of curves) {
-    const oil = wc.streams.find((s) => s.stream === STREAM);
-    if (!oil) continue;
+    const anchor = wc.streams.find((s) => s.stream === ANCHOR_STREAM);
+    const plot = wc.streams.find((s) => s.stream === plotStream);
+    if (!anchor || !plot) continue;
     // Argmax over the oil rate, ignoring leading nulls. If a well has
     // no finite peak (all-null history), skip it — it can't anchor.
-    const rate = oil.history_rate;
+    const anchorRate = anchor.history_rate;
     let peakIdx = -1;
     let peakVal = -Infinity;
-    for (let i = 0; i < rate.length; i++) {
-      const v = rate[i];
+    for (let i = 0; i < anchorRate.length; i++) {
+      const v = anchorRate[i];
       if (v != null && Number.isFinite(v) && (v as number) > peakVal) {
         peakVal = v as number;
         peakIdx = i;
@@ -40,7 +46,7 @@ export function buildAlignedWellHistories(
     }
     if (peakIdx < 0) continue;
 
-    const source = oil[field];
+    const source = plot[field];
     // For cum, every entry pre-peak is sunk cum we don't want bleeding
     // into the "month-0 starts at zero" convention of the slide chart.
     // Subtract the cum value at the peak so the well's cum trace starts

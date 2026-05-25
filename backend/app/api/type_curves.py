@@ -21,7 +21,7 @@ import zipfile
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -953,5 +953,114 @@ def export_type_curve(
         media_type="application/zip",
         headers={
             "Content-Disposition": f'attachment; filename="{safe_name}.zip"',
+        },
+    )
+
+
+# ============================ PPTX export ============================
+
+# Office Open XML presentation MIME type. Mirrors the XLSX_MEDIA_TYPE
+# constant in app/api/deals.py.
+PPTX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+)
+
+
+@router.post("/{type_curve_id}/export.pptx")
+async def export_type_curve_pptx(
+    type_curve_id: uuid.UUID,
+    compare_with: uuid.UUID | None = Query(default=None, alias="compareWith"),
+    rate_oil: UploadFile = File(...),
+    cum_oil: UploadFile = File(...),
+    rate_gas: UploadFile = File(...),
+    cum_gas: UploadFile = File(...),
+    rate_water: UploadFile = File(...),
+    cum_water: UploadFile = File(...),
+    map_image: UploadFile = File(...),
+    probit_oil: UploadFile | None = File(default=None),
+    probit_gas: UploadFile | None = File(default=None),
+    probit_water: UploadFile | None = File(default=None),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Build a 4-slide .pptx for the given saved type curve.
+
+    Slide order: Oil, Gas, Water, Type Curve Wells. Each stream slide
+    gets its own rate + cum chart PNG; the map is shared across all
+    three. Charts are placed at fixed inch dimensions (5.42" × 2.16"
+    for the charts, ~6.93" × 4.34" for the map), avoiding the
+    aspect-survives-picture-frame problem of a single composite.
+
+    ``compareWith`` is the optional comparison curve id; when set the
+    param table on each stream slide gets a second row and the chart
+    images carry a dotted-gray "Previous TC" overlay rendered
+    client-side.
+    """
+    from app.exports.pptx_builder import build_deal_slide_pptx
+
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="type curve not found")
+    if compare_with is not None and session.get(TypeCurve, compare_with) is None:
+        raise HTTPException(status_code=404, detail="comparison curve not found")
+
+    rate_oil_bytes = await rate_oil.read()
+    cum_oil_bytes = await cum_oil.read()
+    rate_gas_bytes = await rate_gas.read()
+    cum_gas_bytes = await cum_gas.read()
+    rate_water_bytes = await rate_water.read()
+    cum_water_bytes = await cum_water.read()
+    map_bytes = await map_image.read()
+    all_imgs = [
+        rate_oil_bytes, cum_oil_bytes,
+        rate_gas_bytes, cum_gas_bytes,
+        rate_water_bytes, cum_water_bytes,
+        map_bytes,
+    ]
+    if not all(all_imgs):
+        raise HTTPException(status_code=400, detail="one or more panel images empty")
+
+    # Probit uploads are optional. If ANY are provided we require ALL
+    # three (one per stream slide) — partial probit would look weird.
+    probit_pngs: dict[str, bytes] | None = None
+    if probit_oil is not None or probit_gas is not None or probit_water is not None:
+        po = await probit_oil.read() if probit_oil else b""
+        pg = await probit_gas.read() if probit_gas else b""
+        pw = await probit_water.read() if probit_water else b""
+        if not (po and pg and pw):
+            raise HTTPException(
+                status_code=400,
+                detail="probit images must be supplied for all three streams or none",
+            )
+        probit_pngs = {"oil": po, "gas": pg, "water": pw}
+
+    try:
+        content = build_deal_slide_pptx(
+            session, type_curve_id, compare_with,
+            stream_pngs={
+                "oil": (rate_oil_bytes, cum_oil_bytes),
+                "gas": (rate_gas_bytes, cum_gas_bytes),
+                "water": (rate_water_bytes, cum_water_bytes),
+            },
+            map_png=map_bytes,
+            probit_pngs=probit_pngs,
+        )
+    except ValueError as e:
+        # Template-shape mismatch or curve-not-found shouldn't surface
+        # as a 500. The builder raises ValueError for both cases.
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    safe_name = "".join(c if c.isalnum() else "_" for c in tc.name)[:64] or "type_curve"
+    log.info(
+        "type_curve_exported_pptx",
+        id=str(type_curve_id),
+        compare_with=str(compare_with) if compare_with else None,
+        n_wells=len(tc.included_api14s or []),
+        bytes=len(content),
+    )
+    return Response(
+        content=content,
+        media_type=PPTX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{safe_name}.pptx"',
         },
     )

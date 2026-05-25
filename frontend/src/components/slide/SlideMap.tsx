@@ -53,13 +53,17 @@ const BLOCKS_SOURCE_ID = "slide-blocks";
 const BLOCKS_FILL_LAYER = "slide-blocks-fill";
 const BLOCKS_LINE_LAYER = "slide-blocks-line";
 const BLOCKS_LABEL_LAYER = "slide-blocks-label";
-const BLOCKS_MIN_ZOOM = 8;
+// Lower than the main MapView (which uses 8 / 11) so blocks and
+// sections always render on the slide map at typical cohort fit-
+// bound zooms. A deal slide needs section context regardless of
+// the cohort's geographic spread.
+const BLOCKS_MIN_ZOOM = 6;
 
 const SECTIONS_SOURCE_ID = "slide-sections";
 const SECTIONS_FILL_LAYER = "slide-sections-fill";
 const SECTIONS_LINE_LAYER = "slide-sections-line";
 const SECTIONS_LABEL_LAYER = "slide-sections-label";
-const SECTIONS_MIN_ZOOM = 11;
+const SECTIONS_MIN_ZOOM = 9;
 
 const BLOCK_LABEL_EXPR = [
   "coalesce",
@@ -116,15 +120,17 @@ async function loadBlocks(map: MlMap): Promise<void> {
     minzoom: BLOCKS_MIN_ZOOM,
     layout: {
       "text-field": BLOCK_LABEL_EXPR,
-      "text-size": 12,
+      // Larger than the main MapView's 12pt — slide is read at
+      // print/projector scale, not interactive zoom.
+      "text-size": 16,
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
     },
     paint: {
       "text-color": "#0f172a",
-      "text-halo-color": "rgba(255,255,255,0.9)",
-      "text-halo-width": 1.5,
+      "text-halo-color": "rgba(255,255,255,0.95)",
+      "text-halo-width": 2,
     },
   });
 }
@@ -160,15 +166,17 @@ async function loadSections(map: MlMap): Promise<void> {
     minzoom: SECTIONS_MIN_ZOOM,
     layout: {
       "text-field": SECTION_LABEL_EXPR,
-      "text-size": 10,
+      // Bumped from 10pt to 12pt so section numbers read clearly
+      // on a printed/projected deal slide.
+      "text-size": 12,
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
     },
     paint: {
-      "text-color": "#334155",
-      "text-halo-color": "rgba(255,255,255,0.9)",
-      "text-halo-width": 1.25,
+      "text-color": "#1f2937",
+      "text-halo-color": "rgba(255,255,255,0.95)",
+      "text-halo-width": 1.75,
     },
   });
 }
@@ -233,7 +241,9 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
   return b;
 }
 
-export function SlideMap({ api14s, wellDetails, width = 528, height = 240 }: Props) {
+// Default ~6.93" × 4.34" at 96 px/in to match the export's
+// slide-level map placement (right side, full chart-stack height).
+export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);

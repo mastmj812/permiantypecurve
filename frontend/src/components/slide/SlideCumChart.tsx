@@ -1,15 +1,15 @@
 // Slide-export cum-vs-time panel. Wraps TypeCurveChart with:
 //  - linear Y, peak-aligned 0–36 months
-//  - oil-only cumulative volume per 10k ft lateral
+//  - per-stream variant (oil / gas / water) — selected via `stream` prop
 //  - per-well gray lines from each well's `history_cum`, baselined to
-//    its peak month so the trace starts at 0 (matches the type curve's
-//    cum, which is the integral of post-peak rate)
+//    its (oil) peak month so the trace starts at 0 (matches the type
+//    curve's cum, which is the integral of post-peak rate)
 //
 // Cumulative arrays aren't persisted on the saved type curve — we
 // integrate the percentile rate arrays here, matching TypeCurvePage's
 // own cum chart math (DAYS_PER_MONTH = 30.4375).
 
-import type { WellCurvesResponse } from "../../api/forecasts";
+import type { Stream, WellCurvesResponse } from "../../api/forecasts";
 import type { StreamSeries, TypeCurveRow } from "../../api/typeCurves";
 
 import { TypeCurveChart } from "../../type_curves/TypeCurveChart";
@@ -24,13 +24,21 @@ interface Props {
   previous: TypeCurveRow | null;
   wellCurves: WellCurvesResponse[];
   lateralByApi14: Map<string, number | null>;
+  stream?: Stream;
   width?: number;
   height?: number;
 }
 
-function getOilSeries(curve: TypeCurveRow): StreamSeries | null {
+// y-axis label per stream — units are BBL for oil/water and MCF for gas.
+const Y_LABEL_BY_STREAM: Record<Stream, string> = {
+  oil: "Cumulative Oil (BBL / 10k ft)",
+  gas: "Cumulative Gas (MCF / 10k ft)",
+  water: "Cumulative Water (BBL / 10k ft)",
+};
+
+function getStreamSeries(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
   const streams = (curve.series as { streams?: Record<string, StreamSeries> }).streams;
-  return streams?.oil ?? null;
+  return streams?.[stream] ?? null;
 }
 
 function cumulateNullable(arr: Array<number | null>): Array<number | null> {
@@ -83,20 +91,25 @@ export function SlideCumChart({
   previous,
   wellCurves,
   lateralByApi14,
-  width = 528,
-  height = 240,
+  stream = "oil",
+  // 5.42" × 2.16" — see SlideRateChart for rationale.
+  width = 520,
+  height = 207,
 }: Props) {
-  const currentOil = getOilSeries(current);
-  const previousOil = previous ? getOilSeries(previous) : null;
-  if (!currentOil) return null;
+  const currentStream = getStreamSeries(current, stream);
+  const previousStream = previous ? getStreamSeries(previous, stream) : null;
+  if (!currentStream) return null;
 
-  const cumScaled = cumulateAndScale(currentOil, PER_10K_FACTOR);
-  const cumCompare = previousOil ? cumulateAndScale(previousOil, PER_10K_FACTOR) : null;
+  const cumScaled = cumulateAndScale(currentStream, PER_10K_FACTOR);
+  const cumCompare = previousStream
+    ? cumulateAndScale(previousStream, PER_10K_FACTOR)
+    : null;
 
   const histories = buildAlignedWellHistories(
     wellCurves,
     lateralByApi14,
     "history_cum",
+    stream,
   );
 
   return (
@@ -105,12 +118,13 @@ export function SlideCumChart({
       compareSeries={cumCompare}
       compareLabel={previous?.name}
       yAxisType="linear"
-      yLabel="Cumulative Oil (BBL / 10k ft)"
+      yLabel={Y_LABEL_BY_STREAM[stream]}
       xLabel="Month"
       width={width}
       height={height}
       xMaxMonths={CUM_X_MONTHS}
       wellHistories={histories}
+      compactLayout
     />
   );
 }

@@ -16,7 +16,7 @@ type SortKey =
   | "well_name"
   | "formation"
   | "operator"
-  | "vintage"
+  | "first_prod_date"
   | "lateral"
   | "eur"
   | "eur_per_ft"
@@ -116,7 +116,9 @@ export function ReviewPage() {
         case "well_name": return r.well_name ?? "";
         case "formation": return r.well_formation ?? "";
         case "operator": return r.well_operator ?? "";
-        case "vintage": return r.well_vintage_year ?? 0;
+        // ISO dates sort lexicographically (YYYY-MM-DD), so string
+        // compare is correct here without a Date parse.
+        case "first_prod_date": return r.well_first_prod_date ?? "";
         case "lateral": return r.well_lateral_ft ?? 0;
         case "eur": return r.eur ?? 0;
         case "eur_per_ft":
@@ -190,8 +192,13 @@ export function ReviewPage() {
                 <Th k="operator" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   operator
                 </Th>
-                <Th k="vintage" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
-                  vintage
+                <Th
+                  k="first_prod_date"
+                  sortKey={sortKey}
+                  sortDir={sortDir}
+                  onClick={clickHeader}
+                >
+                  First Prod Date
                 </Th>
                 <Th k="lateral" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   lateral (ft)
@@ -247,7 +254,7 @@ export function ReviewPage() {
                     <td>{r.well_name ?? "—"}</td>
                     <td>{r.well_formation ?? "—"}</td>
                     <td>{r.well_operator ?? "—"}</td>
-                    <td>{r.well_vintage_year ?? "—"}</td>
+                    <td>{r.well_first_prod_date ?? "—"}</td>
                     <td>{fmtInt(r.well_lateral_ft)}</td>
                     <td>{fmtVol(r.eur)}</td>
                     <td>{eurPerFt != null ? eurPerFt.toFixed(1) : "—"}</td>

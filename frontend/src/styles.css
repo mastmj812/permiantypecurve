@@ -1214,6 +1214,45 @@ input[type="date"], input[type="number"], input[type="search"] {
   font-style: italic;
 }
 
+/* ----------- TC tab: sticky slide-preview dock ----------- */
+/* Lives inside .type-curve-main as the last child; sticks to the
+   bottom of the scroll area so users can iterate without exporting
+   and reopening the file. The iframe loads the same slide route the
+   PPTX export captures from, so what you see is what lands in PPT. */
+.tc-slide-preview-dock {
+  position: sticky;
+  bottom: 0;
+  background: #ffffff;
+  border-top: 2px solid #cbd5e1;
+  box-shadow: 0 -4px 12px rgba(15, 23, 42, 0.06);
+  height: 45vh;
+  min-height: 320px;
+  margin-top: 24px;
+  display: flex;
+  flex-direction: column;
+  z-index: 10;
+}
+.tc-slide-preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f1f5f9;
+  border-bottom: 1px solid #cbd5e1;
+  font-size: 13px;
+}
+.tc-slide-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tc-slide-preview-iframe {
+  flex: 1;
+  border: 0;
+  width: 100%;
+  background: #ffffff;
+}
+
 /* ------------------------ slide export ------------------------ */
 /* Single-page printable type-curve summary. Routed from
    #/type-curves/<id>/slide and rendered without the app shell. */
@@ -1285,18 +1324,27 @@ input[type="date"], input[type="number"], input[type="search"] {
   font-variant-numeric: tabular-nums;
 }
 
-/* Two-column slide grid. Left column stacks Rate over Cum across two
-   rows; the Map (`.slide-panel-map`) spans both rows on the right
-   side. Probit was removed; if it comes back, drop the row-span and
-   add it as the 4th grid cell. */
+/* Two-column slide grid: Rate top-left, Cum bottom-left, Map
+   full-height on the right (.slide-panel-map). Sized to mirror
+   what the PPTX export places on the slide so the preview is
+   WYSIWYG. The export sends each panel as a separate picture
+   placed at exact inch dimensions, so chart sizes don't depend on
+   the composite aspect surviving a picture-frame scale. */
 .slide-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: auto auto;
   grid-template-rows: auto auto;
   gap: 12px;
 }
 .slide-panel-map {
   grid-row: 1 / span 2;
+  grid-column: 2;
+}
+/* With-probit layout: 2×2 grid with map top-right + probit bottom-
+   right. Override the map cell's row-span so it occupies one row
+   only. */
+.slide-grid-with-probit .slide-panel-map {
+  grid-row: 1;
   grid-column: 2;
 }
 .slide-panel {

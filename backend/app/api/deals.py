@@ -40,6 +40,11 @@ from app.api.type_curves import (
 from app.core.logging import get_logger
 from app.db.models import Deal, TypeCurve
 from app.db.session import get_session
+from app.exports.well_rows import (
+    PER_WELL_COL_FORMATS,
+    PER_WELL_HEADERS,
+    per_well_rows,
+)
 from app.type_curves.aggregate import PERCENTILE_KEYS
 
 router = APIRouter(prefix="/deals", tags=["deals"])
@@ -248,11 +253,13 @@ _NORMALIZATION_LABEL: dict[str, str] = {
 }
 
 
-def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
-    """Two-column field/value layout mirroring ``_metadata_csv`` so the
-    Excel export and the CSV-zip export carry the same fields in the
-    same order. Engineers comparing outputs across formats should see
-    identical content."""
+def _write_metadata_sheet(ws: Any, tc: TypeCurve, session: Session) -> None:
+    """Two-column field/value layout mirroring ``_metadata_csv`` for the
+    top section, then a wide per-well summary block at the bottom that
+    expands the bare api14 list into completion-design + EUR metrics
+    the engineer wants alongside the type-curve params. The CSV-zip
+    export still ships just the api14 list — when an engineer needs
+    the wider context they're already in xlsx territory."""
     from openpyxl.styles import Font
 
     bold = Font(bold=True)
@@ -328,13 +335,34 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve) -> None:
         ws.append([s_name, *(params.get(k) for k in _FITTED_PARAM_KEYS)])
     ws.append([])
 
-    ws.append(["included_api14s"])
+    # Per-well summary block — expands the bare api14 list into a wide
+    # table with completion-design (BWPF / PPF) and per-well EUR
+    # metrics. Engineers compare these against the cohort's published
+    # fit params above to spot wells dragging the TC away from the
+    # cohort average. EURs are recomputed via monthly trapezoid so the
+    # workbook matches the Review tab + the slide-export probit.
+    ws.append(["per_well_summary"])
     ws.cell(row=ws.max_row, column=1).font = bold
-    for a in tc.included_api14s or []:
-        ws.append([a])
+    ws.append(list(PER_WELL_HEADERS))
+    header_row = ws.max_row
+    for col_idx in range(1, len(PER_WELL_HEADERS) + 1):
+        ws.cell(row=header_row, column=col_idx).font = bold
+    for row in per_well_rows(session, list(tc.included_api14s or [])):
+        ws.append(list(row))
+        data_row = ws.max_row
+        for col, fmt in PER_WELL_COL_FORMATS.items():
+            ws.cell(row=data_row, column=col).number_format = fmt
 
-    ws.column_dimensions["A"].width = 28
-    ws.column_dimensions["B"].width = 36
+    # Top metadata block is 2 columns; the per-well block extends out
+    # to column 12. Size the first two for the metadata field/value
+    # readability and let the per-well columns auto-size by content.
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 28
+    # Wellname tends to be long ("SLINGSHOT A1 2760H"); give it room.
+    ws.column_dimensions["C"].width = 26
+    ws.column_dimensions["D"].width = 18
+    for col_letter in ("E", "F", "G", "H", "I", "J", "K", "L"):
+        ws.column_dimensions[col_letter].width = 14
 
 
 def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
@@ -405,7 +433,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
     ws.column_dimensions["A"].width = 10
 
 
-def _build_workbook(deal: Deal, curves: list[TypeCurve]) -> bytes:
+def _build_workbook(deal: Deal, curves: list[TypeCurve], session: Session) -> bytes:
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -418,7 +446,7 @@ def _build_workbook(deal: Deal, curves: list[TypeCurve]) -> bytes:
     for tc in curves:
         slug = _sheet_slug(tc.name, used_slugs)
         meta_ws = wb.create_sheet(f"{slug} — meta")
-        _write_metadata_sheet(meta_ws, tc)
+        _write_metadata_sheet(meta_ws, tc, session)
         forecast_ws = wb.create_sheet(f"{slug} — forecast")
         _write_forecast_sheet(forecast_ws, tc)
 
@@ -442,7 +470,7 @@ def export_deal(
     ).scalars().all()
     if not curves:
         raise HTTPException(status_code=400, detail="deal has no curves assigned")
-    content = _build_workbook(deal, list(curves))
+    content = _build_workbook(deal, list(curves), session)
     safe_name = _FILENAME_SLUG_RE.sub("_", deal.name)[:64] or "deal"
     log.info(
         "deal_exported",
