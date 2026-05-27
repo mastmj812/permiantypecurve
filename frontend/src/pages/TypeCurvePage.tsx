@@ -468,6 +468,15 @@ export function TypeCurvePage() {
   const currentStream = agg?.streams?.[stream];
   const units = STREAM_UNITS[stream];
 
+  // Data-window cap for the left/center charts (Cartesian rate,
+  // Semi-log rate, Cumulative). Under Phase 2.5 the bands extend to
+  // 600 months because the panel includes per-well forecast tails —
+  // but the "data window" charts should clamp to the cohort's
+  // observed history so they remain visually scoped to the empirical
+  // range. Falls back to undefined (no clamp) for pre-2.5 saves where
+  // the arrays are already short.
+  const dataWindowMonths = agg?.observed_n_months ?? undefined;
+
   // Integrate the percentile rates to a cumulative-vs-time view. Cheap
   // (a few hundred months × six percentile arrays) so we just recompute
   // on every stream / agg change. The compare series and tweak-preview
@@ -551,6 +560,7 @@ export function TypeCurvePage() {
                 xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
                 title="Cartesian"
                 width={380}
+                xMaxMonths={dataWindowMonths}
                 smoothedOverride={previewSmoothed[stream]}
               />
               <TypeCurveChart
@@ -562,6 +572,7 @@ export function TypeCurvePage() {
                 xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
                 title="Semi-log (rate)"
                 width={380}
+                xMaxMonths={dataWindowMonths}
                 smoothedOverride={previewSmoothed[stream]}
               />
               {fullForecastStream && (
@@ -607,6 +618,7 @@ export function TypeCurvePage() {
                   xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
                   title="Cumulative (data window)"
                   width={380}
+                  xMaxMonths={dataWindowMonths}
                   smoothedOverride={cumPreviewSmoothed}
                 />
               )}
@@ -817,7 +829,14 @@ export function TypeCurvePage() {
               // size and the captured PNG gets stretched in PPT.
               // Keying on includeProbit forces a remount → fresh
               // MapLibre init at the right size.
-              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}`}
+              //
+              // We also fold in a fit signature so "Update fit" (and
+              // any re-aggregate) remounts the iframe — otherwise the
+              // inner React app reads the type curve once on mount
+              // and never sees the updated fit. Both the slide preview
+              // and the PPTX export (which snapshots the slide) need
+              // this to stay in sync with the latest persisted fit.
+              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}-${fitSignature(selectedSaved)}`}
               ref={previewIframeRef}
               src={(() => {
                 const qs = new URLSearchParams();
@@ -1012,23 +1031,6 @@ export function TypeCurvePage() {
               <button
                 type="button"
                 className="tb-btn"
-                onClick={() => {
-                  const qs = compareWithId
-                    ? `?compareWith=${encodeURIComponent(compareWithId)}`
-                    : "";
-                  // Open in a new tab so the user's working state on
-                  // this page survives the export. The slide route
-                  // lives at the hash so it works without a router.
-                  const url = `${window.location.origin}${window.location.pathname}#/type-curves/${encodeURIComponent(selectedSaved.id)}/slide${qs}`;
-                  window.open(url, "_blank", "noopener");
-                }}
-                title="Open a print-ready slide of this type curve in a new tab"
-              >
-                export slide
-              </button>
-              <button
-                type="button"
-                className="tb-btn"
                 onClick={() => onRename(selectedSaved.id)}
               >
                 rename
@@ -1123,12 +1125,31 @@ export function TypeCurvePage() {
                     className={selectedSaved?.id === tc.id ? "active" : ""}
                     onClick={() => onLoadSaved(tc.id)}
                   >
-                    <div className="lib-name">{tc.name}</div>
+                    <div className="lib-name">
+                      {tc.name}
+                      {tc.is_stale && (
+                        <span
+                          className="badge badge-warn"
+                          style={{ marginLeft: 6 }}
+                          title="Underlying forecasts or membership have changed since the last aggregation"
+                        >
+                          stale
+                        </span>
+                      )}
+                    </div>
                     <div className="muted">
                       {tc.n_wells} wells · {new Date(tc.created_at).toLocaleDateString()}
                       {tc.version_of && " · v"}
                     </div>
                   </button>
+                  <a
+                    className="link-btn"
+                    style={{ fontSize: 11, marginLeft: 8 }}
+                    href={`#/type-curves/${tc.id}/wells`}
+                    title="Open the wells this curve was derived from"
+                  >
+                    wells →
+                  </a>
                 </li>
               ))}
             </ul>
@@ -1179,6 +1200,27 @@ function fmtEur(v: number | null | undefined): string {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
   if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
   return v.toFixed(0);
+}
+
+// Compact string of the per-stream Arps params, used as a React key
+// component on the slide-preview iframe so "Update fit" (and any
+// re-aggregate) force a remount + refetch. Without this the iframe's
+// inner React app loads the curve once on mount and never sees the
+// new fit, leaving the slide preview (and the PPTX export it
+// snapshots) showing the pre-update curve.
+function fitSignature(row: TypeCurveRow): string {
+  const parts: string[] = [];
+  for (const s of ["oil", "gas", "water"] as const) {
+    const f = row.series?.streams?.[s]?.fitted;
+    if (!f) {
+      parts.push("x");
+      continue;
+    }
+    parts.push(
+      `${f.qi}/${f.Di}/${f.b}/${f.Df}/${f.qo ?? f.qi}/${f.peak_index ?? 0}`,
+    );
+  }
+  return parts.join("|");
 }
 
 // Average days per month for cum integration. The aggregated percentile
@@ -1257,12 +1299,22 @@ interface RampArpsParams {
 // EUR-table cell can fall back to the stored value. Drives the EUR
 // table directly so the displayed number can't drift from the cum
 // chart's asymptote: same params → same integration → same number.
+//
+// Trapezoid rule (volume_K = (rate at start + rate at end) / 2 * dt
+// for each month K, last month flat-extrapolated). Closes the small
+// systematic gap (~0.2% on Permian fits) the right-endpoint rectangle
+// rule had against the closed-form scipy.quad (= stored eur_per_unit
+// + the PPTX value).
 function eurFromParams(fit: RampArpsParams | null | undefined): number | null {
   if (!fit) return null;
   const rates = buildRampArpsRate(fit, FULL_FORECAST_N_MONTHS);
   let cum = 0;
-  for (const r of rates) {
-    if (Number.isFinite(r)) cum += r * DAYS_PER_MONTH;
+  for (let i = 0; i < rates.length; i++) {
+    const a = rates[i];
+    if (a === undefined || !Number.isFinite(a)) continue;
+    const next = rates[i + 1];
+    const b = next !== undefined && Number.isFinite(next) ? next : a;
+    cum += ((a + b) / 2) * DAYS_PER_MONTH;
   }
   return cum;
 }
@@ -1301,7 +1353,6 @@ function buildRampArpsRate(
 // across the full horizon (versus the empirical bands in the data-
 // window charts on the left). Falls back to just the P50 fitted curve
 // when fitted_per_percentile is missing (older saves predate that field).
-const PERCENTILE_KEYS = ["p10", "p25", "p50", "p75", "p90"] as const;
 function fullForecastSeries(stream: StreamSeries): StreamSeries {
   const N = FULL_FORECAST_N_MONTHS;
   const per = stream.fitted_per_percentile;
@@ -1347,17 +1398,23 @@ function cumulateNullableArray(arr: Array<number | null>): Array<number | null> 
 }
 
 function cumulateNumericArray(arr: number[]): number[] {
-  // Fitted curves are sampled every month with no missing values, so
-  // we keep the array tight (number[]) and just guard against the
-  // pathological NaN that could come from a degenerate fit preview.
+  // Trapezoid rule for fitted-curve integration. arr[i] = q(t = i mo);
+  // volume during month i+1 ≈ (arr[i] + arr[i+1])/2 * dt. Last month
+  // uses arr[i] for both endpoints (flat extrapolation past the array
+  // end). Matches `eurFromParams` so the chart's asymptote equals the
+  // EUR-table cell, and tracks the backend's closed-form scipy.quad
+  // (stored as `eur_per_unit`) to within ~0.05% on Permian fits.
   const out: number[] = [];
   let running = 0;
-  for (const v of arr) {
-    if (!Number.isFinite(v)) {
+  for (let i = 0; i < arr.length; i++) {
+    const a = arr[i];
+    if (a === undefined || !Number.isFinite(a)) {
       out.push(running);
       continue;
     }
-    running += v * DAYS_PER_MONTH;
+    const next = arr[i + 1];
+    const b = next !== undefined && Number.isFinite(next) ? next : a;
+    running += ((a + b) / 2) * DAYS_PER_MONTH;
     out.push(running);
   }
   return out;

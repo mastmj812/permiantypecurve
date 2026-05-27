@@ -28,6 +28,8 @@ class DIDirectClient(EnverusClient):
         basin: str,
         county: str | None = None,
         updated_since: datetime | None = None,
+        first_prod_after: date | None = None,
+        min_lateral_ft: float | None = None,
     ) -> Iterator[WellHeader]:
         raise NotImplementedError("DI Direct adapter not wired yet — use PrismClient")
         yield  # pragma: no cover  -- makes mypy treat this as a generator

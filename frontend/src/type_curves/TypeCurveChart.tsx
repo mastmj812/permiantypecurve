@@ -552,11 +552,12 @@ function mergeSeriesForAxes(a: StreamSeries, b: StreamSeries): StreamSeries {
     mean: A.mean.map((v, i) => ymax(v, B.mean[i] ?? null)),
     well_count: A.well_count.map((v, i) => Math.max(v, B.well_count[i] ?? 0)),
     implied_eur_per_1000ft: a.implied_eur_per_1000ft,
-    // fitted + fitted_eur_per_unit are per-curve and not part of
-    // axis-range logic; the merged shape just needs *something* of the
-    // right type. Drop both fits here.
+    // fitted + fitted_eur_per_unit + fitted_per_percentile are
+    // per-curve and not part of axis-range logic; the merged shape
+    // just needs *something* of the right type. Drop all fits here.
     fitted: null,
     fitted_eur_per_unit: null,
+    fitted_per_percentile: null,
   };
 }
 

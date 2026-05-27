@@ -72,11 +72,21 @@ function cumulateAndScale(s: StreamSeries, factor: number): StreamSeries {
     mean: scC(s.mean),
     fitted: s.fitted
       ? (() => {
+          // Trapezoid rule on the fitted-curve rate samples. arr[i] is
+          // q(t = i months); month i+1's volume ≈ (arr[i] + arr[i+1])/2 *
+          // dt, last month flat-extrapolated. Matches the Type Curve
+          // page's cumulateNumericArray so the slide cum chart agrees
+          // with the live UI within numerical noise.
+          const rates = s.fitted.smoothed_rate;
           const cumRate: number[] = [];
           let running = 0;
-          for (const v of s.fitted.smoothed_rate) {
-            if (Number.isFinite(v)) {
-              running += v * DAYS_PER_MONTH;
+          for (let i = 0; i < rates.length; i++) {
+            const a = rates[i];
+            if (a !== undefined && Number.isFinite(a)) {
+              const next = rates[i + 1];
+              const b =
+                next !== undefined && Number.isFinite(next) ? next : a;
+              running += ((a + b) / 2) * DAYS_PER_MONTH;
             }
             cumRate.push(running * factor);
           }

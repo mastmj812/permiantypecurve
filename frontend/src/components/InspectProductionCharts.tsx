@@ -24,6 +24,16 @@ export interface InspectProductionChartsProps {
   // and the lateral_ft used by the /10kft normalization. Comes from
   // the same fetchWellDetails() call that feeds the gun-barrel.
   wellsByApi14: Map<string, WellDetailLite>;
+  // Deselected wells (api14s NOT in this set) render as ghosted lines
+  // — matches the gun-barrel's dimmed-circle convention so the two
+  // views agree on what "unselected" looks like. Optional so this
+  // component still renders standalone outside the inspect modal.
+  selectedApi14s?: Set<string>;
+  // Lifted hover state — when set, the matching polyline bolds up
+  // (and the gun-barrel circle bolds too via the same prop on the
+  // sibling component).
+  hoveredApi14?: string | null;
+  onHover?: (api14: string | null) => void;
 }
 
 const PAD = { top: 24, right: 16, bottom: 36, left: 56 };
@@ -42,6 +52,9 @@ interface WellSeries {
 export function InspectProductionCharts({
   api14s,
   wellsByApi14,
+  selectedApi14s,
+  hoveredApi14 = null,
+  onHover,
 }: InspectProductionChartsProps) {
   const [stream, setStream] = useState<Stream>("oil");
   const [normalize, setNormalize] = useState<boolean>(true);
@@ -187,12 +200,18 @@ export function InspectProductionCharts({
           yLabel={normalize ? "rate / 10kft" : "rate"}
           series={wellsWithData}
           accessor={(s) => s.rate}
+          selectedApi14s={selectedApi14s}
+          hoveredApi14={hoveredApi14}
+          onHover={onHover}
         />
         <OverlayChart
           title={`${stream.toUpperCase()} cum vs. months from first prod`}
           yLabel={normalize ? "cum / 10kft" : "cum"}
           series={wellsWithData}
           accessor={(s) => s.cum}
+          selectedApi14s={selectedApi14s}
+          hoveredApi14={hoveredApi14}
+          onHover={onHover}
         />
       </div>
     </div>
@@ -206,6 +225,9 @@ function OverlayChart({
   yLabel,
   series,
   accessor,
+  selectedApi14s,
+  hoveredApi14 = null,
+  onHover,
   width = 430,
   height = 240,
 }: {
@@ -213,6 +235,9 @@ function OverlayChart({
   yLabel: string;
   series: WellSeries[];
   accessor: (s: WellSeries) => Array<number | null>;
+  selectedApi14s?: Set<string>;
+  hoveredApi14?: string | null;
+  onHover?: (api14: string | null) => void;
   width?: number;
   height?: number;
 }) {
@@ -318,35 +343,68 @@ function OverlayChart({
 
       {/* One polyline per well. Break on nulls (NaN segment trick:
           start a new <polyline> for each contiguous run of non-null
-          points instead). Keeps gaps visible. */}
-      {series.map((s) => {
-        const color = colorForFormation(s.formation);
-        const arr = accessor(s);
-        const segments: Array<Array<[number, number]>> = [];
-        let current: Array<[number, number]> = [];
-        for (let i = 0; i < arr.length; i++) {
-          const v = arr[i];
-          if (v == null) {
-            if (current.length > 0) segments.push(current);
-            current = [];
-          } else {
-            current.push([i, v]);
+          points instead). Keeps gaps visible.
+
+          Sort so the hovered well's polyline draws last (on top of its
+          peers); selection toggles per-well opacity to match the
+          gun-barrel's dimmed-circle convention. */}
+      {[...series]
+        .sort(
+          (a, b) =>
+            (a.api14 === hoveredApi14 ? 1 : 0) -
+            (b.api14 === hoveredApi14 ? 1 : 0),
+        )
+        .map((s) => {
+          const color = colorForFormation(s.formation);
+          const arr = accessor(s);
+          const segments: Array<Array<[number, number]>> = [];
+          let current: Array<[number, number]> = [];
+          for (let i = 0; i < arr.length; i++) {
+            const v = arr[i];
+            if (v == null) {
+              if (current.length > 0) segments.push(current);
+              current = [];
+            } else {
+              current.push([i, v]);
+            }
           }
-        }
-        if (current.length > 0) segments.push(current);
-        return segments.map((seg, idx) => (
-          <polyline
-            key={`${s.api14}-${idx}`}
-            fill="none"
-            stroke={color}
-            strokeWidth={1.25}
-            strokeOpacity={0.75}
-            points={seg
-              .map(([x, y]) => `${xScale(x)},${yScale(y)}`)
-              .join(" ")}
-          />
-        ));
-      })}
+          if (current.length > 0) segments.push(current);
+
+          const isSelected = selectedApi14s?.has(s.api14) ?? true;
+          const isHovered = hoveredApi14 === s.api14;
+          const anyHover = hoveredApi14 != null;
+          // Deselected wells stay ghosted regardless of hover so the
+          // user can still see them but they don't compete with the
+          // signal. Selected wells dim slightly when *another* well
+          // is hovered so the highlight reads.
+          const strokeOpacity = !isSelected
+            ? 0.15
+            : anyHover && !isHovered
+              ? 0.25
+              : 0.85;
+          const strokeWidth = isSelected && isHovered ? 2.5 : 1.25;
+          return (
+            <g
+              key={s.api14}
+              style={{ cursor: "pointer" }}
+              onMouseEnter={() => onHover?.(s.api14)}
+              onMouseLeave={() => onHover?.(null)}
+            >
+              {segments.map((seg, idx) => (
+                <polyline
+                  key={`${s.api14}-${idx}`}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={strokeWidth}
+                  strokeOpacity={strokeOpacity}
+                  points={seg
+                    .map(([x, y]) => `${xScale(x)},${yScale(y)}`)
+                    .join(" ")}
+                />
+              ))}
+            </g>
+          );
+        })}
 
       {/* Axis labels */}
       <text

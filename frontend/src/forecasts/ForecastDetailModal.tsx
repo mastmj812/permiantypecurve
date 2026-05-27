@@ -6,7 +6,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import {
   type ForecastRow,
-  type ModelType,
   type Stream,
   type StreamCurves,
   effectiveDecline,
@@ -14,7 +13,32 @@ import {
   patchForecast,
   previewForecast,
 } from "../api/forecasts";
+import {
+  deleteForecastOverride,
+  putForecastOverride,
+} from "../api/typeCurves";
 import { DeclineChart, type SeriesPoint } from "./DeclineChart";
+
+interface TcContext {
+  // Type curve the modal is editing FOR — Save writes a per-TC
+  // override instead of patching the global forecast row.
+  id: string;
+  name: string;
+  // Per-stream source flag from the workspace endpoint: "override" |
+  // "global" | "missing". When "override", the modal surfaces a
+  // "Revert to global" button. Keyed by stream so switching streams
+  // inside the modal picks the right source.
+  sourceByStream: Record<"oil" | "gas" | "water", "override" | "global" | "missing">;
+  // Called after a successful override write OR delete with the
+  // workspace's resolved stream payload (source + payload) so the
+  // parent page can refresh its row without a second fetch.
+  onOverrideChanged: (
+    api14: string,
+    stream: "oil" | "gas" | "water",
+    source: "override" | "global" | "missing",
+    payload: Record<string, unknown> | null,
+  ) => void;
+}
 
 interface Props {
   api14: string;
@@ -27,6 +51,17 @@ interface Props {
   onPrev?: () => void;
   onNext?: () => void;
   position?: { index: number; total: number };
+  // Phase 1 of the TC workspace opens this modal in read-only mode:
+  // charts + param values stay visible but the input boxes lock, the
+  // "save override" / "lock" / "preview" buttons hide, and onSaved is
+  // never called. Defaults false so every existing caller (Review tab,
+  // etc.) keeps full editability.
+  readOnly?: boolean;
+  // Phase 2: when present, Save writes a TC-scoped override (not a
+  // global forecast edit). The Revert-to-global button shows when
+  // the active stream's source is "override". Undefined for the
+  // Review tab's normal global-edit flow.
+  tcContext?: TcContext;
 }
 
 const STREAM_UNITS: Record<Stream, { rate: string; cum: string }> = {
@@ -43,6 +78,8 @@ export function ForecastDetailModal({
   onPrev,
   onNext,
   position,
+  readOnly = false,
+  tcContext,
 }: Props) {
   const [stream, setStream] = useState<Stream>("oil");
   const [showProdday, setShowProdday] = useState(false);
@@ -218,6 +255,35 @@ export function ForecastDetailModal({
     if (editDi != null) params.Di = editDi;
     if (editB != null) params.b = editB;
     if (editDf != null) params.Df = editDf;
+
+    if (tcContext) {
+      // TC-context save: write a per-TC override. The global forecast
+      // row stays untouched so other type curves containing this well
+      // still see their previous fit. Skip the well-curves refetch
+      // because the global curve didn't change — preview just clears.
+      const resolved = await putForecastOverride(
+        tcContext.id,
+        api14,
+        stream,
+        {
+          qi: params.qi ?? editQi ?? 0,
+          Di: params.Di ?? editDi ?? 0,
+          b: params.b ?? editB ?? 0,
+          Df: params.Df ?? editDf ?? 0.08,
+        },
+      );
+      tcContext.onOverrideChanged(
+        api14,
+        stream,
+        resolved.source,
+        resolved.payload,
+      );
+      setPreviewPoints([]);
+      setPreviewCumPoints([]);
+      setPreviewEur(null);
+      return;
+    }
+
     const updated = await patchForecast(forecastForStream.id, {
       params,
       manual_override: true,
@@ -237,6 +303,15 @@ export function ForecastDetailModal({
     } catch (e) {
       console.error("refetch curves after save failed", e);
     }
+  }
+
+  async function revertOverride() {
+    if (!tcContext) return;
+    const resolved = await deleteForecastOverride(tcContext.id, api14, stream);
+    tcContext.onOverrideChanged(api14, stream, resolved.source, resolved.payload);
+    setPreviewPoints([]);
+    setPreviewCumPoints([]);
+    setPreviewEur(null);
   }
 
   async function toggleLock() {
@@ -286,6 +361,15 @@ export function ForecastDetailModal({
             <span className="muted">
               {forecastForStream?.model_type ?? "no forecast"}
             </span>
+            {tcContext && (
+              <span
+                className="badge badge-warn"
+                style={{ marginLeft: 8 }}
+                title={`Save writes a per-TC override for ${tcContext.name}; the global forecast is unchanged.`}
+              >
+                editing override for {tcContext.name}
+              </span>
+            )}
           </div>
           <button type="button" className="link-btn" onClick={onClose}>
             close
@@ -350,7 +434,7 @@ export function ForecastDetailModal({
 
           {forecastForStream && (
             <div className="param-editor">
-              <h3>Fit parameters</h3>
+              <h3>Fit parameters{readOnly && " (read-only)"}</h3>
               <table>
                 <tbody>
                   <ParamRow
@@ -358,12 +442,14 @@ export function ForecastDetailModal({
                     unit={units.rate}
                     value={editQi}
                     onChange={setEditQi}
+                    readOnly={readOnly}
                   />
                   <ParamRow
                     label="Di (nominal)"
                     unit="/yr"
                     value={editDi}
                     onChange={setEditDi}
+                    readOnly={readOnly}
                   />
                   {editDi != null && (
                     <tr>
@@ -376,7 +462,13 @@ export function ForecastDetailModal({
                     </tr>
                   )}
                   {editB != null && (
-                    <ParamRow label="b" unit="" value={editB} onChange={setEditB} />
+                    <ParamRow
+                      label="b"
+                      unit=""
+                      value={editB}
+                      onChange={setEditB}
+                      readOnly={readOnly}
+                    />
                   )}
                   {editDf != null && (
                     <ParamRow
@@ -384,30 +476,46 @@ export function ForecastDetailModal({
                       unit="/yr"
                       value={editDf}
                       onChange={setEditDf}
+                      readOnly={readOnly}
                     />
                   )}
                 </tbody>
               </table>
-              <div className="param-actions">
-                <button type="button" onClick={recompute}>
-                  preview
-                </button>
-                <button type="button" className="btn-primary" onClick={save}>
-                  save override
-                </button>
-                <button
-                  type="button"
-                  className={forecastForStream.locked ? "tb-active tb-btn" : "tb-btn"}
-                  onClick={toggleLock}
-                  title={
-                    forecastForStream.locked
-                      ? "Locked — bulk re-fit will skip this stream"
-                      : "Unlocked — bulk re-fit will overwrite"
-                  }
-                >
-                  {forecastForStream.locked ? "locked" : "lock"}
-                </button>
-              </div>
+              {!readOnly && (
+                <div className="param-actions">
+                  <button type="button" onClick={recompute}>
+                    preview
+                  </button>
+                  <button type="button" className="btn-primary" onClick={save}>
+                    {tcContext ? "save TC override" : "save override"}
+                  </button>
+                  {tcContext &&
+                    tcContext.sourceByStream[stream] === "override" && (
+                      <button
+                        type="button"
+                        className="tb-btn"
+                        onClick={revertOverride}
+                        title="Delete the TC-scoped override and fall back to this well's global forecast"
+                      >
+                        revert to global
+                      </button>
+                    )}
+                  {!tcContext && (
+                    <button
+                      type="button"
+                      className={forecastForStream.locked ? "tb-active tb-btn" : "tb-btn"}
+                      onClick={toggleLock}
+                      title={
+                        forecastForStream.locked
+                          ? "Locked — bulk re-fit will skip this stream"
+                          : "Unlocked — bulk re-fit will overwrite"
+                      }
+                    >
+                      {forecastForStream.locked ? "locked" : "lock"}
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="param-stats">
                 <Stat label="EUR" value={fmtEur(previewEur ?? forecastForStream.eur, units.cum)} />
                 <Stat
@@ -440,24 +548,30 @@ function ParamRow({
   unit,
   value,
   onChange,
+  readOnly = false,
 }: {
   label: string;
   unit: string;
   value: number | null;
   onChange: (v: number | null) => void;
+  readOnly?: boolean;
 }) {
   return (
     <tr>
       <th>{label}</th>
       <td>
-        <input
-          type="number"
-          step="any"
-          value={value ?? ""}
-          onChange={(e) =>
-            onChange(e.target.value === "" ? null : Number(e.target.value))
-          }
-        />
+        {readOnly ? (
+          <span className="muted">{value == null ? "—" : value}</span>
+        ) : (
+          <input
+            type="number"
+            step="any"
+            value={value ?? ""}
+            onChange={(e) =>
+              onChange(e.target.value === "" ? null : Number(e.target.value))
+            }
+          />
+        )}
       </td>
       <td>
         <span className="muted">{unit}</span>

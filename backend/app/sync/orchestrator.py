@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from itertools import islice
 from typing import TypeVar
 
@@ -46,6 +46,22 @@ DEFAULT_COUNTY = "Loving"
 # /api/sync/run — pulls all four. Add more counties here as they come
 # into deal scope.
 DEFAULT_COUNTIES: tuple[str, ...] = ("Loving", "Reeves", "Ward", "Winkler")
+
+# Server-side scope filters baked into every default seed.
+#
+# `first_prod_date > 2010-01-01` excludes pre-shale-boom wells —
+# Wolfberry-era and earlier conventional verticals plus the early-
+# unconventional pre-Permian-boom tail. In Ward (89% vertical) and
+# Winkler (94% vertical) this filter alone cuts well count by ~80%,
+# which cascades into ~80% fewer per-well production calls (the slow
+# phase). Modern Permian unconventional wells are universally post-
+# 2010; this floor excludes nothing a deal cohort would ever cite.
+#
+# Lateral-length floor is off by default — the date filter catches
+# almost everything we'd want to drop. Set via `--min-lateral-ft` on
+# the CLI if a tighter horizontal-only scope is needed.
+DEFAULT_FIRST_PROD_AFTER: date = date(2010, 1, 1)
+DEFAULT_MIN_LATERAL_FT: float | None = None
 
 T = TypeVar("T")
 
@@ -124,6 +140,8 @@ def sync_county(
     basin: str = DEFAULT_BASIN,
     county: str = DEFAULT_COUNTY,
     pull_production: bool = True,
+    first_prod_after: date | None = DEFAULT_FIRST_PROD_AFTER,
+    min_lateral_ft: float | None = DEFAULT_MIN_LATERAL_FT,
     client: EnverusClient | None = None,
 ) -> dict[str, int]:
     """Synchronous entry — called from CLI and from the background task hook.
@@ -145,7 +163,12 @@ def sync_county(
     # ---- 1. well headers ----
     with SessionLocal() as session:
         with _job(session, SyncEntity.WELL_HEADERS, scope_key) as job:
-            header_iter = cli.fetch_well_headers(basin=basin, county=county)
+            header_iter = cli.fetch_well_headers(
+                basin=basin,
+                county=county,
+                first_prod_after=first_prod_after,
+                min_lateral_ft=min_lateral_ft,
+            )
             total = 0
             for batch in _batched(header_iter, 200):
                 total += upsert_well_headers(session, batch)
@@ -196,6 +219,8 @@ def sync_counties(
     basin: str = DEFAULT_BASIN,
     counties: tuple[str, ...] | list[str] = DEFAULT_COUNTIES,
     pull_production: bool = True,
+    first_prod_after: date | None = DEFAULT_FIRST_PROD_AFTER,
+    min_lateral_ft: float | None = DEFAULT_MIN_LATERAL_FT,
     client: EnverusClient | None = None,
 ) -> dict[str, dict[str, int]]:
     """Run ``sync_county`` for each county in sequence.
@@ -213,6 +238,8 @@ def sync_counties(
             basin=basin,
             county=county,
             pull_production=pull_production,
+            first_prod_after=first_prod_after,
+            min_lateral_ft=min_lateral_ft,
             client=cli,
         )
     log.info(

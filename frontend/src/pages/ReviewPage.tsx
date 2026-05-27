@@ -4,10 +4,25 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { type ForecastRow, listForecasts } from "../api/forecasts";
+import {
+  type ForecastRow,
+  listForecasts,
+  type Stream,
+} from "../api/forecasts";
 import { eurFromForecastParams } from "../forecasts/arps";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
-import { computeOutliers, type OutlierStats } from "../forecasts/outliers";
+import { computeOutliers } from "../forecasts/outliers";
+import {
+  Stat,
+  Th,
+  effDiFor,
+  fmtDi,
+  fmtInt,
+  fmtVol,
+  indexFitsByWellStream,
+  median,
+  type SortDir,
+} from "../forecasts/reviewTable";
 import { ReviewMap } from "../components/ReviewMap";
 import { useMapStore } from "../store/mapStore";
 
@@ -21,8 +36,10 @@ type SortKey =
   | "eur"
   | "eur_per_ft"
   | "fit_r2"
+  | "oil_di"
+  | "gas_di"
+  | "water_di"
   | "downtime";
-type SortDir = "asc" | "desc";
 
 export function ReviewPage() {
   const api14s = useMapStore((s) => s.forecastApi14s);
@@ -68,6 +85,14 @@ export function ReviewPage() {
   // curves as per-well, and gas/water inherit oil's peak).
   const oilRows = useMemo(
     () => allForecastsCorrected.filter((f) => f.stream === "oil"),
+    [allForecastsCorrected],
+  );
+
+  // Per-(api14, stream) lookup so the Di columns can pull each well's
+  // gas + water fits alongside oil without re-scanning the flat list
+  // every row render.
+  const fitsByWellStream = useMemo(
+    () => indexFitsByWellStream(allForecastsCorrected),
     [allForecastsCorrected],
   );
 
@@ -126,6 +151,12 @@ export function ReviewPage() {
             ? r.eur / r.well_lateral_ft
             : 0;
         case "fit_r2": return r.fit_r2 ?? 0;
+        case "oil_di":
+          return effDiFor(fitsByWellStream.get(r.api14)?.get("oil")) ?? -1;
+        case "gas_di":
+          return effDiFor(fitsByWellStream.get(r.api14)?.get("gas")) ?? -1;
+        case "water_di":
+          return effDiFor(fitsByWellStream.get(r.api14)?.get("water")) ?? -1;
         case "downtime": return r.downtime_ratio ?? 0;
       }
     };
@@ -134,7 +165,7 @@ export function ReviewPage() {
       if (typeof av === "string") return sign * av.localeCompare(bv as string);
       return sign * ((av as number) - (bv as number));
     });
-  }, [filtered, sortKey, sortDir]);
+  }, [filtered, sortKey, sortDir, fitsByWellStream]);
 
   function clickHeader(key: SortKey) {
     if (key === sortKey) setSortDir(sortDir === "asc" ? "desc" : "asc");
@@ -147,6 +178,21 @@ export function ReviewPage() {
   const includedCount = filtered.filter((r) => !excluded.has(r.api14)).length;
   const excludedCount = filtered.filter((r) => excluded.has(r.api14)).length;
   const outlierCount = filtered.filter((r) => outliers.outlierApi14s.has(r.api14)).length;
+
+  // Cohort-level median 1-yr effective Di across the currently INCLUDED
+  // wells (matches how the outlier stats / EUR-per-ft band are scoped).
+  const diMedians = useMemo(() => {
+    const included = oilRows.filter((r) => !excluded.has(r.api14));
+    const collect = (stream: Stream): number[] =>
+      included
+        .map((r) => effDiFor(fitsByWellStream.get(r.api14)?.get(stream)))
+        .filter((v): v is number => v != null && Number.isFinite(v));
+    return {
+      oil: median(collect("oil")),
+      gas: median(collect("gas")),
+      water: median(collect("water")),
+    };
+  }, [oilRows, excluded, fitsByWellStream]);
 
   return (
     <div className="page page-two-col">
@@ -212,6 +258,15 @@ export function ReviewPage() {
                 <Th k="fit_r2" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   R²
                 </Th>
+                <Th k="oil_di" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
+                  Oil Di
+                </Th>
+                <Th k="gas_di" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
+                  Gas Di
+                </Th>
+                <Th k="water_di" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
+                  Water Di
+                </Th>
                 <Th k="downtime" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   downtime
                 </Th>
@@ -259,6 +314,9 @@ export function ReviewPage() {
                     <td>{fmtVol(r.eur)}</td>
                     <td>{eurPerFt != null ? eurPerFt.toFixed(1) : "—"}</td>
                     <td>{r.fit_r2 != null ? r.fit_r2.toFixed(3) : "—"}</td>
+                    <td>{fmtDi(effDiFor(fitsByWellStream.get(r.api14)?.get("oil")))}</td>
+                    <td>{fmtDi(effDiFor(fitsByWellStream.get(r.api14)?.get("gas")))}</td>
+                    <td>{fmtDi(effDiFor(fitsByWellStream.get(r.api14)?.get("water")))}</td>
                     <td>
                       {r.downtime_ratio != null
                         ? `${(r.downtime_ratio * 100).toFixed(0)}%`
@@ -289,7 +347,7 @@ export function ReviewPage() {
               })}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={12} className="muted" style={{ textAlign: "center" }}>
+                  <td colSpan={15} className="muted" style={{ textAlign: "center" }}>
                     {api14s.length === 0
                       ? "select wells on the map and forecast them before reviewing"
                       : "no rows match the current filters"}
@@ -337,6 +395,13 @@ export function ReviewPage() {
             />
           </section>
         )}
+
+        <section className="filter-section">
+          <h3>Di (1-yr effective) — median</h3>
+          <Stat label="Oil" value={fmtDi(diMedians.oil)} />
+          <Stat label="Gas" value={fmtDi(diMedians.gas)} />
+          <Stat label="Water" value={fmtDi(diMedians.water)} />
+        </section>
 
         <button
           type="button"
@@ -387,47 +452,6 @@ export function ReviewPage() {
   );
 }
 
-function Th({
-  k,
-  sortKey,
-  sortDir,
-  onClick,
-  children,
-}: {
-  k: SortKey;
-  sortKey: SortKey;
-  sortDir: SortDir;
-  onClick: (k: SortKey) => void;
-  children: React.ReactNode;
-}) {
-  const active = k === sortKey;
-  return (
-    <th className={`sortable ${active ? "active" : ""}`} onClick={() => onClick(k)}>
-      {children}
-      {active && <span className="sort-arrow">{sortDir === "asc" ? "▲" : "▼"}</span>}
-    </th>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
-      <span className="stat-label">{label}</span>
-      <span className="stat-value">{value}</span>
-    </div>
-  );
-}
-
-function fmtInt(v: number | null | undefined): string {
-  if (v == null) return "—";
-  return Math.round(v).toLocaleString();
-}
-function fmtVol(v: number | null | undefined): string {
-  if (v == null) return "—";
-  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
-  if (v >= 1000) return `${(v / 1000).toFixed(1)}k`;
-  return v.toFixed(0);
-}
 function pct(n: number, d: number): string {
   if (d === 0) return "0%";
   return `${Math.round((n / d) * 100)}%`;

@@ -13,7 +13,6 @@ interface Props {
 export function Sparkline({ history, forecast, width = 120, height = 28 }: Props) {
   const all = [...history, ...forecast];
   if (all.length === 0) return <svg width={width} height={height} />;
-  const xMin = 0;
   const xMax = Math.max(...all.map((p) => p.t)) || 1;
   const yMax = Math.max(...all.map((p) => p.y)) || 1;
 

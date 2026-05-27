@@ -74,6 +74,16 @@ export interface AggregatePayload {
   normalization_basis: NormalizationBasis;
   alignment_method: AlignmentMethod;
   streams: { oil: StreamSeries; gas: StreamSeries; water: StreamSeries };
+  // Phase 2.5: observed-only aggregation (empirical bands, no fits)
+  // for the workspace QC overlay. Absent on curves saved before
+  // Phase 2.5 — frontend hides the QC chart in that case.
+  observed_streams?: {
+    oil: StreamSeries;
+    gas: StreamSeries;
+    water: StreamSeries;
+  };
+  observed_n_months?: number;
+  observed_n_wells?: number;
 }
 
 export interface TypeCurveSummary {
@@ -87,6 +97,10 @@ export interface TypeCurveSummary {
   version_of: string | null;
   // Owning deal (1:N). Null when the curve isn't assigned to any deal.
   deal_id: string | null;
+  // True when the curve's underlying overrides / globals / membership
+  // have changed since the last aggregation (set by Phase 2). Phase 1
+  // surfaces it; defaults false on existing curves.
+  is_stale?: boolean;
 }
 
 export interface TypeCurveRow extends TypeCurveSummary {
@@ -213,6 +227,107 @@ export async function fetchTypeCurveWellStats(
   const r = await apiFetch(`/api/type-curves/${id}/well-stats`);
   if (!r.ok) throw new Error(`well-stats failed: ${r.status}`);
   return (await r.json()) as TypeCurveWellStat[];
+}
+
+// ============ Workspace endpoint (Phase 1: read-only) ============
+
+// Per-stream resolved forecast inside a TC workspace. ``source``
+// surfaces whether the payload came from an override, a global
+// forecast, or "missing" (no forecast for that stream).
+export interface WorkspaceStreamForecast {
+  source: "override" | "global" | "missing";
+  // Same shape as the per-stream payload of a global forecast row —
+  // params + qi/Di/b/Df/eur/fit_r2/manual_override/locked/... — so
+  // ForecastDetailModal can render it unchanged. Null iff source ===
+  // "missing".
+  payload: Record<string, unknown> | null;
+}
+
+export interface WorkspaceWell {
+  api14: string;
+  well_name: string | null;
+  well_operator: string | null;
+  well_formation: string | null;
+  well_lateral_ft: number | null;
+  well_first_prod_date: string | null;
+  well_county: string | null;
+  oil: WorkspaceStreamForecast;
+  gas: WorkspaceStreamForecast;
+  water: WorkspaceStreamForecast;
+}
+
+export async function fetchTypeCurveWorkspaceWells(
+  id: string,
+): Promise<WorkspaceWell[]> {
+  const r = await apiFetch(`/api/type-curves/${id}/wells`);
+  if (!r.ok) throw new Error(`workspace wells failed: ${r.status}`);
+  return (await r.json()) as WorkspaceWell[];
+}
+
+// ============ Phase 2: workspace edits ============
+//
+// Each call mutates the TC server-side. The workspace re-fetches its
+// well list after every mutation rather than reconciling locally —
+// keeps the override/global/missing source flags honest and avoids
+// drift between the TC row's series and the per-well decoration.
+
+// Stream type — re-exported from the forecasts API so callers can
+// import everything from one place when wiring Phase 2 endpoints.
+export type { Stream } from "./forecasts";
+
+export async function putForecastOverride(
+  id: string,
+  api14: string,
+  stream: "oil" | "gas" | "water",
+  params: { qi: number; Di: number; b: number; Df: number },
+): Promise<WorkspaceStreamForecast> {
+  const r = await apiFetch(
+    `/api/type-curves/${id}/overrides/${api14}/${stream}`,
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(params),
+    },
+  );
+  if (!r.ok) throw new Error(`override write failed: ${r.status} ${await r.text()}`);
+  return (await r.json()) as WorkspaceStreamForecast;
+}
+
+export async function deleteForecastOverride(
+  id: string,
+  api14: string,
+  stream: "oil" | "gas" | "water",
+): Promise<WorkspaceStreamForecast> {
+  const r = await apiFetch(
+    `/api/type-curves/${id}/overrides/${api14}/${stream}`,
+    { method: "DELETE" },
+  );
+  if (!r.ok) throw new Error(`override delete failed: ${r.status} ${await r.text()}`);
+  return (await r.json()) as WorkspaceStreamForecast;
+}
+
+export async function patchTypeCurveMembership(
+  id: string,
+  body: { add?: string[]; remove?: string[] },
+): Promise<TypeCurveRow> {
+  const r = await apiFetch(`/api/type-curves/${id}/membership`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      add: body.add ?? [],
+      remove: body.remove ?? [],
+    }),
+  });
+  if (!r.ok) throw new Error(`membership patch failed: ${r.status} ${await r.text()}`);
+  return (await r.json()) as TypeCurveRow;
+}
+
+export async function reaggregateTypeCurve(id: string): Promise<TypeCurveRow> {
+  const r = await apiFetch(`/api/type-curves/${id}/reaggregate`, {
+    method: "POST",
+  });
+  if (!r.ok) throw new Error(`reaggregate failed: ${r.status} ${await r.text()}`);
+  return (await r.json()) as TypeCurveRow;
 }
 
 // CSV export — auth-aware download via blob.

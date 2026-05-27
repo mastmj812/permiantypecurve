@@ -23,6 +23,12 @@ export interface GunBarrelProps {
   // unchecked wells render at lowered opacity. Toggle via onToggle.
   selectedApi14s: Set<string>;
   onToggle: (api14: string) => void;
+  // Shared hover state lifted into the InspectModal — lets the
+  // production charts and the gun-barrel highlight the same well at
+  // the same time. Both undefined when this component is reused
+  // outside the modal.
+  hoveredApi14?: string | null;
+  onHover?: (api14: string | null) => void;
   width?: number;
   height?: number;
 }
@@ -151,10 +157,15 @@ export function GunBarrel({
   wells,
   selectedApi14s,
   onToggle,
+  hoveredApi14 = null,
+  onHover,
   width = 880,
   height = 320,
 }: GunBarrelProps) {
   const { projected, axisLabel } = useMemo(() => projectWells(wells), [wells]);
+  // Local hover keeps the projected x/y for tooltip positioning. The
+  // *which-well-is-hovered* truth lives at hoveredApi14 (the lifted
+  // prop) so the production charts can react to the same hover.
   const [hover, setHover] = useState<Projected | null>(null);
 
   const plotArea = {
@@ -281,10 +292,19 @@ export function GunBarrel({
         </g>
       ))}
 
-      {/* Well circles */}
+      {/* Well circles. Hovered well stays at full opacity + thicker
+          stroke; other selected wells fade slightly so the highlight
+          reads. Deselected wells stay ghosted regardless of hover. */}
       {projected.map((p) => {
         const color = colorForFormation(p.well.formation);
         const selected = selectedApi14s.has(p.api14);
+        const isHovered = hoveredApi14 === p.api14;
+        const anyHover = hoveredApi14 != null;
+        const opacity = !selected
+          ? 0.35
+          : anyHover && !isHovered
+            ? 0.4
+            : 1;
         return (
           <circle
             key={p.api14}
@@ -294,12 +314,18 @@ export function GunBarrel({
             className="gun-barrel-well-circle"
             fill={p.tvdEstimated ? "none" : color}
             stroke={color}
-            strokeWidth={1.5}
-            opacity={selected ? 1 : 0.35}
+            strokeWidth={isHovered ? 2.5 : 1.5}
+            opacity={opacity}
             style={{ cursor: "pointer" }}
             onClick={() => onToggle(p.api14)}
-            onMouseEnter={() => setHover(p)}
-            onMouseLeave={() => setHover((h) => (h?.api14 === p.api14 ? null : h))}
+            onMouseEnter={() => {
+              setHover(p);
+              onHover?.(p.api14);
+            }}
+            onMouseLeave={() => {
+              setHover((h) => (h?.api14 === p.api14 ? null : h));
+              onHover?.(null);
+            }}
           />
         );
       })}

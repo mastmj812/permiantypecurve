@@ -16,6 +16,7 @@ at most one deal via ``type_curves.deal_id``.
 from __future__ import annotations
 
 import io
+import math
 import re
 import uuid
 from datetime import datetime
@@ -98,6 +99,7 @@ def _curve_summary(tc: TypeCurve) -> TypeCurveSummary:
         created_at=tc.created_at,
         version_of=tc.version_of,
         deal_id=tc.deal_id,
+        is_stale=bool(tc.is_stale),
     )
 
 
@@ -399,6 +401,12 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
         rates_by_stream[s_name] = _evaluate_fitted_rates(s or {})
         cums_by_stream[s_name] = {k: 0.0 for k in _PERCENTILE_KEYS_WITH_MEAN}
 
+    # Trapezoid rule: month K's volume = (rate at start + rate at end)
+    # / 2 * dt, last month flat-extrapolated. Mirrors the frontend's
+    # cumulateNumericArray + the metadata sheet's _fitted_eur_per_1000ft
+    # so the xlsx cum column tracks the closed-form scipy.quad EUR
+    # (= PPTX value, = UI EUR-table value) to <0.1% on Permian fits.
+    # The older right-endpoint rectangle rule had a ~0.2% bias.
     for i in range(_FORECAST_N_MONTHS):
         row: list[Any] = [i + 1]
         for s_name in ("oil", "gas", "water"):
@@ -411,7 +419,13 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
                     row.append(None)
                     continue
                 rate = float(arr[i])
-                cum_by_pct[key] += rate * _DAYS_PER_MONTH
+                nxt = arr[i + 1] if i + 1 < len(arr) else None
+                b = (
+                    float(nxt)
+                    if nxt is not None and math.isfinite(float(nxt))
+                    else rate
+                )
+                cum_by_pct[key] += (rate + b) / 2.0 * _DAYS_PER_MONTH
                 row.append(rate)
                 row.append(cum_by_pct[key])
         ws.append(row)

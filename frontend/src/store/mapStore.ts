@@ -68,6 +68,24 @@ export interface MapState {
   setShowSections: (v: boolean) => void;
   showWellsticks: boolean;
   setShowWellsticks: (v: boolean) => void;
+
+  // ---- TC add-wells mode ----
+  // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
+  // route. Replaces the cohort bar's normal "Add staged → cohort" flow
+  // with an "Add N wells to TC: X" button that PATCHes the TC's
+  // membership and returns to the workspace. Null in the normal map
+  // flow (cohort staging) so existing UX is unaffected.
+  tcAddWellsMode: {
+    tcId: string;
+    tcName: string;
+    // Snapshot of the TC's current included_api14s — lets the panel
+    // count "wells you're about to add (excluding those already in
+    // the TC)" without re-fetching the TC on every selection change.
+    existingApi14s: Set<string>;
+  } | null;
+  setTcAddWellsMode: (
+    mode: { tcId: string; tcName: string; existingApi14s: Set<string> } | null,
+  ) => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -132,4 +150,7 @@ export const useMapStore = create<MapState>((set) => ({
   setShowSections: (showSections) => set({ showSections }),
   showWellsticks: true,
   setShowWellsticks: (showWellsticks) => set({ showWellsticks }),
+
+  tcAddWellsMode: null,
+  setTcAddWellsMode: (tcAddWellsMode) => set({ tcAddWellsMode }),
 }));

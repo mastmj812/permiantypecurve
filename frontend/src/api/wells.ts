@@ -28,9 +28,18 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   return params.toString();
 }
 
-export function tileUrlTemplate(spec: FilterSpec): string {
+export function tileUrlTemplate(
+  spec: FilterSpec,
+  opts?: { alwaysLines?: boolean },
+): string {
   const q = filterSpecToQuery(spec);
-  const suffix = q ? `?${q}` : "";
+  // The slide-export map passes alwaysLines so wells render as sticks
+  // at every zoom (the backend's default returns surface points below
+  // z=9, which looks like dots on the slide for spread-out cohorts).
+  const params = new URLSearchParams(q);
+  if (opts?.alwaysLines) params.set("always_lines", "1");
+  const qs = params.toString();
+  const suffix = qs ? `?${qs}` : "";
   return `/api/wells/tiles/{z}/{x}/{y}.mvt${suffix}`;
 }
 

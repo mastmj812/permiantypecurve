@@ -23,7 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
@@ -105,6 +105,7 @@ WITH bounds AS (
 mvtgeom AS (
   SELECT
     w.api14,
+    w.name,
     w.formation,
     w.operator,
     w.status::text AS status,
@@ -142,6 +143,7 @@ WITH bounds AS (
 mvtgeom AS (
   SELECT
     w.api14,
+    w.name,
     w.formation,
     w.operator,
     w.status::text AS status,
@@ -179,6 +181,14 @@ def well_tile(
     x: int = Path(ge=0),
     y: int = Path(ge=0),
     spec: FilterSpec = Depends(parse_filter_query),
+    always_lines: bool = Query(
+        default=False,
+        description=(
+            "When true, return wellstick LINESTRINGs at every zoom instead "
+            "of the surface-point fallback below z=9. Used by the PowerPoint "
+            "slide map so wells render as sticks regardless of cohort spread."
+        ),
+    ),
     session: Session = Depends(get_session),
 ) -> Response:
     if x >= (1 << z) or y >= (1 << z):
@@ -187,7 +197,8 @@ def well_tile(
     filter_sql, params = _build_filter_sql(spec)
     params.update({"z": z, "x": x, "y": y})
 
-    body_template = _points_sql() if z <= POINTS_MAX_Z else _lines_sql()
+    use_lines = always_lines or z > POINTS_MAX_Z
+    body_template = _lines_sql() if use_lines else _points_sql()
     sql = body_template.format(filter_sql=filter_sql)
 
     result = session.execute(text(sql), params).scalar()

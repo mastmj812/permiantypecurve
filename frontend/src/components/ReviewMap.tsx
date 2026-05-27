@@ -108,7 +108,7 @@ function buildStyle(): StyleSpecification {
         url: "pmtiles:///api/basemap/permian.pmtiles",
       },
     },
-    layers: layers("protomaps", "light"),
+    layers: layers("protomaps", "light", "en"),
   };
 }
 

@@ -76,6 +76,11 @@ class EnverusClient(ABC):
         basin: str,
         county: str | None = None,
         updated_since: datetime | None = None,
+        # Server-side scope filters — see PrismClient for usage notes.
+        # Defaults are None on the interface so legacy callers (and the
+        # DI-direct fallback) keep working without changes.
+        first_prod_after: date | None = None,
+        min_lateral_ft: float | None = None,
     ) -> Iterator[WellHeader]: ...
 
     @abstractmethod

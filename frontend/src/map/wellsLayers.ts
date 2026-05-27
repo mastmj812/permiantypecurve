@@ -29,12 +29,17 @@ export const WELLS_LINES_DASHED_COHORT_LAYER = "wells-lines-dashed-cohort";
 export const POINTS_MAXZOOM = 9;     // exclusive — switch to lines at 9
 export const LINES_MINZOOM = 9;
 
+// Cast via `unknown` because TS can't statically prove the spread of
+// formationMatchPairs() satisfies MapLibre's recursive
+// ExpressionSpecification union — but at runtime MapLibre validates
+// the JSON and we already encode the (input, output) pair convention
+// the spec requires.
 const FORMATION_COLOR_EXPR: ExpressionSpecification = [
   "match",
   ["get", "formation"],
   ...formationMatchPairs(),
   OTHER_COLOR,
-] as ExpressionSpecification;
+] as unknown as ExpressionSpecification;
 
 // `feature-state.selected === true` → bright yellow halo; else formation color.
 const SELECTED_COLOR_EXPR: ExpressionSpecification = [

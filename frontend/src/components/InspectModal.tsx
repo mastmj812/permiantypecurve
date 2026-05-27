@@ -29,6 +29,11 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
     () => new Set(api14s),
   );
 
+  // Lifted hover state so the gun-barrel and the rate/cum charts stay
+  // in lockstep: hovering a circle bolds the corresponding line (and
+  // vice versa). Null when nothing is hovered.
+  const [hoveredApi14, setHoveredApi14] = useState<string | null>(null);
+
   // ESC closes, same convention as ForecastDetailModal. Skip when
   // focus is in an input so we don't fight inputs in nested controls.
   useEffect(() => {
@@ -140,6 +145,8 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
                 <GunBarrel
                   wells={wells}
                   selectedApi14s={selected}
+                  hoveredApi14={hoveredApi14}
+                  onHover={setHoveredApi14}
                   onToggle={toggle}
                 />
               </div>
@@ -147,6 +154,9 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
                 <InspectProductionCharts
                   api14s={api14s}
                   wellsByApi14={wellsByApi14}
+                  selectedApi14s={selected}
+                  hoveredApi14={hoveredApi14}
+                  onHover={setHoveredApi14}
                 />
               </div>
             </>

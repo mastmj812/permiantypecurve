@@ -23,7 +23,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { getStoredToken } from "../../api/auth";
 import { DEFAULT_FILTER_SPEC } from "../../api/types";
 import { type WellDetailLite, tileUrlTemplate } from "../../api/wells";
-import { cohortLineFilter, cohortPointFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
+import { cohortLineFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
 
 // All cohort wells should render regardless of status (saved type
 // curves can be built on a mix of PDP + DUC + SI), so override the
@@ -41,7 +41,6 @@ interface Props {
 }
 
 const COHORT_GREEN = "#16a34a";
-const LAYER_POINTS = "slide-wells-points";
 const LAYER_SOLID = "slide-wells-lines-solid";
 const LAYER_DASHED = "slide-wells-lines-dashed";
 
@@ -212,7 +211,7 @@ function buildStyle(): StyleSpecification {
         url: "pmtiles:///api/basemap/permian.pmtiles",
       },
     },
-    layers: layers("protomaps", "light"),
+    layers: layers("protomaps", "light", "en"),
   };
 }
 
@@ -267,47 +266,36 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
 
     const setup = () => {
       if (map.getSource(WELLS_SOURCE_ID)) return;
+      // alwaysLines: the slide map asks the backend for wellstick
+      // LINESTRINGs at every zoom (instead of the default points-below-
+      // z9 / lines-above-z9 split). Lets us render wells as sticks
+      // regardless of how spread out the cohort is — a wide deal can
+      // fit-bound to z=6 where the default would serve dots.
       map.addSource(WELLS_SOURCE_ID, {
         type: "vector",
-        tiles: [withOrigin(tileUrlTemplate(SLIDE_FILTER_SPEC))],
+        tiles: [
+          withOrigin(tileUrlTemplate(SLIDE_FILTER_SPEC, { alwaysLines: true })),
+        ],
         minzoom: 3,
         maxzoom: 14,
-        promoteId: { wells_points: "api14", wells_lines: "api14" },
+        promoteId: { wells_lines: "api14" },
       });
 
-      // Points (low zoom) — filtered to cohort api14s, green.
-      const pointsLayer: LayerSpecification = {
-        id: LAYER_POINTS,
-        type: "circle",
-        source: WELLS_SOURCE_ID,
-        "source-layer": "wells_points",
-        maxzoom: 9,
-        filter: cohortPointFilter(api14s),
-        paint: {
-          "circle-radius": [
-            "interpolate", ["linear"], ["zoom"],
-            3, 2.5,
-            6, 4,
-            8, 6,
-          ],
-          "circle-color": COHORT_GREEN,
-          "circle-stroke-width": 0.75,
-          "circle-stroke-color": "#064e3b",
-          "circle-opacity": 0.95,
-        },
-      };
+      // Both line layers — no minzoom — since the source now serves
+      // line geometry at every zoom. The dashed layer marks wells
+      // without a confirmed heel survey (`surface_to_bh`).
       const solidLayer: LayerSpecification = {
         id: LAYER_SOLID,
         type: "line",
         source: WELLS_SOURCE_ID,
         "source-layer": "wells_lines",
-        minzoom: 9,
         filter: cohortLineFilter(api14s, "heel_to_bh"),
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": COHORT_GREEN,
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
+            5, 1.0,
             9, 2.0,
             12, 3.5,
             14, 5.0,
@@ -320,13 +308,13 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
         type: "line",
         source: WELLS_SOURCE_ID,
         "source-layer": "wells_lines",
-        minzoom: 9,
         filter: cohortLineFilter(api14s, "surface_to_bh"),
         layout: { "line-cap": "butt", "line-join": "round" },
         paint: {
           "line-color": COHORT_GREEN,
           "line-width": [
             "interpolate", ["linear"], ["zoom"],
+            5, 0.9,
             9, 1.8,
             12, 3.0,
             14, 4.5,
@@ -335,7 +323,6 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
           "line-opacity": 0.9,
         },
       };
-      map.addLayer(pointsLayer);
       map.addLayer(solidLayer);
       map.addLayer(dashedLayer);
 

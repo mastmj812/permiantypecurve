@@ -23,6 +23,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { listDeals, type DealSummary } from "../api/deals";
+import { patchTypeCurveMembership } from "../api/typeCurves";
 import {
   activeCohort,
   useCohortStore,
@@ -45,6 +46,11 @@ export function CohortBar() {
   const setForecastApi14s = useMapStore((s) => s.setForecastApi14s);
   const setCohortHandoff = useMapStore((s) => s.setCohortHandoff);
   const setCurrentPage = useMapStore((s) => s.setCurrentPage);
+  const tcAddWellsMode = useMapStore((s) => s.tcAddWellsMode);
+  const setTcAddWellsMode = useMapStore((s) => s.setTcAddWellsMode);
+  const clearSelection = useMapStore((s) => s.clearSelection);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addErr, setAddErr] = useState<string | null>(null);
 
   const [showNewModal, setShowNewModal] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
@@ -90,6 +96,90 @@ export function CohortBar() {
     setCohortHandoff(active.name, active.deal_id);
     setCurrentPage("forecast");
   };
+
+  // -------- TC add-wells mode: hijack the bar for membership PATCH ---
+  // Replaces the cohort UI entirely when the user came in via the
+  // `#/type-curves/{id}/add-wells` route. The cohort store is left
+  // alone — this is a separate flow that targets the TC directly.
+  if (tcAddWellsMode) {
+    const newWells = stagedArray.filter(
+      (a) => !tcAddWellsMode.existingApi14s.has(a),
+    );
+    const dupCount = stagedCount - newWells.length;
+    const tcId = tcAddWellsMode.tcId;
+    const tcName = tcAddWellsMode.tcName;
+
+    async function handleAddToTc() {
+      if (newWells.length === 0 || addBusy) return;
+      setAddBusy(true);
+      setAddErr(null);
+      try {
+        await patchTypeCurveMembership(tcId, { add: newWells });
+        // Clear local state + leave the mode; navigate back to workspace.
+        clearSelection();
+        setTcAddWellsMode(null);
+        // Manual hashchange dispatch — see App.tsx::navigateHash for why
+        // setting window.location.hash alone is unreliable across browsers.
+        const base = window.location.pathname + window.location.search;
+        window.history.pushState(null, "", `${base}#/type-curves/${tcId}/wells`);
+        window.dispatchEvent(new HashChangeEvent("hashchange"));
+      } catch (e) {
+        setAddErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setAddBusy(false);
+      }
+    }
+
+    function handleCancel() {
+      setTcAddWellsMode(null);
+      window.location.hash = `#/type-curves/${tcId}/wells`;
+    }
+
+    return (
+      <div className="cohort-bar" style={{ background: "#eff6ff" }}>
+        <div className="cohort-bar-label">
+          <strong>Add wells to {tcName}</strong>
+          <span className="muted">
+            · {tcAddWellsMode.existingApi14s.size} already in TC
+          </span>
+          <span className="muted">
+            · lasso / box / click wells on the map to stage them
+          </span>
+        </div>
+        <div className="cohort-bar-actions">
+          {dupCount > 0 && (
+            <span className="muted" style={{ fontSize: 11 }}>
+              {dupCount} staged well{dupCount === 1 ? "" : "s"} already in TC
+              (will be ignored)
+            </span>
+          )}
+          {addErr && (
+            <span className="alert alert-error" style={{ fontSize: 11 }}>
+              {addErr}
+            </span>
+          )}
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={newWells.length === 0 || addBusy}
+            title={
+              newWells.length === 0
+                ? "Stage at least one well that isn't already in the TC"
+                : `Add ${newWells.length} new well${newWells.length === 1 ? "" : "s"} to ${tcName}`
+            }
+            onClick={handleAddToTc}
+          >
+            {addBusy
+              ? "adding…"
+              : `Add ${newWells.length} to TC`}
+          </button>
+          <button type="button" className="tb-btn" onClick={handleCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // -------- No active cohort: minimal bar -----------------------------
   if (!active) {

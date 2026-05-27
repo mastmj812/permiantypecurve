@@ -18,7 +18,7 @@ import io
 import math
 import uuid
 import zipfile
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
@@ -37,7 +37,12 @@ from app.type_curves.aggregate import (
     aggregate,
     serialize_aggregate,
 )
-from app.type_curves.loader import load_well_series
+from app.type_curves.loader import load_well_series, load_wells_with_forecast
+
+# Forecast-aggregation horizon. 50 years × 12 months. Picks up the same
+# horizon the per-well fit_p50_series + frontend FULL_FORECAST_N_MONTHS
+# use so the bands line up with the per-percentile fit downstream.
+_FORECAST_N_MONTHS = 600
 
 router = APIRouter(prefix="/type-curves", tags=["type_curves"])
 log = get_logger("api.type_curves")
@@ -96,7 +101,12 @@ class TypeCurvePreviewRequest(BaseModel):
     Df: float
     qo: float
     peak_index: int = Field(ge=0, le=11)
-    n_months: int = Field(ge=1, le=240)
+    # 720 = 60 years × 12 months. Phase 2.5 bumped the canonical
+    # aggregation horizon to 600 months (50 yr) so the TweakPanel
+    # previews at that length to match the saved series; the older
+    # 240-month cap (20 yr) rejected 600 with a 422. Keep a little
+    # headroom past 600 in case a future horizon change wants it.
+    n_months: int = Field(ge=1, le=720)
 
 
 class TypeCurvePreviewResponse(BaseModel):
@@ -118,6 +128,10 @@ class TypeCurveRow(BaseModel):
     created_at: datetime
     version_of: uuid.UUID | None
     deal_id: uuid.UUID | None
+    # Workspace flag — true when overrides / globals / membership have
+    # changed since the last aggregation. Phase 1 reads only; Phase 2
+    # sets it from forecast/membership edits.
+    is_stale: bool = False
 
     @classmethod
     def from_orm_row(cls, tc: TypeCurve) -> "TypeCurveRow":
@@ -133,6 +147,7 @@ class TypeCurveRow(BaseModel):
             created_at=tc.created_at,
             version_of=tc.version_of,
             deal_id=tc.deal_id,
+            is_stale=bool(tc.is_stale),
         )
 
 
@@ -148,6 +163,7 @@ class TypeCurveSummary(BaseModel):
     created_at: datetime
     version_of: uuid.UUID | None
     deal_id: uuid.UUID | None
+    is_stale: bool = False
 
 
 class TypeCurveWellStat(BaseModel):
@@ -163,6 +179,65 @@ class TypeCurveWellStat(BaseModel):
     lateral_ft: float | None
     oil_eur: float | None
     oil_eur_per_ft: float | None
+
+
+class WorkspaceStream(BaseModel):
+    """One stream's resolved forecast for a well inside a TC workspace.
+
+    ``source`` is "override" when the payload came from
+    ``type_curves.forecast_overrides``, "global" when it came from the
+    well's global forecast row, "missing" when no forecast exists for
+    that (well, stream) pair.
+
+    ``payload`` is None iff source == "missing". Otherwise it carries
+    the per-stream fit shape the frontend already knows how to render
+    (same keys ForecastRow surfaces for a global forecast).
+    """
+
+    source: str  # "override" | "global" | "missing"
+    payload: dict[str, Any] | None
+
+
+class WorkspaceWell(BaseModel):
+    """One row in the TC workspace's well list."""
+
+    api14: str
+    well_name: str | None
+    well_operator: str | None
+    well_formation: str | None
+    well_lateral_ft: float | None
+    well_first_prod_date: date | None  # ISO from Well.first_prod_date
+    well_county: str | None
+    oil: WorkspaceStream
+    gas: WorkspaceStream
+    water: WorkspaceStream
+
+
+class OverrideWriteRequest(BaseModel):
+    """Body for PUT /type-curves/{id}/overrides/{api14}/{stream}.
+
+    Minimal surface: the user supplies the four Arps params (mirrors
+    the per-well ``patch_forecast`` body). Server fills in the rest
+    (eur, model_type, di_initial, etc.) so the override payload shape
+    matches what the resolver returns for a global forecast.
+    """
+
+    qi: float
+    Di: float
+    b: float
+    Df: float
+
+
+class MembershipPatch(BaseModel):
+    """Body for PATCH /type-curves/{id}/membership.
+
+    ``add`` and ``remove`` are processed in that order (remove wins on
+    the same api14 — pathological but cheap to define explicitly).
+    Empty lists are valid no-ops.
+    """
+
+    add: list[str] = Field(default_factory=list)
+    remove: list[str] = Field(default_factory=list)
 
 
 class PatchRequest(BaseModel):
@@ -274,10 +349,40 @@ def _compute(
     basis: str,
     alignment: str,
     n_months: int | None,
+    tc: TypeCurve | None = None,
 ) -> dict[str, Any]:
+    """Build the persisted ``series`` JSONB.
+
+    Two parallel aggregations, both serialized into the output:
+
+      * ``streams`` — the canonical deliverable. Each well contributes
+        observed pre-peak ramp + analytic post-peak forecast (override
+        → global). Aggregated out to ``_FORECAST_N_MONTHS`` so the
+        bands and the fitted P50 reflect the per-well forecasts +
+        overrides the engineer published. Override edits propagate
+        here; this is what re-aggregation refreshes.
+      * ``observed_streams`` — empirical reference. Aggregates only the
+        observed ``production_monthly`` rates (no forecast tail), capped
+        at the cohort's observed history (or the request's ``n_months``).
+        Surfaces on the workspace as a QC overlay; not used downstream.
+
+    ``tc`` is None on the compute-preview path and on initial save (the
+    TC row doesn't exist yet → no overrides). The forecast aggregator
+    resolves to globals in that case. On re-aggregation ``tc`` is the
+    persisted row and overrides flow through.
+    """
     validated_alignment = _validate_alignment(alignment)
-    wells = load_well_series(session, api14s, alignment=validated_alignment)
-    if not wells:
+    validated_basis = _validate_basis(basis)
+
+    # --- canonical forecast-based aggregation ---
+    forecast_wells = load_wells_with_forecast(
+        session,
+        tc if tc is not None else _empty_tc_for_resolver(),
+        api14s,
+        alignment=validated_alignment,
+        n_months=_FORECAST_N_MONTHS,
+    )
+    if not forecast_wells:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -286,25 +391,19 @@ def _compute(
             ),
         )
     agg = aggregate(
-        wells,
-        normalization_basis=_validate_basis(basis),
+        forecast_wells,
+        normalization_basis=validated_basis,
         alignment_method=validated_alignment,
-        n_months=n_months,
+        n_months=_FORECAST_N_MONTHS,
     )
-    # Fit an Arps decline to each stream's P50. This is "the type curve"
-    # in operator parlance — the smooth analytical line they publish on
-    # top of the raw cross-well median. Mutate StreamSeries in place via
-    # dataclasses.replace since the dataclass is frozen.
+    # Fit Arps to each stream's P50 + per-percentile. The cross-well P50
+    # of analytic projections is already smooth, so this fit is mostly a
+    # parameter-extraction step (qi/Di/b/Df) for the param table and the
+    # downstream economics export. R² is near 1.0 by construction.
     from dataclasses import replace
 
     from app.type_curves.fit_p50 import fit_p50_series
 
-    # Fit Arps to the P50 (for the smoothed-overlay line) AND to every
-    # percentile + mean (for the 50-yr EUR column). The P50 fit drives
-    # the chart; the per-percentile fits drive the EUR table — without
-    # them, the EUR cells would just be data-window cumsums, which
-    # undershoot the per-well projection by ~25–45% on Permian
-    # unconventionals (most of EUR lives in the year-5+ tail).
     fitted_streams = {}
     for stream_name, stream in agg.streams.items():
         fitted = fit_p50_series(stream.p50)
@@ -313,12 +412,6 @@ def _compute(
         for key in ("p10", "p25", "p50", "p75", "p90", "mean"):
             series = getattr(stream, key)
             r = fit_p50_series(series)
-            # Keep the full fit (qi/Di/b/Df/qo/peak_index/…) so the CSV
-            # export can re-evaluate each percentile out to 600 months.
-            # `r` includes a `smoothed_rate` field bounded by n_months —
-            # we drop that here to keep the persisted JSON small; the
-            # export evaluates a fresh smoothed_rate at its target
-            # horizon from the parameters alone.
             fitted_eur[key] = r["eur_per_unit"] if r is not None else None
             if r is not None:
                 fitted_per_pct[key] = {
@@ -333,7 +426,63 @@ def _compute(
             fitted_per_percentile=fitted_per_pct,
         )
     agg = replace(agg, streams=fitted_streams)
-    return serialize_aggregate(agg)
+    payload = serialize_aggregate(agg)
+
+    # --- empirical observed-only aggregation ---
+    observed_wells = load_well_series(
+        session, api14s, alignment=validated_alignment
+    )
+    if observed_wells:
+        observed_agg = aggregate(
+            observed_wells,
+            normalization_basis=validated_basis,
+            alignment_method=validated_alignment,
+            n_months=n_months,  # honor caller's cap when set
+        )
+        observed_payload = serialize_aggregate(observed_agg)
+        # Strip the fitted blocks — the observed bands are for QC; we
+        # don't publish an Arps fit on them, and leaving the keys at
+        # null would just mirror the absence of a fit.
+        for s in observed_payload.get("streams", {}).values():
+            s.pop("fitted", None)
+            s.pop("fitted_eur_per_unit", None)
+            s.pop("fitted_per_percentile", None)
+        payload["observed_streams"] = observed_payload["streams"]
+        payload["observed_n_months"] = observed_payload["n_months"]
+        payload["observed_n_wells"] = observed_payload["n_wells"]
+
+        # Replace the forecast streams' well_count ribbon with the
+        # OBSERVED well count, zero-padded to the forecast horizon.
+        # Under forecast aggregation every well contributes a value at
+        # every month, so the native well_count is a flat solid block —
+        # useless as a chart ribbon. The observed count (wells with
+        # actual production data) is the QC signal engineers expect:
+        # high in the early months, tapering as wells with short
+        # histories drop off, zero past the cohort's observed window.
+        forecast_n = payload.get("n_months") or _FORECAST_N_MONTHS
+        for stream_name, fcst_stream in payload.get("streams", {}).items():
+            obs_stream = payload["observed_streams"].get(stream_name) or {}
+            obs_wc = list(obs_stream.get("well_count") or [])
+            if len(obs_wc) < forecast_n:
+                obs_wc = obs_wc + [0] * (forecast_n - len(obs_wc))
+            else:
+                obs_wc = obs_wc[:forecast_n]
+            fcst_stream["well_count"] = obs_wc
+    else:
+        payload["observed_streams"] = {}
+        payload["observed_n_months"] = 0
+        payload["observed_n_wells"] = 0
+
+    return payload
+
+
+def _empty_tc_for_resolver() -> TypeCurve:
+    """Stub TC carrying empty overrides — used on the compute-preview
+    and initial-save paths where no TC row exists yet. Avoids leaking
+    None through to the resolver."""
+    tc = TypeCurve()
+    tc.forecast_overrides = {}
+    return tc
 
 
 # ============================ compute (preview) ============================
@@ -469,6 +618,7 @@ def list_type_curves(
             created_at=r.created_at,
             version_of=r.version_of,
             deal_id=r.deal_id,
+            is_stale=bool(r.is_stale),
         )
         for r in rows
     ]
@@ -604,6 +754,11 @@ def _fitted_eur_per_1000ft(
     table shows. Raw integral — no economic-limit cutoff (this tool is
     technical-only; economics happens downstream).
 
+    Trapezoid rule: month K's volume = (rate at start + rate at end)/2
+    * dt, last month flat-extrapolated. Closes the small systematic
+    bias (~0.2% on Permian fits) the right-endpoint rectangle rule had
+    against the closed-form ``compute_eur``.
+
     None for any percentile whose underlying series couldn't be fit.
     """
     rates_by_pct = _evaluate_fitted_rates(stream_data)
@@ -613,9 +768,14 @@ def _fitted_eur_per_1000ft(
             out[key] = None
             continue
         cum = 0.0
-        for r in rates:
-            if r is not None and math.isfinite(r):
-                cum += float(r) * _DAYS_PER_MONTH
+        n = len(rates)
+        for i in range(n):
+            a = rates[i]
+            if a is None or not math.isfinite(a):
+                continue
+            nxt = rates[i + 1] if i + 1 < n else None
+            b = float(nxt) if (nxt is not None and math.isfinite(nxt)) else float(a)
+            cum += (float(a) + b) / 2.0 * _DAYS_PER_MONTH
         out[key] = cum
     return out
 
@@ -685,14 +845,26 @@ def _forecast_csv(
     )
     buf = io.StringIO()
     writer = csv.writer(buf)
+    # Columns are bare ``{pct}_{rate|cum}`` — stream is implied by the
+    # filename (oil_forecast.csv / gas_forecast.csv / water_forecast.csv)
+    # and these are forecast-only files (the empirical bands live in
+    # `{stream}_rates.csv` with bare ``p10``/``p25``/... columns, no
+    # ``_rate``/``_cum`` suffix). Matches the deal XLSX's
+    # ``{stream}_{pct}_{rate|cum}`` convention so downstream econ
+    # tooling can speak one schema across both exports.
     header: list[str] = [month_col]
     for key in _PERCENTILE_KEYS_WITH_MEAN:
-        header.append(f"fitted_{key}_rate")
-        header.append(f"fitted_{key}_cum")
+        header.append(f"{key}_rate")
+        header.append(f"{key}_cum")
     writer.writerow(header)
 
-    # Track running cum per percentile so each row's cum is the
-    # cumulative sum of rate × days_per_month up to that month.
+    # Track running cum per percentile via the trapezoid rule: month
+    # K's volume is (rate at start of month + rate at end of month) / 2
+    # * dt. Last month uses the same rate for both endpoints (flat
+    # extrapolation). Matches the closed-form ``compute_eur`` to <0.1%
+    # on Permian fits — the older right-endpoint rectangle rule had a
+    # ~0.2% systematic bias. Kept in sync with the frontend's
+    # ``cumulateNumericArray``.
     cum_by_pct: dict[str, float] = {k: 0.0 for k in _PERCENTILE_KEYS_WITH_MEAN}
     for i in range(_FORECAST_N_MONTHS):
         row: list[Any] = [i + 1]
@@ -703,7 +875,9 @@ def _forecast_csv(
                 row.append("")
                 continue
             rate = float(arr[i])
-            cum_by_pct[key] += rate * _DAYS_PER_MONTH
+            nxt = arr[i + 1] if i + 1 < len(arr) else None
+            b = float(nxt) if (nxt is not None and math.isfinite(nxt)) else rate
+            cum_by_pct[key] += (rate + b) / 2.0 * _DAYS_PER_MONTH
             row.append(f"{rate:.6f}")
             row.append(f"{cum_by_pct[key]:.3f}")
         writer.writerow(row)
@@ -835,20 +1009,21 @@ def get_type_curve_well_stats(
     fields they can't supply, so the frontend can report a well count
     that matches included_api14s exactly.
 
-    EUR is recomputed on the fly from ``forecasts.params`` using the
-    same monthly-trapezoid sum the Review tab's
-    ``eurFromArpsParams`` uses: evaluate the modified-hyperbolic fit
-    out to 600 monthly samples and sum ``rate * DAYS_PER_MONTH``. The
-    persisted ``forecasts.eur`` column was written via
-    ``scipy.integrate.quad`` (continuous integral), which gives a
-    ~3% lower number than the discrete monthly sum on typical Permian
-    unconventionals — reading it directly puts the per-well dots on the
-    probit systematically below the Review summary's mean and would
-    make the slide and the Review tab disagree. Falls back to the
-    stored value when params are missing or non-finite (old forecasts
-    that predate the params column population).
+    EUR is recomputed on the fly from the RESOLVED oil forecast
+    (TC override → global → none) using the same monthly trapezoid
+    that the Review tab's ``eurFromArpsParams`` uses: evaluate the
+    modified-hyperbolic fit out to 600 monthly samples and trapezoid-
+    integrate. Routing through ``resolve_forecast`` keeps the probit
+    dots aligned with what the workspace shows for each well — a TC
+    override edited via the workspace flows through to the deck.
+    Falls back to the stored ``forecasts.eur`` column when params are
+    missing or non-finite (old forecasts that predate the params
+    column population). The persisted ``forecasts.eur`` was written
+    via ``scipy.integrate.quad`` (continuous integral); the trapezoid
+    agrees with it to <0.1% on Permian fits.
     """
     from app.type_curves.fit_p50 import evaluate_fit
+    from app.type_curves.overrides import resolve_forecast
 
     # Same constant the frontend uses (frontend/src/forecasts/arps.ts).
     DAYS_PER_MONTH = 30.4375
@@ -860,65 +1035,466 @@ def get_type_curve_well_stats(
     api14s = list(tc.included_api14s or [])
     if not api14s:
         return []
-    rows = session.execute(
-        select(
-            Well.api14,
-            Well.name,
-            Well.lateral_ft,
-            Forecast.eur,
-            Forecast.model_type,
-            Forecast.params,
+
+    well_rows = session.execute(
+        select(Well.api14, Well.name, Well.lateral_ft).where(
+            Well.api14.in_(api14s)
         )
-        .outerjoin(
-            Forecast,
-            (Forecast.api14 == Well.api14) & (Forecast.stream == Stream.OIL),
-        )
-        .where(Well.api14.in_(api14s))
     ).all()
+    well_by_api14 = {r.api14: r for r in well_rows}
+
+    # Pull only oil forecasts — probit is oil-only today.
+    forecast_rows = session.execute(
+        select(Forecast)
+        .where(Forecast.api14.in_(api14s))
+        .where(Forecast.stream == Stream.OIL)
+    ).scalars().all()
+    forecast_by_api14 = {f.api14: f for f in forecast_rows}
+
     out: list[TypeCurveWellStat] = []
-    for r in rows:
-        lat = float(r.lateral_ft) if r.lateral_ft is not None else None
-        # Recompute via monthly-trapezoid sum so the probit's per-well
-        # values match what the Review tab + EUR-table cells display.
+    for api14 in api14s:
+        wrow = well_by_api14.get(api14)
+        lat = (
+            float(wrow.lateral_ft)
+            if wrow and wrow.lateral_ft is not None
+            else None
+        )
+        name = wrow.name if wrow else None
+
+        resolved = resolve_forecast(
+            tc, api14, Stream.OIL, forecast_by_api14.get(api14)
+        )
+        payload = resolved.payload
         eur: float | None = None
-        if r.params:
+
+        if payload:
+            params = payload.get("params") or {}
             required = ("qi", "Di", "b", "Df")
             if all(
-                k in r.params
-                and isinstance(r.params[k], (int, float))
-                and math.isfinite(float(r.params[k]))
+                k in params
+                and isinstance(params[k], (int, float))
+                and math.isfinite(float(params[k]))
                 for k in required
             ):
                 try:
                     fit = evaluate_fit(
-                        qi=float(r.params["qi"]),
-                        Di=float(r.params["Di"]),
-                        b=float(r.params["b"]),
-                        Df=float(r.params["Df"]),
+                        qi=float(params["qi"]),
+                        Di=float(params["Di"]),
+                        b=float(params["b"]),
+                        Df=float(params["Df"]),
                         # Per-well forecasts start at peak — no ramp prefix.
-                        qo=float(r.params["qi"]),
+                        qo=float(params["qi"]),
                         peak_index=0,
                         n_months=N_MONTHS,
                     )
-                    eur = sum(
-                        rate * DAYS_PER_MONTH for rate in fit["smoothed_rate"]
-                    )
+                    # Trapezoid: month K's volume = (rate at start of
+                    # month + rate at end of month) / 2 * dt, last
+                    # month flat-extrapolated. Mirrors the frontend's
+                    # eurFromArpsParams to within numerical noise.
+                    smoothed = fit["smoothed_rate"]
+                    n = len(smoothed)
+                    eur = 0.0
+                    for i in range(n):
+                        rate_i = float(smoothed[i])
+                        if not math.isfinite(rate_i):
+                            continue
+                        nxt = smoothed[i + 1] if i + 1 < n else rate_i
+                        nxt_f = (
+                            float(nxt)
+                            if math.isfinite(float(nxt))
+                            else rate_i
+                        )
+                        eur += (rate_i + nxt_f) / 2.0 * DAYS_PER_MONTH
                 except Exception:
                     eur = None
-        if eur is None and r.eur is not None:
-            # Fallback: older forecasts without a populated params dict.
-            eur = float(r.eur)
+            if eur is None:
+                # Last-ditch fallback: stored eur on the payload (override
+                # payloads carry it, global rows project it through).
+                stored = payload.get("eur")
+                if stored is not None and math.isfinite(float(stored)):
+                    eur = float(stored)
+
         per_ft = eur / lat if (eur is not None and lat and lat > 0) else None
         out.append(
             TypeCurveWellStat(
-                api14=r.api14,
-                name=r.name,
+                api14=api14,
+                name=name,
                 lateral_ft=lat,
                 oil_eur=eur,
                 oil_eur_per_ft=per_ft,
             )
         )
     return out
+
+
+@router.get("/{type_curve_id}/wells", response_model=list[WorkspaceWell])
+def get_type_curve_workspace_wells(
+    type_curve_id: uuid.UUID, session: Session = Depends(get_session)
+) -> list[WorkspaceWell]:
+    """Per-well resolved forecasts for the TC workspace (Phase 1, read-only).
+
+    Returns one row per ``included_api14`` with each well's joined
+    attributes and a resolved forecast per stream:
+
+      * ``oil`` / ``gas`` / ``water`` → {source, payload}
+      * source = "override" when ``tc.forecast_overrides`` has an entry
+        for (api14, stream), "global" when it falls through to the
+        forecasts table, "missing" when no forecast exists at all.
+
+    All resolution goes through ``resolve_forecast`` so Phase 2 (which
+    will write overrides on edit) shares the same fallback rule. The
+    payload shape mirrors what the frontend already reads for a global
+    forecast — no special-casing in the UI.
+    """
+    from app.type_curves.overrides import resolve_forecast
+
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    api14s = list(tc.included_api14s or [])
+    if not api14s:
+        return []
+
+    # One round-trip: wells joined to their forecasts (any stream). We
+    # group in Python rather than per-stream queries — the per-well
+    # count is small (~10-30) and avoiding the N+1 keeps the endpoint
+    # snappy on the workspace page load.
+    well_rows = session.execute(
+        select(
+            Well.api14,
+            Well.name,
+            Well.operator,
+            Well.formation,
+            Well.lateral_ft,
+            Well.first_prod_date,
+            Well.county,
+        ).where(Well.api14.in_(api14s))
+    ).all()
+    wells_by_api14 = {r.api14: r for r in well_rows}
+
+    forecast_rows = session.execute(
+        select(Forecast).where(Forecast.api14.in_(api14s))
+    ).scalars().all()
+    forecasts_by_well: dict[str, dict[Stream, Forecast]] = {}
+    for f in forecast_rows:
+        forecasts_by_well.setdefault(f.api14, {})[f.stream] = f
+
+    out: list[WorkspaceWell] = []
+    for api14 in api14s:
+        well = wells_by_api14.get(api14)
+        well_forecasts = forecasts_by_well.get(api14, {})
+
+        def _stream(s: Stream) -> WorkspaceStream:
+            resolved = resolve_forecast(tc, api14, s, well_forecasts.get(s))
+            return WorkspaceStream(source=resolved.source, payload=resolved.payload)
+
+        out.append(
+            WorkspaceWell(
+                api14=api14,
+                well_name=well.name if well else None,
+                well_operator=well.operator if well else None,
+                well_formation=well.formation if well else None,
+                well_lateral_ft=(
+                    float(well.lateral_ft)
+                    if well and well.lateral_ft is not None
+                    else None
+                ),
+                well_first_prod_date=well.first_prod_date if well else None,
+                well_county=well.county if well else None,
+                oil=_stream(Stream.OIL),
+                gas=_stream(Stream.GAS),
+                water=_stream(Stream.WATER),
+            )
+        )
+    return out
+
+
+# ============================ Phase 2: workspace edits ============================
+# Per-TC forecast overrides + membership edits + lazy re-aggregation.
+#
+# Architectural reminder (correctness-critical): the canonical bands +
+# fitted P50 come from forecast-based aggregation (Phase 2.5 / Option B):
+# each well contributes observed pre-peak ramp + analytic post-peak
+# forecast (override → global) out to 50 years. So per-well overrides
+# DO change the bands and the fitted P50 — that's why override writes
+# flip is_stale. Re-aggregation rebuilds the panel using current
+# overrides + membership.
+#
+# A second observed-only aggregation lives in series.observed_streams
+# as a workspace QC overlay. The workspace + Type Curve tab read from
+# series.streams (forecast-based); the empirical overlay reads from
+# series.observed_streams.
+# ==================================================================
+
+
+def _resolve_stream(value: str) -> Stream:
+    """Coerce a path-param string ('oil'/'gas'/'water') into the enum
+    and 404 on anything else. Keeps the endpoint signatures readable."""
+    try:
+        return Stream(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=404, detail=f"unknown stream: {value}"
+        ) from exc
+
+
+def _override_payload_from_params(
+    *, qi: float, Di: float, b: float, Df: float
+) -> dict[str, Any]:
+    """Project a (qi, Di, b, Df) tweak into the workspace-payload shape.
+
+    Mirrors the structure ``ResolvedForecast.payload`` carries when
+    sourced from a global forecast row — so override and global look
+    interchangeable to the workspace renderer and to Phase 3's
+    economics export. EUR uses ``compute_eur`` with no economic-limit
+    cutoff (this tool is technical-only — see memory note).
+    """
+    from app.forecasting.eur import compute_eur
+    from app.forecasting.metrics import effective_decline_first_year
+
+    params = {"qi": qi, "Di": Di, "b": b, "Df": Df}
+    eur = compute_eur("modified_hyperbolic", params, economic_limit=0.0)
+    di_eff = effective_decline_first_year(Di, b)
+    return {
+        "params": params,
+        "model_type": "modified_hyperbolic",
+        "qi": qi,
+        "di_initial": Di,
+        "di_effective": di_eff,
+        "b": b,
+        "df_terminal": Df,
+        "eur": eur,
+        "peak_rate": None,
+        "peak_month_date": None,
+        "fit_method": "rate_cum",
+        "fit_r2": None,
+        "fit_rmse": None,
+        "downtime_ratio": None,
+        "manual_override": True,
+        "locked": False,
+    }
+
+
+@router.put(
+    "/{type_curve_id}/overrides/{api14}/{stream}",
+    response_model=WorkspaceStream,
+)
+def put_forecast_override(
+    type_curve_id: uuid.UUID,
+    api14: str,
+    stream: str,
+    body: OverrideWriteRequest,
+    session: Session = Depends(get_session),
+) -> WorkspaceStream:
+    """Create or update a TC-scoped forecast override for one (well, stream).
+
+    Does NOT mark the curve stale — see module header for why
+    overrides don't affect the aggregated bands. Returns the resolved
+    stream (source="override") so the frontend can refresh in place.
+    """
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    stream_enum = _resolve_stream(stream)
+    if api14 not in (tc.included_api14s or []):
+        raise HTTPException(
+            status_code=400,
+            detail=f"api14 {api14} is not a member of this type curve",
+        )
+
+    payload = _override_payload_from_params(
+        qi=body.qi, Di=body.Di, b=body.b, Df=body.Df
+    )
+    overrides = dict(tc.forecast_overrides or {})
+    well_block = dict(overrides.get(api14) or {})
+    well_block[stream_enum.value] = payload
+    overrides[api14] = well_block
+    tc.forecast_overrides = overrides
+    tc.is_stale = True  # forecast-aggregation: overrides DO change the bands
+    flag_modified(tc, "forecast_overrides")
+    session.commit()
+    log.info(
+        "override_written",
+        type_curve_id=str(type_curve_id),
+        api14=api14,
+        stream=stream_enum.value,
+    )
+    return WorkspaceStream(source="override", payload=payload)
+
+
+@router.delete(
+    "/{type_curve_id}/overrides/{api14}/{stream}",
+    response_model=WorkspaceStream,
+)
+def delete_forecast_override(
+    type_curve_id: uuid.UUID,
+    api14: str,
+    stream: str,
+    session: Session = Depends(get_session),
+) -> WorkspaceStream:
+    """Revert a TC override back to the global forecast.
+
+    No-op-safe: if no override exists for this (well, stream), returns
+    the resolved global (or "missing") without complaint. Does NOT
+    mark stale.
+    """
+    from app.type_curves.overrides import resolve_forecast
+
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    stream_enum = _resolve_stream(stream)
+
+    overrides = dict(tc.forecast_overrides or {})
+    well_block = dict(overrides.get(api14) or {})
+    if stream_enum.value in well_block:
+        del well_block[stream_enum.value]
+        if well_block:
+            overrides[api14] = well_block
+        else:
+            overrides.pop(api14, None)
+        tc.forecast_overrides = overrides
+        tc.is_stale = True  # reverting an override changes the bands too
+        flag_modified(tc, "forecast_overrides")
+        session.commit()
+        log.info(
+            "override_deleted",
+            type_curve_id=str(type_curve_id),
+            api14=api14,
+            stream=stream_enum.value,
+        )
+
+    # Return the now-resolved stream so the frontend can swap the
+    # modal / workspace row to global without a second round-trip.
+    global_f = session.execute(
+        select(Forecast)
+        .where(Forecast.api14 == api14)
+        .where(Forecast.stream == stream_enum)
+    ).scalar_one_or_none()
+    resolved = resolve_forecast(tc, api14, stream_enum, global_f)
+    return WorkspaceStream(source=resolved.source, payload=resolved.payload)
+
+
+@router.patch(
+    "/{type_curve_id}/membership", response_model=TypeCurveRow
+)
+def patch_type_curve_membership(
+    type_curve_id: uuid.UUID,
+    body: MembershipPatch,
+    session: Session = Depends(get_session),
+) -> TypeCurveRow:
+    """Mutate ``included_api14s`` (add / remove) and mark the curve stale.
+
+    Validates that every api14 in ``add`` exists in the wells table —
+    silently dropping unknown api14s here would create a curve whose
+    workspace renders empty rows for ghost members. ``remove`` is
+    forgiving of unknown api14s (just a set difference). Overrides
+    for removed wells are cleaned up to keep the JSONB tidy.
+    """
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    if body.add:
+        known = set(
+            session.execute(
+                select(Well.api14).where(Well.api14.in_(body.add))
+            ).scalars()
+        )
+        unknown = [a for a in body.add if a not in known]
+        if unknown:
+            raise HTTPException(
+                status_code=400, detail=f"unknown api14s: {unknown}"
+            )
+
+    members = list(tc.included_api14s or [])
+    if body.add:
+        for a in body.add:
+            if a not in members:
+                members.append(a)
+    if body.remove:
+        remove_set = set(body.remove)
+        members = [a for a in members if a not in remove_set]
+        # Tidy: drop overrides for removed wells so the JSONB doesn't
+        # accumulate orphan entries that the resolver would never read.
+        if tc.forecast_overrides:
+            overrides = {
+                k: v for k, v in tc.forecast_overrides.items() if k not in remove_set
+            }
+            if overrides != tc.forecast_overrides:
+                tc.forecast_overrides = overrides
+                flag_modified(tc, "forecast_overrides")
+
+    if members != (tc.included_api14s or []):
+        tc.included_api14s = members
+        tc.is_stale = True
+        flag_modified(tc, "included_api14s")
+
+    session.commit()
+    session.refresh(tc)
+    log.info(
+        "membership_patched",
+        type_curve_id=str(type_curve_id),
+        added=body.add,
+        removed=body.remove,
+        n_wells=len(members),
+    )
+    return TypeCurveRow.from_orm_row(tc)
+
+
+@router.post(
+    "/{type_curve_id}/reaggregate", response_model=TypeCurveRow
+)
+def reaggregate_type_curve(
+    type_curve_id: uuid.UUID, session: Session = Depends(get_session)
+) -> TypeCurveRow:
+    """Re-run aggregation + P50 fitter with current ``included_api14s``.
+
+    Overwrites ``series`` in place; clears ``is_stale``. Honors the
+    saved curve's normalization basis + alignment method + n_months
+    so the recomputed bands sit on the same axes as the original.
+
+    Failures (no eligible wells, fit doesn't converge) leave
+    ``series`` and ``is_stale`` unchanged so the user keeps the prior
+    deliverable until they fix the input.
+    """
+    tc = session.get(TypeCurve, type_curve_id)
+    if tc is None:
+        raise HTTPException(status_code=404, detail="not found")
+    api14s = list(tc.included_api14s or [])
+    if not api14s:
+        raise HTTPException(
+            status_code=400,
+            detail="cannot re-aggregate: type curve has no included wells",
+        )
+
+    # n_months on the persisted series carries the original aggregation
+    # window. None means "use the full history available for these
+    # wells" — same default as compute_type_curve. Under the forecast-
+    # aggregation model the canonical streams always run to
+    # _FORECAST_N_MONTHS regardless; this n_months caps only the
+    # observed_streams block.
+    n_months = (tc.series or {}).get("observed_n_months") or (tc.series or {}).get("n_months")
+
+    payload = _compute(
+        session,
+        api14s,
+        basis=tc.normalization_basis.value,
+        alignment=tc.alignment_method.value,
+        n_months=n_months,
+        tc=tc,
+    )
+    tc.series = payload
+    tc.is_stale = False
+    flag_modified(tc, "series")
+    session.commit()
+    session.refresh(tc)
+    log.info(
+        "type_curve_reaggregated",
+        type_curve_id=str(type_curve_id),
+        n_wells=len(api14s),
+    )
+    return TypeCurveRow.from_orm_row(tc)
 
 
 @router.get("/{type_curve_id}/export")

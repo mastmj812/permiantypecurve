@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, false, func, text
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -67,4 +67,21 @@ class TypeCurve(Base):
     # un-assigns its curves (ON DELETE SET NULL) rather than cascading.
     deal_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("deals.id", ondelete="SET NULL"), index=True
+    )
+
+    # Stale flag flipped by Phase 2 when overrides / globals / membership
+    # change after the last aggregation, signalling that ``series`` no
+    # longer reflects current inputs. Phase 1 reads only.
+    is_stale: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+
+    # Per-TC forecast overrides keyed by ``{api14: {stream: payload}}``.
+    # Payload mirrors the forecasts-table fit + derived columns
+    # (params/qi/Di/b/Df/eur/fit_r2/manual_override/...) so the read
+    # path can hand it to existing components unchanged. Empty until
+    # Phase 2 writes; resolve_forecast() falls back to the global
+    # forecasts row when a stream is missing here.
+    forecast_overrides: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )

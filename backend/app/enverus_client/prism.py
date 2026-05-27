@@ -99,6 +99,8 @@ class PrismClient(EnverusClient):
         basin: str,
         county: str | None = None,
         updated_since: datetime | None = None,
+        first_prod_after: date | None = None,
+        min_lateral_ft: float | None = None,
     ) -> Iterator[WellHeader]:
         # Enverus stores ENVBasin VALUES uppercase AND at sub-basin level
         # (DELAWARE / MIDLAND / PERMIAN OTHER). Our app talks in app-level
@@ -111,6 +113,20 @@ class PrismClient(EnverusClient):
             filters["county"] = county.upper()
         if updated_since is not None:
             filters["updateddate"] = f"gt({updated_since.isoformat()})"
+        # Server-side scope filters — push as much filtering as we can
+        # onto Enverus so we don't pay network + DB cost for wells the
+        # type-curve tool will never use. The vast majority of pre-2000
+        # wells in Ward/Winkler are conventional verticals, and a
+        # lateral-length floor catches the rare post-2000 vertical that
+        # would otherwise slip through.
+        if first_prod_after is not None:
+            filters["FirstProdDate"] = f"gt({first_prod_after.isoformat()})"
+        if min_lateral_ft is not None:
+            # Enverus exposes lateral length under multiple aliases
+            # (LateralLength_FT in raw, LateralLength in some derived
+            # views). `LateralLength_FT` is the documented PascalCase
+            # column on the wells dataset.
+            filters["LateralLength_FT"] = f"gt({min_lateral_ft})"
         # `deleteddate=null` excludes wells logically deleted since their
         # last appearance — standard practice for incremental syncs.
         filters.setdefault("deleteddate", "null")

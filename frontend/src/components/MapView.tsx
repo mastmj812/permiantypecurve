@@ -127,7 +127,7 @@ function buildStyle(): StyleSpecification {
           '<a href="https://protomaps.com">Protomaps</a> © <a href="https://openstreetmap.org">OpenStreetMap</a>',
       },
     },
-    layers: layers("protomaps", "light"),
+    layers: layers("protomaps", "light", "en"),
   };
 }
 
@@ -591,10 +591,19 @@ function wellstickSourceLabel(v: unknown): string {
 }
 
 function buildWellPopupHtml(p: Record<string, unknown>): string {
+  // Headline is the human-readable name; API14 demotes into the table.
+  // Falls back to API14 in the headline when the well's name is missing
+  // so the popup still identifies the well.
+  const name = (p.name as string | null | undefined) ?? null;
+  const headline = name ? escHtml(name) : `API14 ${escHtml(p.api14)}`;
+  const api14Row = name
+    ? `<tr><td>API14</td><td>${escHtml(p.api14)}</td></tr>`
+    : "";
   return `
     <div class="mtt">
-      <div class="mtt-name">API14 ${escHtml(p.api14)}</div>
+      <div class="mtt-name">${headline}</div>
       <table class="mtt-table">
+        ${api14Row}
         <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>

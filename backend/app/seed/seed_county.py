@@ -21,11 +21,15 @@ from __future__ import annotations
 import argparse
 import sys
 
+from datetime import date
+
 from app.core.logging import configure_logging, get_logger
 from app.sync.orchestrator import (
     DEFAULT_BASIN,
     DEFAULT_COUNTIES,
     DEFAULT_COUNTY,
+    DEFAULT_FIRST_PROD_AFTER,
+    DEFAULT_MIN_LATERAL_FT,
     sync_counties,
 )
 
@@ -60,6 +64,26 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="(no-op — survey phase retired in Phase 2 of LateralLine migration)",
     )
+    parser.add_argument(
+        "--first-prod-after",
+        default=DEFAULT_FIRST_PROD_AFTER.isoformat() if DEFAULT_FIRST_PROD_AFTER else None,
+        help=(
+            "ISO date (YYYY-MM-DD). Only pull wells whose FirstProdDate is "
+            f"after this (default {DEFAULT_FIRST_PROD_AFTER.isoformat() if DEFAULT_FIRST_PROD_AFTER else 'unset'} "
+            "— excludes pre-modern conventional verticals). Pass an empty "
+            "string to disable."
+        ),
+    )
+    parser.add_argument(
+        "--min-lateral-ft",
+        type=float,
+        default=DEFAULT_MIN_LATERAL_FT,
+        help=(
+            "Minimum LateralLength_FT to include. Default unset; pass "
+            "e.g. 2000 to drop the rare modern vertical that slips past "
+            "the date filter."
+        ),
+    )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
 
@@ -78,11 +102,32 @@ def main(argv: list[str] | None = None) -> int:
         log.warning("seeding_entire_basin_not_supported")
         parser.error("at least one county required; pass --counties Loving,Reeves")
 
-    log.info("seed_start", basin=args.basin, counties=list(counties))
+    # Empty string disables the date floor; otherwise parse ISO.
+    first_prod_after: date | None
+    if args.first_prod_after in (None, ""):
+        first_prod_after = None
+    else:
+        try:
+            first_prod_after = date.fromisoformat(args.first_prod_after)
+        except ValueError:
+            parser.error(
+                f"--first-prod-after must be ISO date (YYYY-MM-DD); got "
+                f"{args.first_prod_after!r}"
+            )
+
+    log.info(
+        "seed_start",
+        basin=args.basin,
+        counties=list(counties),
+        first_prod_after=first_prod_after.isoformat() if first_prod_after else None,
+        min_lateral_ft=args.min_lateral_ft,
+    )
     counts = sync_counties(
         basin=args.basin,
         counties=counties,
         pull_production=not args.no_production,
+        first_prod_after=first_prod_after,
+        min_lateral_ft=args.min_lateral_ft,
     )
     log.info("seed_complete", basin=args.basin, counties=list(counties), counts=counts)
     return 0
