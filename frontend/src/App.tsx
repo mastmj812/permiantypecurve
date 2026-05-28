@@ -61,6 +61,16 @@ function parseAddWellsHash(): { typeCurveId: string } | null {
   return m ? { typeCurveId: m[1]! } : null;
 }
 
+// Hash route for the TC tab with a specific curve preloaded. Used by
+// the workspace's "back to Type Curve" exit so the user lands back on
+// the same curve they were editing instead of an empty TC tab.
+//   #/type-curves/<id>
+function parseTypeCurveDetailHash(): { typeCurveId: string } | null {
+  const hash = window.location.hash || "";
+  const m = hash.match(/^#\/type-curves\/([^/?]+)$/);
+  return m ? { typeCurveId: m[1]! } : null;
+}
+
 // Navigate by changing the URL hash and ALWAYS dispatching a
 // hashchange event manually. Setting ``window.location.hash`` directly
 // is unreliable across browsers when the new value is empty or only
@@ -98,17 +108,21 @@ export function App() {
   const [slideRoute, setSlideRoute] = useState(() => parseSlideHash());
   const [wellsRoute, setWellsRoute] = useState(() => parseWellsHash());
   const [addWellsRoute, setAddWellsRoute] = useState(() => parseAddWellsHash());
+  const [tcDetailRoute, setTcDetailRoute] = useState(() =>
+    parseTypeCurveDetailHash(),
+  );
 
   // The slide tab is opened with window.open() into a new tab whose
   // URL already carries the hash, so hashchange isn't strictly needed
   // for the export flow — but listening for it keeps in-tab navigation
   // working if anyone deep-links via a manual edit. The wells +
-  // add-wells routes share the listener.
+  // add-wells + tc-detail routes share the listener.
   useEffect(() => {
     const onHash = () => {
       setSlideRoute(parseSlideHash());
       setWellsRoute(parseWellsHash());
       setAddWellsRoute(parseAddWellsHash());
+      setTcDetailRoute(parseTypeCurveDetailHash());
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -298,7 +312,13 @@ export function App() {
           <TypeCurveWellsPage
             typeCurveId={wellsRoute.typeCurveId}
             onExit={() => {
-              navigateHash("");
+              // Land back on the Type Curve tab with this same curve
+              // still loaded, not on a blank tab. The detail route is
+              // a one-shot — TypeCurvePage's effect picks up the id,
+              // fetches the curve, and the URL stays on
+              // #/type-curves/{id} so a refresh restores the same
+              // state.
+              navigateHash(`#/type-curves/${wellsRoute.typeCurveId}`);
             }}
           />
         </main>
@@ -306,6 +326,13 @@ export function App() {
     );
   }
 
+  // When the URL carries a TC detail route (#/type-curves/{id}), force
+  // the Type Curve tab and pass the id to TypeCurvePage so it
+  // preloads. Used by the workspace's "back to Type Curve" exit so the
+  // user lands on the same curve they were editing. Any nav-tab click
+  // clears the hash, which drops the preload prop and lets the user
+  // browse other tabs freely.
+  const activePage = tcDetailRoute ? "type_curve" : page;
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -315,8 +342,11 @@ export function App() {
             <button
               key={t.id}
               type="button"
-              className={`nav-tab ${page === t.id ? "nav-active" : ""}`}
-              onClick={() => setPage(t.id)}
+              className={`nav-tab ${activePage === t.id ? "nav-active" : ""}`}
+              onClick={() => {
+                if (tcDetailRoute) navigateHash("");
+                setPage(t.id);
+              }}
             >
               {t.label}
             </button>
@@ -331,10 +361,12 @@ export function App() {
         </div>
       </header>
       <main className="app-main">
-        {page === "map" && <MapPage />}
-        {page === "forecast" && <ForecastPage />}
-        {page === "review" && <ReviewPage />}
-        {page === "type_curve" && <TypeCurvePage />}
+        {activePage === "map" && <MapPage />}
+        {activePage === "forecast" && <ForecastPage />}
+        {activePage === "review" && <ReviewPage />}
+        {activePage === "type_curve" && (
+          <TypeCurvePage initialCurveId={tcDetailRoute?.typeCurveId ?? null} />
+        )}
       </main>
     </div>
   );

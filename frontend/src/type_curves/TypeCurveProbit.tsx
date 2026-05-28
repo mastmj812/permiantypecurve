@@ -1,17 +1,27 @@
 // Probit / lognormal-fit plot for the Type Curve tab.
 //
-// Self-contained: fetches forecasts for the current set of api14s, recomputes
-// each well's 50-yr EUR via the monthly-trapezoid sum (same convention as the
-// Review tab + the slide-export `/well-stats` endpoint), and draws an SVG
-// probit with the published TC's EUR/ft as a vertical reference.
+// Two data sources depending on context:
+//   * Saved TC selected (typeCurveId set) → fetch the workspace's
+//     per-well payloads via the same /wells endpoint the workspace
+//     uses. That goes through resolve_forecast(), so any TC-scoped
+//     overrides the engineer wrote on the wells page flow into the
+//     probit dots.
+//   * Live preview (typeCurveId null) → fall back to the global
+//     forecasts table via listForecasts(). No overrides can exist
+//     yet since no TC has been saved.
 //
-// Works in both the live-preview state and the saved-curve state — the caller
-// passes whatever api14s are currently in scope and the EUR/1k-ft of whichever
-// fit (auto, manual, or saved) is currently being displayed.
+// Either way, each well's EUR/ft is recomputed via the monthly
+// trapezoid sum (same convention as the Review tab + the slide
+// export). The published TC's EUR/ft renders as a vertical
+// reference line.
 
 import { useEffect, useMemo, useState } from "react";
 
 import { listForecasts, type ForecastRow, type Stream } from "../api/forecasts";
+import {
+  fetchTypeCurveWorkspaceWells,
+  type WorkspaceWell,
+} from "../api/typeCurves";
 import { eurFromForecastParams } from "../forecasts/arps";
 
 interface Props {
@@ -23,6 +33,10 @@ interface Props {
   prevEurPerUnit?: number | null;
   prevLabel?: string | null;
   stream?: Stream;
+  // When a saved TC is selected, this is its id — the probit then
+  // pulls override-aware per-well payloads. Null on the live-preview
+  // path (cohort lassoed on the map but not saved yet).
+  typeCurveId?: string | null;
   width?: number;
   height?: number;
 }
@@ -91,9 +105,13 @@ export function TypeCurveProbit({
   prevEurPerUnit = null,
   prevLabel = null,
   stream = "oil",
+  typeCurveId = null,
   width = 640,
   height = 280,
 }: Props) {
+  // Two parallel data slots — only one is non-null at a time depending
+  // on whether we're in saved-TC or live-preview mode (see header).
+  const [wsWells, setWsWells] = useState<WorkspaceWell[] | null>(null);
   const [forecasts, setForecasts] = useState<ForecastRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -103,42 +121,76 @@ export function TypeCurveProbit({
   const api14sKey = api14s.join(",");
   useEffect(() => {
     if (api14s.length === 0) {
+      setWsWells([]);
       setForecasts([]);
       return;
     }
     let cancelled = false;
-    listForecasts(api14s)
-      .then((rows) => {
-        if (!cancelled) {
-          setForecasts(rows);
-          setError(null);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
+    setError(null);
+    if (typeCurveId) {
+      // Saved TC: workspace endpoint resolves overrides per stream.
+      setForecasts(null);
+      fetchTypeCurveWorkspaceWells(typeCurveId)
+        .then((rows) => {
+          if (!cancelled) setWsWells(rows);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        });
+    } else {
+      // Live preview: fall back to global forecasts (no overrides
+      // exist yet — the TC isn't saved).
+      setWsWells(null);
+      listForecasts(api14s)
+        .then((rows) => {
+          if (!cancelled) setForecasts(rows);
+        })
+        .catch((e) => {
+          if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        });
+    }
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api14sKey]);
+  }, [api14sKey, typeCurveId]);
 
   // Per-well EUR/ft for the current stream, computed via the monthly
   // trapezoid sum (same as the Review tab + the slide's well-stats).
   // EUR/ft units: BBL/ft for oil/water, MCF/ft for gas.
   const wellEurPerFt = useMemo(() => {
-    if (!forecasts) return null;
-    const out: number[] = [];
-    for (const f of forecasts) {
-      if (f.stream !== stream) continue;
-      const lat = f.well_lateral_ft;
-      if (lat == null || lat <= 0) continue;
-      const eur = eurFromForecastParams(f.params);
-      if (eur == null || !Number.isFinite(eur) || eur <= 0) continue;
-      out.push(eur / lat);
+    // Saved-TC path: pull params from the per-stream resolved payload
+    // on each WorkspaceWell. The payload's `params` mirror the global
+    // forecast's `params` shape so `eurFromForecastParams` works as-is.
+    if (wsWells) {
+      const out: number[] = [];
+      for (const w of wsWells) {
+        const lat = w.well_lateral_ft;
+        if (lat == null || lat <= 0) continue;
+        const slot = w[stream];
+        const payload = slot?.payload;
+        const params = (payload?.params as Record<string, number> | undefined) ?? null;
+        if (!params) continue;
+        const eur = eurFromForecastParams(params);
+        if (eur == null || !Number.isFinite(eur) || eur <= 0) continue;
+        out.push(eur / lat);
+      }
+      return out;
     }
-    return out;
-  }, [forecasts, stream]);
+    if (forecasts) {
+      const out: number[] = [];
+      for (const f of forecasts) {
+        if (f.stream !== stream) continue;
+        const lat = f.well_lateral_ft;
+        if (lat == null || lat <= 0) continue;
+        const eur = eurFromForecastParams(f.params);
+        if (eur == null || !Number.isFinite(eur) || eur <= 0) continue;
+        out.push(eur / lat);
+      }
+      return out;
+    }
+    return null;
+  }, [wsWells, forecasts, stream]);
 
   // TC EUR/ft = eur_per_unit (per 1k ft) / 1000.
   const tcVal = tcEurPerUnit != null && tcEurPerUnit > 0 ? tcEurPerUnit / 1000 : null;

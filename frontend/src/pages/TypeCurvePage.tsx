@@ -52,7 +52,15 @@ const PERCENTILES: Array<{ key: string; label: string }> = [
   { key: "mean", label: "Mean" },
 ];
 
-export function TypeCurvePage() {
+interface TypeCurvePageProps {
+  // When set (e.g. from the URL hash #/type-curves/{id} after the
+  // user clicks "back to Type Curve" from the workspace), preload
+  // that saved curve on mount so the page lands with the curve
+  // already pulled up. Null in the normal tab-click path.
+  initialCurveId?: string | null;
+}
+
+export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}) {
   const forecastApi14s = useMapStore((s) => s.forecastApi14s);
   const excluded = useMapStore((s) => s.excludedApi14s);
   // Cohort-handoff prefill: when the user reached this page via the
@@ -339,6 +347,24 @@ export function TypeCurvePage() {
     setUpdateError(null);
     clearTweakState();
   }
+
+  // Preload the requested curve when arriving via the
+  // #/type-curves/{id} hash (e.g. workspace "back to Type Curve").
+  // Only fires when the id changes and the page isn't already on it,
+  // so a normal library-card click flow that lands here without a
+  // hash isn't disturbed.
+  useEffect(() => {
+    if (!initialCurveId) return;
+    if (selectedSaved?.id === initialCurveId) return;
+    onLoadSaved(initialCurveId).catch((e) => {
+      // Bail loudly so a deleted-curve hash doesn't leave the page
+      // in a confused half-loaded state.
+      console.error("preload from hash failed", e);
+    });
+    // selectedSaved is intentionally not a dep — we only want this
+    // to fire on initialCurveId changes, not on every state update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCurveId]);
 
   async function onRename(id: string) {
     const newName = window.prompt("New name for type curve:");
@@ -765,6 +791,11 @@ export function TypeCurvePage() {
                     ? selectedSaved.included_api14s ?? []
                     : included
                 }
+                // Drives the probit's data path: saved-TC mode pulls
+                // override-aware per-well EURs via the workspace
+                // endpoint; null falls back to the global forecasts
+                // table for live preview.
+                typeCurveId={selectedSaved?.id ?? null}
                 tcEurPerUnit={
                   previewEur[stream] ??
                   currentStream.fitted?.eur_per_unit ??

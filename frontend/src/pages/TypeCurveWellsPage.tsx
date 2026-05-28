@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   type ForecastRow,
   type Stream,
+  batchForecast,
   effectiveDecline,
 } from "../api/forecasts";
 import {
@@ -208,6 +209,67 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     }
   }
 
+  // Kick off a background forecast batch for wells with no oil
+  // forecast. Backend returns 202 immediately and processes async; we
+  // poll the workspace endpoint every 3s for up to 60s and stop as
+  // soon as every well has an oil forecast (or the timeout elapses).
+  //
+  // The poll fetches directly inside each tick and reads the
+  // freshly-returned rows for the "still missing" check — going
+  // through React state (`wells`) here would close over a stale
+  // snapshot and the loop would never see completion until timeout.
+  // Wells that can't be auto-fit (e.g. zero production rows) stay
+  // missing forever and trip the timeout, surfaced as a hint.
+  async function forecastMissingWells(): Promise<void> {
+    if (missingApi14s.length === 0 || busy != null) return;
+    const targets = [...missingApi14s];
+    const targetSet = new Set(targets);
+    setBusy("forecasting");
+    setErr(null);
+    try {
+      await batchForecast(targets);
+    } catch (e) {
+      setErr(String(e));
+      setBusy(null);
+      return;
+    }
+    const startedAt = Date.now();
+    const POLL_MS = 3000;
+    const TIMEOUT_MS = 60_000;
+    const tick = async () => {
+      let latestWells: WorkspaceWell[] | null = null;
+      try {
+        const [tcRow, wellRows] = await Promise.all([
+          fetchTypeCurve(typeCurveId),
+          fetchTypeCurveWorkspaceWells(typeCurveId),
+        ]);
+        setTc(tcRow);
+        setWells(wellRows);
+        latestWells = wellRows;
+      } catch {
+        /* transient — keep polling */
+      }
+      const stillMissing = latestWells
+        ? latestWells.filter(
+            (w) => targetSet.has(w.api14) && w.oil.source === "missing",
+          ).length
+        : targets.length;
+      const elapsed = Date.now() - startedAt;
+      if (stillMissing === 0 || elapsed > TIMEOUT_MS) {
+        setBusy(null);
+        if (stillMissing > 0) {
+          setErr(
+            `${stillMissing} well${stillMissing === 1 ? "" : "s"} still missing a forecast after ${TIMEOUT_MS / 1000}s. ` +
+              "Most often this is wells with zero production rows (the auto-fitter has nothing to fit) — check the Forecast tab for job details, or remove the well from the TC.",
+          );
+        }
+        return;
+      }
+      setTimeout(tick, POLL_MS);
+    };
+    setTimeout(tick, POLL_MS);
+  }
+
   // Modal hook: when an override is written or reverted, splice the
   // new resolved stream into the wells array in place. Saves a full
   // workspace refetch and keeps the sort order stable.
@@ -276,6 +338,18 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
       ? () => setOpenApi14(sorted[openIndex + 1]!.api14)
       : undefined;
 
+  // Wells with no oil forecast at all — neither a TC override nor a
+  // global. The add-wells flow only updates membership; the explicit
+  // forecast step is this button. Oil is the gating stream (cohort
+  // builds off oil peak), so we key on its source.
+  const missingApi14s = useMemo(
+    () =>
+      (wells ?? [])
+        .filter((w) => w.oil.source === "missing")
+        .map((w) => w.api14),
+    [wells],
+  );
+
   // Override census: count source==="override" cells across streams +
   // distinct wells with at least one override. Drives the info strip.
   const overrideStats = useMemo(() => {
@@ -342,6 +416,38 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
         </a>
       </header>
 
+      {missingApi14s.length > 0 && (
+        <div
+          className="alert"
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fca5a5",
+            color: "#7f1d1d",
+            padding: "8px 12px",
+            margin: "8px 16px",
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          <span style={{ flex: 1 }}>
+            {missingApi14s.length} well{missingApi14s.length === 1 ? "" : "s"}{" "}
+            in this TC have no oil forecast — typically wells you just
+            added from the map. They won't contribute to the bands
+            until they're forecast.
+          </span>
+          <button
+            type="button"
+            className="btn-primary"
+            disabled={busy != null}
+            onClick={forecastMissingWells}
+          >
+            {busy === "forecasting"
+              ? "forecasting…"
+              : `Forecast ${missingApi14s.length} well${missingApi14s.length === 1 ? "" : "s"}`}
+          </button>
+        </div>
+      )}
       {overrideStats.total > 0 && (
         <div
           className="alert"
