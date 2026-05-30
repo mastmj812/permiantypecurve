@@ -73,13 +73,13 @@ export function TypeCurveSlidePage({
         ]);
         if (cancelled) return;
 
-        const api14s = curve.included_api14s ?? [];
+        const api10s = curve.included_api10s ?? [];
         // Details power both the map (sh/bh lat-lon for fitBounds) and
         // the chart wrappers (lateral_ft per well for 10kft norm).
         const wellDetailsPromise =
-          api14s.length > 0 ? fetchWellDetails(api14s) : Promise.resolve([]);
+          api10s.length > 0 ? fetchWellDetails(api10s) : Promise.resolve([]);
         const wellCurvesPromise = Promise.allSettled(
-          api14s.map((a) => fetchWellCurves(a)),
+          api10s.map((a) => fetchWellCurves(a)),
         );
         const [wellDetails, wellCurvesSettled] = await Promise.all([
           wellDetailsPromise,
@@ -113,12 +113,12 @@ export function TypeCurveSlidePage({
   // Lateral lookup is shared across rate + cum charts. Prefer the
   // wellStats entry (single SQL with the curve's snapshot) and fall
   // back to wellDetails (richer payload, used by the map).
-  const lateralByApi14 = useMemo(() => {
+  const lateralByApi10 = useMemo(() => {
     const m = new Map<string, number | null>();
     if (!data) return m;
-    for (const s of data.wellStats) m.set(s.api14, s.lateral_ft);
+    for (const s of data.wellStats) m.set(s.api10, s.lateral_ft);
     for (const d of data.wellDetails) {
-      if (!m.has(d.api14) || m.get(d.api14) == null) m.set(d.api14, d.lateral_ft);
+      if (!m.has(d.api10) || m.get(d.api10) == null) m.set(d.api10, d.lateral_ft);
     }
     return m;
   }, [data]);
@@ -141,7 +141,7 @@ export function TypeCurveSlidePage({
   }
 
   const STREAMS: Stream[] = ["oil", "gas", "water"];
-  const api14s = data.curve.included_api14s ?? [];
+  const api10s = data.curve.included_api10s ?? [];
   // Map dimensions match the placement in PowerPoint so the captured
   // PNG aspect matches the picture box and PowerPoint doesn't have
   // to stretch / letterbox.
@@ -159,14 +159,14 @@ export function TypeCurveSlidePage({
           current={data.curve}
           previous={data.previous}
           wellCurves={data.wellCurves}
-          lateralByApi14={lateralByApi14}
+          lateralByApi10={lateralByApi10}
           stream={stream}
         />
       </div>
       {withMap && (
         <div className="slide-panel slide-panel-map" data-slide-panel-map>
           <SlideMap
-            api14s={api14s}
+            api10s={api10s}
             wellDetails={data.wellDetails}
             width={mapWidth}
             height={mapHeight}
@@ -178,14 +178,14 @@ export function TypeCurveSlidePage({
           current={data.curve}
           previous={data.previous}
           wellCurves={data.wellCurves}
-          lateralByApi14={lateralByApi14}
+          lateralByApi10={lateralByApi10}
           stream={stream}
         />
       </div>
       {includeProbit && (
         <div className="slide-panel" data-slide-panel-probit data-stream={stream}>
           <TypeCurveProbit
-            api14s={api14s}
+            api10s={api10s}
             tcEurPerUnit={
               (data.curve.series as { streams?: Record<string, { fitted?: { eur_per_unit?: number } | null }> }).streams?.[stream]?.fitted?.eur_per_unit ?? null
             }

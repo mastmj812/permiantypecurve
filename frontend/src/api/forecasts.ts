@@ -7,7 +7,14 @@ export type Stream = "oil" | "gas" | "water";
 // "rate_time_fallback" = the default rate_cum fit pinned Di at a bound,
 // so the orchestrator re-ran with rate_time and adopted that result.
 // See backend forecasting/fit.py::fit_with_fallback.
-export type FitMethod = "rate_cum" | "rate_time" | "rate_time_fallback";
+// "cohort_transfer" = short-history well whose Di / b were transferred
+// from the median of the long-history cohort in the same batch.
+// See backend forecasting/cohort.py + the /transfer-cohort-params endpoint.
+export type FitMethod =
+  | "rate_cum"
+  | "rate_time"
+  | "rate_time_fallback"
+  | "cohort_transfer";
 export type ModelType =
   | "arps_exponential"
   | "arps_hyperbolic"
@@ -24,6 +31,12 @@ export interface ForecastConfig {
   economic_limit_mcfd: number;
   economic_limit_bwpd: number;
   min_post_peak_months: number;
+  // When set, the batch endpoint partitions the selection by oil
+  // post-peak history and fits only the long-history group. Short-
+  // history wells come back in BatchResponse.short_api10s for the
+  // user to transfer once they've reviewed the long fits. Null =
+  // legacy path (every well is fit unconstrained).
+  short_history_cutoff_months: number | null;
 }
 
 export const DEFAULT_FORECAST_CONFIG: ForecastConfig = {
@@ -38,11 +51,16 @@ export const DEFAULT_FORECAST_CONFIG: ForecastConfig = {
   economic_limit_mcfd: 0,
   economic_limit_bwpd: 0,
   min_post_peak_months: 6,
+  // Default: split the batch on a 6-month post-peak cutoff. Matches
+  // the analyst convention this codebase was built around. The Map
+  // tab's right panel exposes a control so the user can change it
+  // before clicking Forecast.
+  short_history_cutoff_months: 6,
 };
 
 export interface ForecastRow {
   id: string;
-  api14: string;
+  api10: string;
   stream: Stream;
   model_type: ModelType;
   params: Record<string, number>;
@@ -51,6 +69,11 @@ export interface ForecastRow {
   di_effective: number | null; // first-year effective decline fraction (0–1)
   b: number | null;
   df_terminal: number | null;
+  // Linear-ramp prefix: qo is the rate at first prod (t=0); the ramp
+  // runs over peak_index_months before Arps takes over at peak. NULL
+  // on rows from before the ramp columns existed and not yet re-fit.
+  qo: number | null;
+  peak_index_months: number | null;
   eur: number | null;
   peak_month_date: string | null;
   peak_rate: number | null;
@@ -62,6 +85,11 @@ export interface ForecastRow {
   // Fraction of post-peak months excluded as downtime (0–1). null on
   // forecasts persisted before the column existed.
   downtime_ratio: number | null;
+  // Audit payload — populated for cohort_transfer rows with the
+  // donor cohort identifiers and median. Null on standard fits.
+  // Shape: {source, stream, donor_count, donor_api10s, cohort_Di,
+  // cohort_b, cutoff_months}.
+  diagnostics: Record<string, unknown> | null;
   manual_override: boolean;
   locked: boolean;
   updated_at: string;
@@ -77,6 +105,11 @@ export interface ForecastRow {
   // map tab still uses the integer year for histogram bucketing.
   well_first_prod_date: string | null;
   well_county: string | null;
+  // Novi's 50-yr oil EUR — benchmark column the Review table renders
+  // alongside the app's autoforecast EUR. Sourced from
+  // curated.wells_enriched.eur_50yr_oil_bbl. Null when Novi hasn't
+  // forecasted the well.
+  well_novi_oil_eur: number | null;
 }
 
 // Client-side conversion mirroring app/forecasting/metrics.py.
@@ -106,26 +139,59 @@ export interface BatchResponse {
   accepted: boolean;
   job_id: string;
   well_count: number;
+  // Populated when the request set short_history_cutoff_months on the
+  // config. The page uses these to render the "X pending transfer"
+  // banner without needing a second round trip. Null on legacy
+  // (no-cutoff) calls.
+  long_api10s: string[] | null;
+  short_api10s: string[] | null;
+  no_peak_api10s: string[] | null;
+}
+
+export interface TransferStreamDonor {
+  stream: Stream;
+  donor_count: number;
+  cohort_di: number;
+  cohort_b: number;
+}
+
+export interface TransferResponse {
+  written_api10s: string[];
+  skipped_locked: Array<[string, Stream]>;
+  skipped_no_peak: string[];
+  long_api10s: string[];
+  short_api10s: string[];
+  donors: TransferStreamDonor[];
+}
+
+export interface TransferError {
+  error: "insufficient_donor_cohort";
+  donor_count: number;
+  min_required: number;
+  long_api10s: string[];
+  short_api10s: string[];
+  no_peak_api10s: string[];
+}
+
+export interface SyncJob {
+  id: string;
+  entity: string;
+  scope_key: string;
+  status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
+  items_seen: number;
+  items_upserted: number;
+  items_failed: number;
+  error: string | null;
 }
 
 export interface SyncStatus {
-  recent_jobs: Array<{
-    id: string;
-    entity: string;
-    scope_key: string;
-    status: "pending" | "running" | "succeeded" | "failed" | "cancelled";
-    items_seen: number;
-    items_upserted: number;
-    items_failed: number;
-    error: string | null;
-  }>;
+  recent_jobs: SyncJob[];
 }
 
 export interface StreamCurves {
   stream: Stream;
   months: string[];
   history_rate: Array<number | null>;
-  history_prodday_rate: Array<number | null>;
   history_cum: Array<number | null>;
   forecast_months: string[];
   forecast_rate: number[];
@@ -133,7 +199,7 @@ export interface StreamCurves {
 }
 
 export interface WellCurvesResponse {
-  api14: string;
+  api10: string;
   streams: StreamCurves[];
 }
 
@@ -145,22 +211,51 @@ export interface PreviewResponse {
 }
 
 export async function batchForecast(
-  api14s: string[],
+  api10s: string[],
   config?: Partial<ForecastConfig>,
 ): Promise<BatchResponse> {
   const r = await apiFetch("/api/forecasts/batch", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ api14s, config }),
+    body: JSON.stringify({ api10s, config }),
   });
   if (!r.ok) throw new Error(`batch forecast failed: ${r.status}`);
   return (await r.json()) as BatchResponse;
 }
 
-export async function listForecasts(api14s: string[]): Promise<ForecastRow[]> {
-  if (api14s.length === 0) return [];
+// Re-fits short-history wells by transferring Di / b from the long-
+// history cohort's median. Throws a TransferErrorThrown on 422 so the
+// caller can pattern-match on `.payload` for the structured error
+// shape (donor count + the split that drove the failure).
+export class TransferErrorThrown extends Error {
+  constructor(public payload: TransferError) {
+    super(`insufficient_donor_cohort: ${payload.donor_count}/${payload.min_required}`);
+  }
+}
+
+export async function transferCohortParams(args: {
+  api10s: string[];
+  short_history_cutoff_months: number;
+  min_donor_count?: number;
+  config?: Partial<ForecastConfig>;
+}): Promise<TransferResponse> {
+  const r = await apiFetch("/api/forecasts/transfer-cohort-params", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  if (r.status === 422) {
+    const body = (await r.json()) as { detail: TransferError };
+    throw new TransferErrorThrown(body.detail);
+  }
+  if (!r.ok) throw new Error(`transfer failed: ${r.status}`);
+  return (await r.json()) as TransferResponse;
+}
+
+export async function listForecasts(api10s: string[]): Promise<ForecastRow[]> {
+  if (api10s.length === 0) return [];
   const q = new URLSearchParams();
-  api14s.forEach((a) => q.append("api14", a));
+  api10s.forEach((a) => q.append("api10", a));
   const r = await apiFetch(`/api/forecasts?${q}`);
   if (!r.ok) throw new Error(`list forecasts failed: ${r.status}`);
   return (await r.json()) as ForecastRow[];
@@ -172,11 +267,22 @@ export async function fetchSyncStatus(): Promise<SyncStatus> {
   return (await r.json()) as SyncStatus;
 }
 
+// Direct lookup of a single job by id. The polling path uses this
+// rather than scanning recent_jobs — the /sync/status endpoint caps
+// at 20 rows and an active session can push an in-flight job off
+// that window, leaving the poller spinning forever.
+export async function fetchSyncJob(id: string): Promise<SyncJob | null> {
+  const r = await apiFetch(`/api/sync/jobs/${id}`);
+  if (r.status === 404) return null;
+  if (!r.ok) throw new Error(`sync job lookup failed: ${r.status}`);
+  return (await r.json()) as SyncJob;
+}
+
 export async function fetchWellCurves(
-  api14: string,
+  api10: string,
   horizonYears = 50,
 ): Promise<WellCurvesResponse> {
-  const r = await apiFetch(`/api/forecasts/${api14}/curves?horizon_years=${horizonYears}`);
+  const r = await apiFetch(`/api/forecasts/${api10}/curves?horizon_years=${horizonYears}`);
   if (!r.ok) throw new Error(`well curves failed: ${r.status}`);
   return (await r.json()) as WellCurvesResponse;
 }

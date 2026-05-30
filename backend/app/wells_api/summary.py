@@ -23,7 +23,7 @@ SOFT_SELECTION_WARNING = 300
 
 @dataclass(frozen=True)
 class WellSummaryRow:
-    api14: str
+    api10: str
     formation: str | None
     operator: str | None
     first_prod_year: int | None

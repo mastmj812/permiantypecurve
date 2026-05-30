@@ -23,11 +23,11 @@ const ANCHOR_STREAM: Stream = "oil";
 
 export function buildAlignedWellHistories(
   curves: WellCurvesResponse[],
-  lateralByApi14: Map<string, number | null>,
+  lateralByApi10: Map<string, number | null>,
   field: CurvesField,
   plotStream: Stream = "oil",
-): Array<{ api14: string; rate: Array<number | null> }> {
-  const out: Array<{ api14: string; rate: Array<number | null> }> = [];
+): Array<{ api10: string; rate: Array<number | null> }> {
+  const out: Array<{ api10: string; rate: Array<number | null> }> = [];
   for (const wc of curves) {
     const anchor = wc.streams.find((s) => s.stream === ANCHOR_STREAM);
     const plot = wc.streams.find((s) => s.stream === plotStream);
@@ -59,7 +59,7 @@ export function buildAlignedWellHistories(
           })()
         : 0;
 
-    const lat = lateralByApi14.get(wc.api14) ?? null;
+    const lat = lateralByApi10.get(wc.api10) ?? null;
     // 10k-ft normalization. When lateral is missing, don't scale — the
     // raw trace still informs shape and the reader can see it's an
     // un-normalized line; better than dropping the well entirely.
@@ -74,7 +74,7 @@ export function buildAlignedWellHistories(
       }
       aligned.push(((v as number) - baseline) * scale);
     }
-    out.push({ api14: wc.api14, rate: aligned });
+    out.push({ api10: wc.api10, rate: aligned });
   }
   return out;
 }

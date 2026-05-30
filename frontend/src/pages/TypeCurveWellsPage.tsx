@@ -42,7 +42,7 @@ interface Props {
 }
 
 type SortKey =
-  | "api14"
+  | "api10"
   | "well_name"
   | "formation"
   | "operator"
@@ -96,8 +96,8 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
     const di = numFromPayload(p, "di_initial");
     const b = numFromPayload(p, "b");
     out.push({
-      id: (p.id as string) ?? `${row.api14}-${stream}-virtual`,
-      api14: row.api14,
+      id: (p.id as string) ?? `${row.api10}-${stream}-virtual`,
+      api10: row.api10,
       stream,
       model_type:
         ((p.model_type as ForecastRow["model_type"]) ?? "modified_hyperbolic"),
@@ -150,7 +150,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
 
   const [sortKey, setSortKey] = useState<SortKey>("oil_eur_per_ft");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
-  const [openApi14, setOpenApi14] = useState<string | null>(null);
+  const [openApi10, setOpenApi10] = useState<string | null>(null);
   const [qcStream, setQcStream] = useState<Stream>("oil");
 
   async function refresh(): Promise<void> {
@@ -180,14 +180,14 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeCurveId]);
 
-  async function excludeWell(api14: string): Promise<void> {
-    setBusy(`exclude:${api14}`);
+  async function excludeWell(api10: string): Promise<void> {
+    setBusy(`exclude:${api10}`);
     setErr(null);
     try {
       // If the modal is open on the well we're dropping, close it —
       // the row will vanish on refresh.
-      if (openApi14 === api14) setOpenApi14(null);
-      await patchTypeCurveMembership(typeCurveId, { remove: [api14] });
+      if (openApi10 === api10) setOpenApi10(null);
+      await patchTypeCurveMembership(typeCurveId, { remove: [api10] });
       await refresh();
     } catch (e) {
       setErr(String(e));
@@ -221,8 +221,8 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
   // Wells that can't be auto-fit (e.g. zero production rows) stay
   // missing forever and trip the timeout, surfaced as a hint.
   async function forecastMissingWells(): Promise<void> {
-    if (missingApi14s.length === 0 || busy != null) return;
-    const targets = [...missingApi14s];
+    if (missingApi10s.length === 0 || busy != null) return;
+    const targets = [...missingApi10s];
     const targetSet = new Set(targets);
     setBusy("forecasting");
     setErr(null);
@@ -251,7 +251,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
       }
       const stillMissing = latestWells
         ? latestWells.filter(
-            (w) => targetSet.has(w.api14) && w.oil.source === "missing",
+            (w) => targetSet.has(w.api10) && w.oil.source === "missing",
           ).length
         : targets.length;
       const elapsed = Date.now() - startedAt;
@@ -274,7 +274,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
   // new resolved stream into the wells array in place. Saves a full
   // workspace refetch and keeps the sort order stable.
   function handleOverrideChanged(
-    api14: string,
+    api10: string,
     stream: Stream,
     source: "override" | "global" | "missing",
     payload: Record<string, unknown> | null,
@@ -282,7 +282,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     setWells((prev) =>
       prev
         ? prev.map((w) =>
-            w.api14 === api14
+            w.api10 === api10
               ? { ...w, [stream]: { source, payload } }
               : w,
           )
@@ -295,7 +295,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     const sign = sortDir === "asc" ? 1 : -1;
     const get = (w: WorkspaceWell): number | string => {
       switch (sortKey) {
-        case "api14": return w.api14;
+        case "api10": return w.api10;
         case "well_name": return w.well_name ?? "";
         case "formation": return w.well_formation ?? "";
         case "operator": return w.well_operator ?? "";
@@ -329,24 +329,24 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     }
   }
 
-  const openWell = openApi14 ? wells?.find((w) => w.api14 === openApi14) : null;
-  const openIndex = openWell ? sorted.findIndex((w) => w.api14 === openApi14) : -1;
+  const openWell = openApi10 ? wells?.find((w) => w.api10 === openApi10) : null;
+  const openIndex = openWell ? sorted.findIndex((w) => w.api10 === openApi10) : -1;
   const onPrev =
-    openIndex > 0 ? () => setOpenApi14(sorted[openIndex - 1]!.api14) : undefined;
+    openIndex > 0 ? () => setOpenApi10(sorted[openIndex - 1]!.api10) : undefined;
   const onNext =
     openIndex >= 0 && openIndex < sorted.length - 1
-      ? () => setOpenApi14(sorted[openIndex + 1]!.api14)
+      ? () => setOpenApi10(sorted[openIndex + 1]!.api10)
       : undefined;
 
   // Wells with no oil forecast at all — neither a TC override nor a
   // global. The add-wells flow only updates membership; the explicit
   // forecast step is this button. Oil is the gating stream (cohort
   // builds off oil peak), so we key on its source.
-  const missingApi14s = useMemo(
+  const missingApi10s = useMemo(
     () =>
       (wells ?? [])
         .filter((w) => w.oil.source === "missing")
-        .map((w) => w.api14),
+        .map((w) => w.api10),
     [wells],
   );
 
@@ -416,7 +416,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
         </a>
       </header>
 
-      {missingApi14s.length > 0 && (
+      {missingApi10s.length > 0 && (
         <div
           className="alert"
           style={{
@@ -431,7 +431,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
           }}
         >
           <span style={{ flex: 1 }}>
-            {missingApi14s.length} well{missingApi14s.length === 1 ? "" : "s"}{" "}
+            {missingApi10s.length} well{missingApi10s.length === 1 ? "" : "s"}{" "}
             in this TC have no oil forecast — typically wells you just
             added from the map. They won't contribute to the bands
             until they're forecast.
@@ -444,7 +444,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
           >
             {busy === "forecasting"
               ? "forecasting…"
-              : `Forecast ${missingApi14s.length} well${missingApi14s.length === 1 ? "" : "s"}`}
+              : `Forecast ${missingApi10s.length} well${missingApi10s.length === 1 ? "" : "s"}`}
           </button>
         </div>
       )}
@@ -539,8 +539,8 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
         <table>
           <thead>
             <tr>
-              <Th k="api14" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
-                api14
+              <Th k="api10" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
+                api10
               </Th>
               <Th k="well_name" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                 well name
@@ -588,11 +588,11 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
               const src = rowSource(w);
               return (
                 <tr
-                  key={w.api14}
+                  key={w.api10}
                   className="row-clickable"
-                  onClick={() => setOpenApi14(w.api14)}
+                  onClick={() => setOpenApi10(w.api10)}
                 >
-                  <td>{w.api14}</td>
+                  <td>{w.api10}</td>
                   <td>{w.well_name ?? "—"}</td>
                   <td>{w.well_formation ?? "—"}</td>
                   <td>{w.well_operator ?? "—"}</td>
@@ -619,9 +619,9 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
                       disabled={busy != null}
                       style={{ color: "#dc2626" }}
                       title="Remove this well from the type curve. Bands won't update until you click Re-run aggregation."
-                      onClick={() => excludeWell(w.api14)}
+                      onClick={() => excludeWell(w.api10)}
                     >
-                      {busy === `exclude:${w.api14}` ? "removing…" : "remove"}
+                      {busy === `exclude:${w.api10}` ? "removing…" : "remove"}
                     </button>
                   </td>
                 </tr>
@@ -640,9 +640,9 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
 
       {openWell && tc && (
         <ForecastDetailModal
-          api14={openWell.api14}
+          api10={openWell.api10}
           forecasts={buildModalForecasts(openWell)}
-          onClose={() => setOpenApi14(null)}
+          onClose={() => setOpenApi10(null)}
           onSaved={() => {
             /* Saves in TC context go through onOverrideChanged below. */
           }}

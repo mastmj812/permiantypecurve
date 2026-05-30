@@ -42,7 +42,7 @@ interface Props {
   // Index 0 of each `rate` array maps to month 0 on the x-axis; nulls
   // break the polyline. Contributes to y-axis range so an outlier well
   // doesn't escape the plot area.
-  wellHistories?: Array<{ api14: string; rate: Array<number | null> }> | null;
+  wellHistories?: Array<{ api10: string; rate: Array<number | null> }> | null;
   // When set on a log Y axis, clamp the visible y-min to this value
   // (e.g. yMinFloor=1.0 stops the slide rate chart from extending the
   // axis down into single-digit decimals where a few late-life tails
@@ -111,7 +111,7 @@ export function TypeCurveChart({
     if (!wellHistories || wellHistories.length === 0) return null;
     const lim = xMaxMonths != null ? Math.max(1, xMaxMonths) : null;
     return wellHistories.map((w) => ({
-      api14: w.api14,
+      api10: w.api10,
       rate: lim != null ? w.rate.slice(0, lim) : w.rate,
     }));
   }, [wellHistories, xMaxMonths]);
@@ -224,7 +224,7 @@ export function TypeCurveChart({
           if (!d) return null;
           return (
             <path
-              key={`hist-${w.api14}`}
+              key={`hist-${w.api10}`}
               d={d}
               fill="none"
               stroke="#4b5563"
@@ -394,7 +394,7 @@ function computeAxes(
   width: number,
   height: number,
   xTickStep?: number,
-  wellHistories?: Array<{ api14: string; rate: Array<number | null> }> | null,
+  wellHistories?: Array<{ api10: string; rate: Array<number | null> }> | null,
   yMinFloor?: number,
   PAD: { top: number; right: number; bottom: number; left: number } = DEFAULT_PAD,
   RIBBON_H: number = DEFAULT_RIBBON_H,

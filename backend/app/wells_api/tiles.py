@@ -84,12 +84,12 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
     if spec.lateral_max_ft is not None:
         parts.append("w.lateral_ft <= :lateral_max_ft")
         params["lateral_max_ft"] = spec.lateral_max_ft
-    if spec.api14s:
+    if spec.api10s:
         # Explicit allow-list pasted in the FilterPanel. Mirrors the
         # selection endpoint's behavior so the same paste produces the
         # same wells on the map and in /api/wells/select.
-        parts.append("w.api14 = ANY((:api14s)::TEXT[])")
-        params["api14s"] = list(spec.api14s)
+        parts.append("w.api10 = ANY((:api10s)::TEXT[])")
+        params["api10s"] = list(spec.api10s)
 
     if not parts:
         return "TRUE", params
@@ -104,14 +104,13 @@ WITH bounds AS (
 ),
 mvtgeom AS (
   SELECT
-    w.api14,
+    w.api10,
     w.name,
     w.formation,
     w.operator,
     w.status::text AS status,
     w.lateral_ft,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
-    w.wellstick_source::text AS wellstick_source,
     ST_AsMVTGeom(
       ST_Transform(
         COALESCE(w.sh_geom, ST_StartPoint(w.wellstick), w.bh_geom),
@@ -142,14 +141,13 @@ WITH bounds AS (
 ),
 mvtgeom AS (
   SELECT
-    w.api14,
+    w.api10,
     w.name,
     w.formation,
     w.operator,
     w.status::text AS status,
     w.lateral_ft,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
-    w.wellstick_source::text AS wellstick_source,
     ST_AsMVTGeom(
       ST_Transform(w.wellstick, 3857),
       (SELECT env_3857 FROM bounds),

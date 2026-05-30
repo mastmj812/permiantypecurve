@@ -41,7 +41,7 @@ class WellSeries:
     """One well's contribution to the aggregation: rate series from peak
     month forward (one per stream) + the normalization denominator."""
 
-    api14: str
+    api10: str
     lateral_ft: float | None
     proppant_lbs: float | None
     # rates are calday BOPD/MCFD/BWPD from peak month forward

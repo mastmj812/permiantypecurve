@@ -158,7 +158,7 @@ export function SlideProbit({
   const dots = valid.map((w, i) => {
     const cum = (i + 0.5) / n;
     return {
-      api14: w.api14,
+      api10: w.api10,
       x: xScale(w.oil_eur_per_ft as number),
       y: yScale(probit(cum)),
     };
@@ -305,7 +305,7 @@ export function SlideProbit({
       {/* Per-well green dots */}
       {dots.map((d) => (
         <circle
-          key={d.api14}
+          key={d.api10}
           cx={d.x}
           cy={d.y}
           r={4}

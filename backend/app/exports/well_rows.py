@@ -27,7 +27,7 @@ from app.db.models import Forecast, Well
 #   GOR EUR = gas_eur / oil_eur (MCF / BBL; lifetime gas-to-oil ratio)
 #   WOR EUR = water_eur / oil_eur (BBL / BBL; lifetime water-to-oil ratio)
 PER_WELL_HEADERS: tuple[str, ...] = (
-    "api14",
+    "api10",
     "Wellname",
     "Operator",
     "Formation",
@@ -96,9 +96,9 @@ def eur_monthly_trapezoid(params: dict[str, Any] | None) -> float | None:
 
 
 def per_well_rows(
-    session: Session, api14s: list[str]
+    session: Session, api10s: list[str]
 ) -> list[tuple[Any, ...]]:
-    """Materialize per-well summary rows for the api14s in order.
+    """Materialize per-well summary rows for the api10s in order.
 
     Single query joins wells + their oil/gas/water forecasts; EUR is
     recomputed via the monthly trapezoid (see ``eur_monthly_trapezoid``).
@@ -107,27 +107,27 @@ def per_well_rows(
     cells for the streams they're missing — engineers auditing the
     cohort should see the full membership.
     """
-    if not api14s:
+    if not api10s:
         return []
     wells = {
-        w.api14: w
+        w.api10: w
         for w in session.execute(
-            select(Well).where(Well.api14.in_(api14s))
+            select(Well).where(Well.api10.in_(api10s))
         ).scalars().all()
     }
     forecasts_by_well: dict[str, dict[str, Forecast]] = {}
     for f in session.execute(
-        select(Forecast).where(Forecast.api14.in_(api14s))
+        select(Forecast).where(Forecast.api10.in_(api10s))
     ).scalars().all():
-        forecasts_by_well.setdefault(f.api14, {})[f.stream.value] = f
+        forecasts_by_well.setdefault(f.api10, {})[f.stream.value] = f
 
     rows: list[tuple[Any, ...]] = []
-    for api14 in api14s:
-        w = wells.get(api14)
+    for api10 in api10s:
+        w = wells.get(api10)
         if w is None:
-            rows.append((api14,) + tuple([None] * (len(PER_WELL_HEADERS) - 1)))
+            rows.append((api10,) + tuple([None] * (len(PER_WELL_HEADERS) - 1)))
             continue
-        fs = forecasts_by_well.get(api14, {})
+        fs = forecasts_by_well.get(api10, {})
         oil_eur = eur_monthly_trapezoid(fs.get("oil").params) if fs.get("oil") else None
         gas_eur = eur_monthly_trapezoid(fs.get("gas").params) if fs.get("gas") else None
         water_eur = eur_monthly_trapezoid(fs.get("water").params) if fs.get("water") else None
@@ -143,7 +143,7 @@ def per_well_rows(
         wor_eur = water_eur / oil_eur if (water_eur is not None and oil_eur and oil_eur > 0) else None
 
         rows.append((
-            w.api14,
+            w.api10,
             w.name,
             w.operator,
             w.formation,

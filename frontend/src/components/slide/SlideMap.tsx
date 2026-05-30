@@ -34,7 +34,7 @@ const SLIDE_FILTER_SPEC = {
 };
 
 interface Props {
-  api14s: string[];
+  api10s: string[];
   wellDetails: WellDetailLite[];
   width?: number;
   height?: number;
@@ -42,7 +42,6 @@ interface Props {
 
 const COHORT_GREEN = "#16a34a";
 const LAYER_SOLID = "slide-wells-lines-solid";
-const LAYER_DASHED = "slide-wells-lines-dashed";
 
 // Survey-grid overlays. Mirrors MapView's BLOCKS_* / SECTIONS_* config
 // but always-on for the slide. The fetch URLs and min-zoom thresholds
@@ -242,7 +241,7 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
 
 // Default ~6.93" × 4.34" at 96 px/in to match the export's
 // slide-level map placement (right side, full chart-stack height).
-export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Props) {
+export function SlideMap({ api10s, wellDetails, width = 665, height = 418 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -278,18 +277,19 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
         ],
         minzoom: 3,
         maxzoom: 14,
-        promoteId: { wells_lines: "api14" },
+        promoteId: { wells_lines: "api10" },
       });
 
-      // Both line layers — no minzoom — since the source now serves
-      // line geometry at every zoom. The dashed layer marks wells
-      // without a confirmed heel survey (`surface_to_bh`).
+      // Single solid line layer — the source serves line geometry at
+      // every zoom (alwaysLines=true in the tile URL). Post-cutover
+      // there's only one wellstick source (Novi 4-point), so no need
+      // for the dashed "no survey confirmed" variant.
       const solidLayer: LayerSpecification = {
         id: LAYER_SOLID,
         type: "line",
         source: WELLS_SOURCE_ID,
         "source-layer": "wells_lines",
-        filter: cohortLineFilter(api14s, "heel_to_bh"),
+        filter: cohortLineFilter(api10s),
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": COHORT_GREEN,
@@ -303,28 +303,7 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
           "line-opacity": 0.95,
         },
       };
-      const dashedLayer: LayerSpecification = {
-        id: LAYER_DASHED,
-        type: "line",
-        source: WELLS_SOURCE_ID,
-        "source-layer": "wells_lines",
-        filter: cohortLineFilter(api14s, "surface_to_bh"),
-        layout: { "line-cap": "butt", "line-join": "round" },
-        paint: {
-          "line-color": COHORT_GREEN,
-          "line-width": [
-            "interpolate", ["linear"], ["zoom"],
-            5, 0.9,
-            9, 1.8,
-            12, 3.0,
-            14, 4.5,
-          ],
-          "line-dasharray": [2, 2],
-          "line-opacity": 0.9,
-        },
-      };
       map.addLayer(solidLayer);
-      map.addLayer(dashedLayer);
 
       // Fit to the cohort — 12% padding so the wells aren't crammed
       // against the edge of the snapshot.
@@ -366,7 +345,7 @@ export function SlideMap({ api14s, wellDetails, width = 665, height = 418 }: Pro
       map.remove();
       mapRef.current = null;
     };
-    // Effect runs once: cohort api14s + details are slide-time inputs,
+    // Effect runs once: cohort api10s + details are slide-time inputs,
     // not live state. Eslint disabled deliberately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

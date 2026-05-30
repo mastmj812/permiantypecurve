@@ -35,10 +35,17 @@ import numpy as np
 import pandas as pd
 
 from app.core.logging import get_logger
-from app.forecasting.cumulative import cum_modified_hyperbolic
-from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
+from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import fit_rate_cum
 from app.forecasting.peak_detection import PeakResult, detect_oil_peak
+# Ramp math now lives in app.forecasting.ramp_arps so per-well
+# forecasting and TC P50 fitting share one implementation. Re-exporting
+# the names here keeps the existing import path stable for any callers.
+from app.forecasting.ramp_arps import (  # noqa: F401 — re-exports
+    build_ramp_arps_rate,
+    compute_ramp_eur,
+    evaluate_fit,
+)
 from app.forecasting.types import ForecastConfig
 
 log = get_logger("type_curves.fit_p50")
@@ -73,107 +80,6 @@ def _make_monthly_df(p50: list[float | None]) -> pd.DataFrame:
         )
         d = d + pd.DateOffset(months=1)
     return pd.DataFrame(rows)
-
-
-def build_ramp_arps_rate(
-    *,
-    n_months: int,
-    qo: float,
-    qi: float,
-    peak_index: int,
-    Di: float,
-    b: float,
-    Df: float,
-) -> list[float]:
-    """Evaluate the ramp+Arps model at each of n_months monthly grid points.
-
-    Shape:
-      * months [0, peak_index]:  linear ramp Qo → qi.
-      * months (peak_index, n]:  modified-hyperbolic Arps starting at qi.
-
-    Returns a Python list (the API serializes it directly).
-    """
-    if n_months <= 0:
-        return []
-    out: list[float] = []
-    # Linear-ramp prefix. If peak_index == 0, this loop emits just qo for
-    # month 0 and the Arps tail handles everything from month 1 forward —
-    # which is the back-compatible pure-Arps case.
-    if peak_index > 0:
-        for i in range(min(peak_index + 1, n_months)):
-            frac = i / peak_index
-            out.append(qo + (qi - qo) * frac)
-    else:
-        out.append(float(qi))
-
-    # Arps tail. The post-peak Arps grid uses t in years measured from
-    # the peak month; month index `peak_index + k` (k = 1, 2, ...) sits
-    # at t = k/12 in the Arps coordinate system.
-    remaining = n_months - len(out)
-    if remaining > 0:
-        t_years = (np.arange(remaining, dtype=float) + 1.0) / 12.0
-        tail = _eval_modified_hyperbolic_rate(t_years, qi=qi, Di=Di, b=b, Df=Df)
-        out.extend(float(x) for x in tail)
-    return out[:n_months]
-
-
-def evaluate_fit(
-    *,
-    qi: float,
-    Di: float,
-    b: float,
-    Df: float,
-    qo: float,
-    peak_index: int,
-    n_months: int,
-    horizon_years: float = 50.0,
-) -> dict[str, Any]:
-    """Build a `fitted` dict from an explicit parameter set.
-
-    Used by the `/api/type-curves/preview` endpoint (live manual tweak)
-    and by the save-with-override path. The shape mirrors what
-    `fit_p50_series` emits when it auto-fits, so the frontend treats
-    auto and manual identically. `r2` / `rmse` are omitted (no data to
-    score against here); callers that need them can still inspect
-    the auto-fit those came with.
-
-    EUR is the raw 50-yr integral of the model — no economic cutoff.
-    Economics is a downstream concern; this tool is technical-only.
-    """
-    smoothed = build_ramp_arps_rate(
-        n_months=n_months,
-        qo=qo, qi=qi, peak_index=peak_index,
-        Di=Di, b=b, Df=Df,
-    )
-    arps_eur = compute_eur(
-        "modified_hyperbolic",
-        {"qi": qi, "Di": Di, "b": b, "Df": Df},
-        horizon_years=horizon_years,
-    )
-    ramp_eur = compute_ramp_eur(qo=qo, qi=qi, peak_index=peak_index)
-    return {
-        "model_type": "modified_hyperbolic",
-        "qi": float(qi),
-        "Di": float(Di),
-        "b": float(b),
-        "Df": float(Df),
-        "qo": float(qo),
-        "peak_index": int(peak_index),
-        "ramp_eur": float(ramp_eur),
-        "arps_eur": float(arps_eur),
-        "eur_per_unit": float(ramp_eur + arps_eur),
-        "smoothed_rate": smoothed,
-        "manual_override": True,
-    }
-
-
-def compute_ramp_eur(*, qo: float, qi: float, peak_index: int) -> float:
-    """Ramp-prefix EUR contribution: trapezoid area under Qo→qi over the
-    ramp window, in the same units as `qi * DAYS_PER_MONTH` (BBL or MCF
-    per normalization unit). Returns 0 when peak_index == 0."""
-    if peak_index <= 0:
-        return 0.0
-    return ((qo + qi) / 2.0) * peak_index * _DAYS_PER_MONTH
 
 
 def fit_p50_series(
@@ -282,17 +188,3 @@ def fit_p50_series(
     }
 
 
-def _eval_modified_hyperbolic_rate(
-    t_years: np.ndarray,
-    *,
-    qi: float,
-    Di: float,
-    b: float,
-    Df: float,
-) -> np.ndarray:
-    """Differentiate the closed-form cum to get rate at each time."""
-    eps = 1.0 / (12.0 * 4.0)  # ~weekly step
-    cum_lo = cum_modified_hyperbolic(np.maximum(t_years - eps, 0.0), qi, Di, b, Df)
-    cum_hi = cum_modified_hyperbolic(t_years + eps, qi, Di, b, Df)
-    rate_per_day = (cum_hi - cum_lo) / (2 * eps * DAYS_PER_YEAR)
-    return np.maximum(rate_per_day, 0.0)

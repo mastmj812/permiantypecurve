@@ -100,10 +100,15 @@ export function eurFromArpsParams(
   return cum;
 }
 
-// Convenience for per-well decline rows: pulls qi/Di/b/Df out of the
-// `Forecast.params` dict and integrates over 50 years (no econ cutoff).
-// Returns null when any of the four core Arps params are missing/non-
-// finite — caller should fall back to the stored `eur` in that case.
+// Convenience for per-well decline rows: pulls qi/Di/b/Df plus the
+// optional ramp prefix (qo + peak_index_months) out of the
+// `Forecast.params` dict and integrates over 50 years (no econ
+// cutoff). The ramp prefix used to be ignored here, which made the
+// client-side EUR drop by ramp_eur vs. the stored total — visible
+// as "saved EUR < preview EUR" until preview replaced the displayed
+// value. Returns null when any of the four core Arps params are
+// missing/non-finite — caller should fall back to the stored `eur`
+// in that case.
 export function eurFromForecastParams(
   params: Record<string, number> | null | undefined,
 ): number | null {
@@ -120,5 +125,15 @@ export function eurFromForecastParams(
   ) {
     return null;
   }
-  return eurFromArpsParams({ qi, Di, b, Df });
+  const qo = params.qo;
+  const peakIndex = params.peak_index_months;
+  return eurFromArpsParams({
+    qi,
+    Di,
+    b,
+    Df,
+    qo: qo !== undefined && Number.isFinite(qo) ? qo : undefined,
+    peak_index:
+      peakIndex !== undefined && Number.isFinite(peakIndex) ? peakIndex : undefined,
+  });
 }

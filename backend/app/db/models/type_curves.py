@@ -41,8 +41,12 @@ class TypeCurve(Base):
     notes: Mapped[str | None] = mapped_column(Text)
 
     filter_spec: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
-    included_api14s: Mapped[list[str]] = mapped_column(
-        ARRAY(String(14)), nullable=False
+    # Cohort membership, api10-keyed as of the cutover (migration 0010).
+    # Saved type curves built pre-cutover were truncated rather than
+    # backfilled — the user opted for a clean slate over migration-time
+    # api14 -> api10 transform complexity.
+    included_api10s: Mapped[list[str]] = mapped_column(
+        ARRAY(String(10)), nullable=False
     )
 
     normalization_basis: Mapped[NormalizationBasis] = mapped_column(
@@ -76,11 +80,12 @@ class TypeCurve(Base):
         Boolean, nullable=False, server_default=false()
     )
 
-    # Per-TC forecast overrides keyed by ``{api14: {stream: payload}}``.
-    # Payload mirrors the forecasts-table fit + derived columns
-    # (params/qi/Di/b/Df/eur/fit_r2/manual_override/...) so the read
-    # path can hand it to existing components unchanged. Empty until
-    # Phase 2 writes; resolve_forecast() falls back to the global
+    # Per-TC forecast overrides keyed by ``{api10: {stream: payload}}``.
+    # (Pre-cutover this was api14-keyed; migration 0010 truncated and
+    # the format is now api10-keyed.) Payload mirrors the forecasts-
+    # table fit + derived columns (params/qi/Di/b/Df/eur/fit_r2/
+    # manual_override/...) so the read path can hand it to existing
+    # components unchanged. resolve_forecast() falls back to the global
     # forecasts row when a stream is missing here.
     forecast_overrides: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")

@@ -5,8 +5,10 @@ const HARD_CAP = 500;
 
 export function SummaryDrawer() {
   const summary = useMapStore((s) => s.summary);
-  const selected = useMapStore((s) => s.selectedApi14s);
+  const selected = useMapStore((s) => s.selectedApi10s);
   const clearSelection = useMapStore((s) => s.clearSelection);
+  const cutoffMonths = useMapStore((s) => s.forecastCutoffMonths);
+  const setCutoffMonths = useMapStore((s) => s.setForecastCutoffMonths);
 
   const count = summary?.count ?? selected.size;
 
@@ -93,13 +95,47 @@ export function SummaryDrawer() {
         disabled={overHard || count === 0}
         title={overHard ? "Reduce selection below the hard cap" : "Run auto-forecast"}
         onClick={() => {
-          const api14s = Array.from(useMapStore.getState().selectedApi14s);
-          useMapStore.getState().setForecastApi14s(api14s);
-          useMapStore.getState().setCurrentPage("forecast");
+          const api10s = Array.from(useMapStore.getState().selectedApi10s);
+          useMapStore.getState().setForecastApi10s(api10s);
+          // One-shot trigger — Review consumes this to know the batch
+          // should fire. Plain tab navigation doesn't set it, so
+          // returning to Review later doesn't re-fit.
+          useMapStore.getState().setForecastTriggerPending(true);
+          useMapStore.getState().setCurrentPage("review");
         }}
       >
         Forecast {count} well{count === 1 ? "" : "s"}
       </button>
+
+      {/*
+        Sits directly under the Forecast button so the user makes a
+        deliberate decision about the short-history cutoff BEFORE the
+        batch fires. Stored in mapStore so the value travels with the
+        selection. Wells with fewer than `cutoffMonths` post-peak
+        months are excluded from the autoforecast; the Forecast page
+        prompts the user to transfer cohort Di / b to them after the
+        long-history fits are reviewed. See app.forecasting.cohort.
+      */}
+      <label className="cutoff-control">
+        <span className="cutoff-label">Short-history cutoff</span>
+        <span className="cutoff-input-row">
+          <input
+            type="number"
+            min={1}
+            max={24}
+            step={1}
+            value={cutoffMonths}
+            onChange={(e) =>
+              setCutoffMonths(Math.max(1, Math.min(24, Number(e.target.value) || 1)))
+            }
+          />
+          <span className="muted">months post-peak</span>
+        </span>
+        <span className="cutoff-hint muted">
+          Wells with shorter history skip the auto-fit and pick up Di / b from
+          the long-history cohort median.
+        </span>
+      </label>
     </aside>
   );
 }

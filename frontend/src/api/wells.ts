@@ -20,11 +20,11 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.first_prod_end) params.set("first_prod_end", spec.first_prod_end);
   if (spec.lateral_min_ft != null) params.set("lateral_min_ft", String(spec.lateral_min_ft));
   if (spec.lateral_max_ft != null) params.set("lateral_max_ft", String(spec.lateral_max_ft));
-  // api14 allow-list. 14 digits each — 500 of them = ~7.5 KB of query
+  // api10 allow-list. 14 digits each — 500 of them = ~7.5 KB of query
   // string, still inside typical proxy buffer limits. Beyond that the
   // tile URL risks getting rejected; the FilterPanel input warns at
   // 500 to keep users out of that zone.
-  if (spec.api14s.length) params.set("api14s", spec.api14s.join(","));
+  if (spec.api10s.length) params.set("api10s", spec.api10s.join(","));
   return params.toString();
 }
 
@@ -43,8 +43,8 @@ export function tileUrlTemplate(
   return `/api/wells/tiles/{z}/{x}/{y}.mvt${suffix}`;
 }
 
-export async function fetchWellDetail(api14: string): Promise<WellDetail> {
-  const r = await apiFetch(`/api/wells/${api14}`);
+export async function fetchWellDetail(api10: string): Promise<WellDetail> {
+  const r = await apiFetch(`/api/wells/${api10}`);
   if (!r.ok) throw new Error(`well lookup failed: ${r.status}`);
   return (await r.json()) as WellDetail;
 }
@@ -56,22 +56,22 @@ export async function fetchOperators(q: string): Promise<OperatorMatch[]> {
 }
 
 // Lightweight GeoJSON for the review-tab map. One LineString per well
-// (the heel-to-bottomhole wellstick), with api14/formation/operator
+// (the heel-to-bottomhole wellstick), with api10/formation/operator
 // properties for client-side coloring/joining against forecasts.
 export interface WellstickFeatureCollection {
   type: "FeatureCollection";
   features: Array<{
     type: "Feature";
     geometry: { type: "LineString"; coordinates: [number, number][] };
-    properties: { api14: string; formation: string | null; operator: string | null };
+    properties: { api10: string; formation: string | null; operator: string | null };
   }>;
 }
 
-export async function fetchWellsticks(api14s: string[]): Promise<WellstickFeatureCollection> {
-  if (api14s.length === 0) {
+export async function fetchWellsticks(api10s: string[]): Promise<WellstickFeatureCollection> {
+  if (api10s.length === 0) {
     return { type: "FeatureCollection", features: [] };
   }
-  const r = await apiFetch(`/api/wells/wellsticks?api14s=${api14s.join(",")}`);
+  const r = await apiFetch(`/api/wells/wellsticks?api10s=${api10s.join(",")}`);
   if (!r.ok) throw new Error(`wellsticks fetch failed: ${r.status}`);
   return (await r.json()) as WellstickFeatureCollection;
 }
@@ -81,7 +81,7 @@ export async function fetchWellsticks(api14s: string[]): Promise<WellstickFeatur
 // render. Heavier `fetchWellDetail` stays for the single-well modal on
 // the map tab.
 export interface WellDetailLite {
-  api14: string;
+  api10: string;
   name: string | null;
   formation: string | null;
   operator: string | null;
@@ -92,11 +92,14 @@ export interface WellDetailLite {
   bh_lat: number | null;
   bh_lon: number | null;
   first_prod_date: string | null;
+  vintage_year: number | null;
+  county: string | null;
+  novi_oil_eur: number | null;
 }
 
-export async function fetchWellDetails(api14s: string[]): Promise<WellDetailLite[]> {
-  if (api14s.length === 0) return [];
-  const r = await apiFetch(`/api/wells/details?api14s=${api14s.join(",")}`);
+export async function fetchWellDetails(api10s: string[]): Promise<WellDetailLite[]> {
+  if (api10s.length === 0) return [];
+  const r = await apiFetch(`/api/wells/details?api10s=${api10s.join(",")}`);
   if (!r.ok) throw new Error(`well details fetch failed: ${r.status}`);
   return (await r.json()) as WellDetailLite[];
 }
@@ -136,11 +139,11 @@ export async function selectWellsSpatial(args: {
   return (await r.json()) as SelectResponse;
 }
 
-export async function summaryForApi14s(api14s: string[]): Promise<SelectionSummary> {
+export async function summaryForApi10s(api10s: string[]): Promise<SelectionSummary> {
   const r = await apiFetch("/api/wells/summary", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ api14s }),
+    body: JSON.stringify({ api10s }),
   });
   if (!r.ok) throw new Error(`summary failed: ${r.status}`);
   return (await r.json()) as SelectionSummary;

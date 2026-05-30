@@ -2,7 +2,6 @@
 // /api/wells/* responses — when a field is added server-side, update here.
 
 export type WellStatus = "PDP" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKNOWN";
-export type WellstickSource = "heel_to_bh" | "surface_to_bh" | "none";
 
 export interface FilterSpec {
   formations: string[];
@@ -13,10 +12,10 @@ export interface FilterSpec {
   first_prod_end: string | null;
   lateral_min_ft: number | null;
   lateral_max_ft: number | null;
-  // Explicit API14 allow-list. When non-empty, only the map's wells
-  // that match one of these api14s are shown. Pasted from an external
+  // Explicit API10 allow-list. When non-empty, only the map's wells
+  // that match one of these api10s are shown. Pasted from an external
   // tool's well-list workflow.
-  api14s: string[];
+  api10s: string[];
 }
 
 export const DEFAULT_FILTER_SPEC: FilterSpec = {
@@ -28,7 +27,7 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   first_prod_end: null,
   lateral_min_ft: null,
   lateral_max_ft: null,
-  api14s: [],
+  api10s: [],
 };
 
 export interface SelectionSummary {
@@ -42,7 +41,7 @@ export interface SelectionSummary {
 }
 
 export interface SelectResponse {
-  api14s: string[];
+  api10s: string[];
   summary: SelectionSummary;
   filter_echo: Record<string, unknown>;
 }
@@ -68,7 +67,7 @@ export interface FilterFacets {
 }
 
 export interface WellDetail {
-  api14: string;
+  api10: string;
   operator: string | null;
   formation: string | null;
   first_prod_date: string | null;
@@ -81,7 +80,6 @@ export interface WellDetail {
   county: string | null;
   basin: string | null;
   status: WellStatus;
-  wellstick_source: WellstickSource;
   sh_lat: number | null;
   sh_lon: number | null;
   bh_lat: number | null;

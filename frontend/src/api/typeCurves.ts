@@ -105,12 +105,12 @@ export interface TypeCurveSummary {
 
 export interface TypeCurveRow extends TypeCurveSummary {
   filter_spec: Record<string, unknown>;
-  included_api14s: string[];
+  included_api10s: string[];
   series: AggregatePayload;
 }
 
 export async function computeTypeCurve(args: {
-  api14s: string[];
+  api10s: string[];
   normalization_basis?: NormalizationBasis;
   alignment_method?: AlignmentMethod;
   n_months?: number | null;
@@ -128,7 +128,7 @@ export async function saveTypeCurve(args: {
   name: string;
   notes?: string | null;
   filter_spec?: Record<string, unknown>;
-  included_api14s: string[];
+  included_api10s: string[];
   normalization_basis?: NormalizationBasis;
   alignment_method?: AlignmentMethod;
   n_months?: number | null;
@@ -147,7 +147,7 @@ export async function saveTypeCurve(args: {
       name: args.name,
       notes: args.notes ?? null,
       filter_spec: args.filter_spec ?? {},
-      included_api14s: args.included_api14s,
+      included_api10s: args.included_api10s,
       normalization_basis: args.normalization_basis ?? "per_lateral_ft",
       alignment_method: args.alignment_method ?? "first_prod_month",
       n_months: args.n_months ?? null,
@@ -214,7 +214,7 @@ export async function deleteTypeCurve(id: string): Promise<void> {
 }
 
 export interface TypeCurveWellStat {
-  api14: string;
+  api10: string;
   name: string | null;
   lateral_ft: number | null;
   oil_eur: number | null;
@@ -244,7 +244,7 @@ export interface WorkspaceStreamForecast {
 }
 
 export interface WorkspaceWell {
-  api14: string;
+  api10: string;
   well_name: string | null;
   well_operator: string | null;
   well_formation: string | null;
@@ -277,12 +277,12 @@ export type { Stream } from "./forecasts";
 
 export async function putForecastOverride(
   id: string,
-  api14: string,
+  api10: string,
   stream: "oil" | "gas" | "water",
   params: { qi: number; Di: number; b: number; Df: number },
 ): Promise<WorkspaceStreamForecast> {
   const r = await apiFetch(
-    `/api/type-curves/${id}/overrides/${api14}/${stream}`,
+    `/api/type-curves/${id}/overrides/${api10}/${stream}`,
     {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -295,11 +295,11 @@ export async function putForecastOverride(
 
 export async function deleteForecastOverride(
   id: string,
-  api14: string,
+  api10: string,
   stream: "oil" | "gas" | "water",
 ): Promise<WorkspaceStreamForecast> {
   const r = await apiFetch(
-    `/api/type-curves/${id}/overrides/${api14}/${stream}`,
+    `/api/type-curves/${id}/overrides/${api10}/${stream}`,
     { method: "DELETE" },
   );
   if (!r.ok) throw new Error(`override delete failed: ${r.status} ${await r.text()}`);

@@ -27,6 +27,18 @@ DEFAULT_ECONOMIC_LIMIT_BOPD: float = 0.0
 DEFAULT_ECONOMIC_LIMIT_MCFD: float = 0.0
 DEFAULT_ECONOMIC_LIMIT_BWPD: float = 0.0
 
+# Absolute rate floor for downtime filtering. A post-peak month whose
+# calday rate is below this value gets flagged as downtime and excluded
+# from the fit, regardless of how it compares to the local rolling-max.
+# Handles the choppy-shut-in pattern where a well bounces between zero
+# and a low residual rate — the rolling-max check alone gets dragged
+# down by the zero neighbors and lets the residual-rate months through.
+# Permian-tuned: oil at 5 BOPD is well below any genuine producing
+# baseline; gas at 30 MCFD and water at 10 BWPD likewise.
+DEFAULT_DOWNTIME_FLOOR_BOPD: float = 5.0
+DEFAULT_DOWNTIME_FLOOR_MCFD: float = 30.0
+DEFAULT_DOWNTIME_FLOOR_BWPD: float = 10.0
+
 
 @dataclass(frozen=True)
 class ForecastConfig:
@@ -44,8 +56,23 @@ class ForecastConfig:
     economic_limit_bopd: float = DEFAULT_ECONOMIC_LIMIT_BOPD
     economic_limit_mcfd: float = DEFAULT_ECONOMIC_LIMIT_MCFD
     economic_limit_bwpd: float = DEFAULT_ECONOMIC_LIMIT_BWPD
+    # Absolute rate below which a post-peak month gets dropped as
+    # downtime, regardless of its relationship to the rolling-max.
+    # Catches the choppy-restart pattern that slips through the 30%-
+    # of-local-max filter alone.
+    downtime_floor_bopd: float = DEFAULT_DOWNTIME_FLOOR_BOPD
+    downtime_floor_mcfd: float = DEFAULT_DOWNTIME_FLOOR_MCFD
+    downtime_floor_bwpd: float = DEFAULT_DOWNTIME_FLOOR_BWPD
     # >= 6 months post-peak required for the default fit (brief).
     min_post_peak_months: int = 6
+    # Wells with fewer than this many post-peak months are excluded from
+    # the autoforecast batch and surfaced as pending-transfer. The user
+    # reviews the long-history fits, then runs the transfer endpoint to
+    # write forecasts for the short-history wells using the long
+    # cohort's median Di / b. Setting this to None disables the
+    # partition entirely — every well is fit unconstrained (legacy
+    # behavior, preserved for direct API callers and tests).
+    short_history_cutoff_months: int | None = None
 
 
 @dataclass(frozen=True)
@@ -70,6 +97,14 @@ class ForecastResult:
     # Fraction of post-peak months excluded as downtime (0.0 to 1.0).
     # See app.forecasting.fit::_flag_downtime for the heuristic.
     downtime_ratio: float = 0.0
+    # Linear-ramp prefix carried alongside the Arps fit. qo is the
+    # stream's first-prod-month rate; peak_index_months is the count
+    # of months from first prod to the detected peak. The forecast
+    # model is ramp(qo→qi over peak_index_months) + Arps. Both are
+    # None when there's no first-prod observation to anchor qo or
+    # when peak_index_months is 0 — evaluator falls back to pure Arps.
+    qo: float | None = None
+    peak_index_months: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,4 +126,6 @@ class ForecastResult:
             "insufficient_history": self.insufficient_history,
             "notes": self.notes,
             "downtime_ratio": self.downtime_ratio,
+            "qo": self.qo,
+            "peak_index_months": self.peak_index_months,
         }

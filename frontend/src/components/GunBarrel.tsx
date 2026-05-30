@@ -19,16 +19,16 @@ import { colorForFormation } from "../map/formations";
 
 export interface GunBarrelProps {
   wells: WellDetailLite[];
-  // api14s of wells that will be added when the user commits. The
+  // api10s of wells that will be added when the user commits. The
   // unchecked wells render at lowered opacity. Toggle via onToggle.
-  selectedApi14s: Set<string>;
-  onToggle: (api14: string) => void;
+  selectedApi10s: Set<string>;
+  onToggle: (api10: string) => void;
   // Shared hover state lifted into the InspectModal — lets the
   // production charts and the gun-barrel highlight the same well at
   // the same time. Both undefined when this component is reused
   // outside the modal.
-  hoveredApi14?: string | null;
-  onHover?: (api14: string | null) => void;
+  hoveredApi10?: string | null;
+  onHover?: (api10: string | null) => void;
   width?: number;
   height?: number;
 }
@@ -44,7 +44,7 @@ const FT_PER_DEG_LAT = 364_000;
 // ---------------- math helpers ----------------
 
 interface Projected {
-  api14: string;
+  api10: string;
   offsetFt: number;
   tvd: number;
   tvdEstimated: boolean;
@@ -123,7 +123,7 @@ function projectWells(wells: WellDetailLite[]): {
     const offsetFt = dxFt * perpX + dyFt * perpY;
     const tvdKnown = w.tvd_ft != null && Number.isFinite(w.tvd_ft);
     return {
-      api14: w.api14,
+      api10: w.api10,
       offsetFt,
       tvd: tvdKnown ? w.tvd_ft! : meanTvd,
       tvdEstimated: !tvdKnown,
@@ -155,16 +155,16 @@ function compassLabel(deg: number): string {
 
 export function GunBarrel({
   wells,
-  selectedApi14s,
+  selectedApi10s,
   onToggle,
-  hoveredApi14 = null,
+  hoveredApi10 = null,
   onHover,
   width = 880,
   height = 320,
 }: GunBarrelProps) {
   const { projected, axisLabel } = useMemo(() => projectWells(wells), [wells]);
   // Local hover keeps the projected x/y for tooltip positioning. The
-  // *which-well-is-hovered* truth lives at hoveredApi14 (the lifted
+  // *which-well-is-hovered* truth lives at hoveredApi10 (the lifted
   // prop) so the production charts can react to the same hover.
   const [hover, setHover] = useState<Projected | null>(null);
 
@@ -297,9 +297,9 @@ export function GunBarrel({
           reads. Deselected wells stay ghosted regardless of hover. */}
       {projected.map((p) => {
         const color = colorForFormation(p.well.formation);
-        const selected = selectedApi14s.has(p.api14);
-        const isHovered = hoveredApi14 === p.api14;
-        const anyHover = hoveredApi14 != null;
+        const selected = selectedApi10s.has(p.api10);
+        const isHovered = hoveredApi10 === p.api10;
+        const anyHover = hoveredApi10 != null;
         const opacity = !selected
           ? 0.35
           : anyHover && !isHovered
@@ -307,7 +307,7 @@ export function GunBarrel({
             : 1;
         return (
           <circle
-            key={p.api14}
+            key={p.api10}
             cx={xScale(p.offsetFt)}
             cy={yScale(p.tvd)}
             r={WELL_RADIUS}
@@ -317,13 +317,13 @@ export function GunBarrel({
             strokeWidth={isHovered ? 2.5 : 1.5}
             opacity={opacity}
             style={{ cursor: "pointer" }}
-            onClick={() => onToggle(p.api14)}
+            onClick={() => onToggle(p.api10)}
             onMouseEnter={() => {
               setHover(p);
-              onHover?.(p.api14);
+              onHover?.(p.api10);
             }}
             onMouseLeave={() => {
-              setHover((h) => (h?.api14 === p.api14 ? null : h));
+              setHover((h) => (h?.api10 === p.api10 ? null : h));
               onHover?.(null);
             }}
           />
@@ -411,7 +411,7 @@ function GunBarrelTooltip({
         fontWeight={600}
         fill="#0f172a"
       >
-        {w.name ?? w.api14}
+        {w.name ?? w.api10}
       </text>
       <text x={tx + 10} y={ty + 34} fontSize="11" fill="#374151">
         {w.formation ?? "(no formation)"}

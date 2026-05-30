@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
 import type { FacetCount, WellStatus } from "../api/types";
@@ -15,15 +15,24 @@ export function FilterPanel() {
   const setStatuses = useMapStore((s) => s.setStatuses);
   const setVintageRange = useMapStore((s) => s.setVintageRange);
   const setLateralRange = useMapStore((s) => s.setLateralRange);
-  const setApi14s = useMapStore((s) => s.setApi14s);
+  const setApi10s = useMapStore((s) => s.setApi10s);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
   // Refetch facets whenever filters change so per-facet counts respond
   // ("WOLFCAMP A has 12 wells under your current vintage window").
   // The backend excludes the facet's own column from its own count.
+  //
+  // keepPreviousData holds the prior facet list visible during the
+  // in-flight refetch. Without it, `data` flips to undefined on every
+  // filter change, the FormationSection collapses to four empty
+  // fieldsets, and the panel layout jumps up — which makes typing
+  // into the date inputs feel like the panel is scrolling on every
+  // keystroke. The new facets land a moment later and the list
+  // re-expands, but the jitter is the actual UX complaint.
   const facetsQ = useQuery({
     queryKey: ["facets", filters],
     queryFn: () => fetchFacets(filters),
+    placeholderData: keepPreviousData,
   });
 
   return (
@@ -61,16 +70,16 @@ export function FilterPanel() {
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
 
-      <Api14Section selected={filters.api14s} onChange={setApi14s} />
+      <Api10Section selected={filters.api10s} onChange={setApi10s} />
     </aside>
   );
 }
 
-// ---------------- API14 paste filter ----------------
-// Paste a multiline list of API14s from another tool's well-list export.
+// ---------------- API10 paste filter ----------------
+// Paste a multiline list of API10s from another tool's well-list export.
 // When non-empty, the map is filtered to ONLY those wells (intersected
 // with the other active filters). Empty textarea = no filter.
-function Api14Section({
+function Api10Section({
   selected,
   onChange,
 }: {
@@ -88,19 +97,21 @@ function Api14Section({
     setDraft(selected.join("\n"));
   }, [selected.join(",")]);
 
-  // Extract every 14-digit run, regardless of separator. Tolerates
-  // dashes (TX format like 42-301-36707-0000 = 14 digits when stripped),
-  // commas, tabs, newlines, and leading/trailing junk.
-  const parsed = useMemo(() => extractApi14s(draft), [draft]);
+  // Extract every 10-digit run (Novi wellbore identifier), regardless
+  // of separator. Tolerates dashes (e.g. "42-301-36707" = 10 digits
+  // when stripped), commas, tabs, newlines, and leading/trailing junk.
+  // Pasting full 14-digit api14s still works — the regex consumes the
+  // leading 10 digits, which is the api10 of the same wellbore.
+  const parsed = useMemo(() => extractApi10s(draft), [draft]);
   const dirty = !arraysEqual(parsed, selected);
 
   return (
     <section className="filter-section">
-      <h3>API14 list</h3>
+      <h3>API10 list</h3>
       <textarea
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="paste api14s (one per line or comma-separated)"
+        placeholder="paste api10s (one per line or comma-separated)"
         rows={5}
         spellCheck={false}
         style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
@@ -110,8 +121,8 @@ function Api14Section({
         style={{ fontSize: 11, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}
       >
         {parsed.length === 0
-          ? <span>no api14s parsed</span>
-          : <span>{parsed.length} api14{parsed.length === 1 ? "" : "s"} parsed</span>}
+          ? <span>no api10s parsed</span>
+          : <span>{parsed.length} api10{parsed.length === 1 ? "" : "s"} parsed</span>}
         {parsed.length > 500 && (
           <span style={{ color: "#dc2626" }}>
             — over 500 will likely overflow the tile URL
@@ -144,12 +155,12 @@ function Api14Section({
   );
 }
 
-const API14_RE = /\d{14}/g;
+const API10_RE = /\d{10}/g;
 
-function extractApi14s(text: string): string[] {
-  // Strip dashes so "42-301-36707-0000" → "42301367070000" before matching.
+function extractApi10s(text: string): string[] {
+  // Strip dashes so "42-301-36707" → "4230136707" before matching.
   const compact = text.replace(/-/g, "");
-  const matches = compact.match(API14_RE) ?? [];
+  const matches = compact.match(API10_RE) ?? [];
   // De-dupe while preserving paste order so the user can tell which
   // entries collapsed if they expected a different count.
   const seen = new Set<string>();

@@ -1,11 +1,28 @@
-"""High-level sync flows: well headers, then per-well production + surveys.
+"""High-level sync: bulk-load wells + production from engineering_db.
 
-Default scope = Loving + Reeves Counties (the two big Delaware-basin
-producers in TX). Each county runs as its own sync_county() invocation
-so jobs / watermarks stay per-county (the scope_key embeds the county
-name). The orchestrator persists progress to sync_jobs / sync_watermarks
-so /api/sync/status can poll. SSE streaming (brief target) wires up in
-step 3 once the map needs progressive updates.
+Replaces the legacy Enverus-driven per-county sync. The warehouse holds
+the entire Permian; one sync covers it in a single read pass for the
+well headers, then production is pulled in batches keyed by the api10
+list we just loaded.
+
+Sync flow:
+    1. ``fetch_well_headers`` from ``curated.wells_enriched`` (Permian-
+       wide, vintage 2010+ horizontals by default), stream into the
+       local ``wells`` table via ``upsert_well_headers``.
+    2. ``fetch_production_for_api10s`` from ``curated.production`` for
+       all just-loaded api10s, stream into ``production_monthly``.
+
+Each phase gets its own ``SyncJob`` row (entity =
+``SyncEntity.WELL_HEADERS`` then ``SyncEntity.PRODUCTION``). The
+``scope_key`` is ``"env_region=PERMIAN"`` since the sync no longer
+splits by county.
+
+Back-compat: ``sync_county`` and ``sync_counties`` are kept as thin
+wrappers so the existing CLI (``app.seed.seed_county``) and HTTP
+endpoint (``app.api.sync``) continue to function without modification.
+They both log a deprecation note and route to ``sync_permian``. The
+``counties``/``county`` args are accepted-and-ignored — the warehouse
+sync is Permian-wide by design.
 """
 
 from __future__ import annotations
@@ -29,41 +46,37 @@ from app.db.models import (
     Well,
 )
 from app.db.session import SessionLocal
-from app.enverus_client.base import EnverusClient
-from app.enverus_client.prism import PrismClient
 from app.ingest.production import upsert_production_records
 from app.ingest.wells import upsert_well_headers
+from app.warehouse_client.production import fetch_production_for_api10s
+from app.warehouse_client.session import _engine as _warehouse_engine
+from app.warehouse_client.wells import fetch_well_headers
 
 log = get_logger("sync.orchestrator")
 
-DEFAULT_BASIN = "Permian"
-# Single-county default kept for back-compat: callers that take a string
-# (synthetic seeder, the legacy `--county` singular CLI arg, the older
-# /api/sync/run request shape) still resolve to a sensible value.
-DEFAULT_COUNTY = "Loving"
-# Multi-county default. Anything that wants the canonical project scope
-# — `python -m app.seed.seed_county` with no args, the default body of
-# /api/sync/run — pulls all four. Add more counties here as they come
-# into deal scope.
-DEFAULT_COUNTIES: tuple[str, ...] = ("Loving", "Reeves", "Ward", "Winkler")
 
-# Server-side scope filters baked into every default seed.
-#
-# `first_prod_date > 2010-01-01` excludes pre-shale-boom wells —
-# Wolfberry-era and earlier conventional verticals plus the early-
-# unconventional pre-Permian-boom tail. In Ward (89% vertical) and
-# Winkler (94% vertical) this filter alone cuts well count by ~80%,
-# which cascades into ~80% fewer per-well production calls (the slow
-# phase). Modern Permian unconventional wells are universally post-
-# 2010; this floor excludes nothing a deal cohort would ever cite.
-#
-# Lateral-length floor is off by default — the date filter catches
-# almost everything we'd want to drop. Set via `--min-lateral-ft` on
-# the CLI if a tighter horizontal-only scope is needed.
+# Defaults that drive the warehouse query. ``DEFAULT_BASIN`` /
+# ``DEFAULT_COUNTY`` / ``DEFAULT_COUNTIES`` are preserved so external
+# importers (api/sync.py, seed_county.py) don't break on import; their
+# values are now informational only.
+DEFAULT_BASIN: str = "Permian"
+DEFAULT_COUNTY: str | None = None
+DEFAULT_COUNTIES: tuple[str, ...] = ()
 DEFAULT_FIRST_PROD_AFTER: date = date(2010, 1, 1)
+DEFAULT_FIRST_COMPLETION_AFTER: date = date(2010, 1, 1)
 DEFAULT_MIN_LATERAL_FT: float | None = None
+DEFAULT_HORIZONTAL_ONLY: bool = True
+
+# Single scope key for SyncJob / SyncWatermark — one sync per run, one
+# scope (the entire Permian).
+SCOPE_KEY: str = "env_region=PERMIAN"
 
 T = TypeVar("T")
+
+
+# ----------------------------------------------------------------------
+# Job + watermark helpers (unchanged from the Enverus orchestrator)
+# ----------------------------------------------------------------------
 
 
 @contextmanager
@@ -86,13 +99,10 @@ def _job(
     job_id = job.id
     try:
         yield job
-    except Exception as e:  # noqa: BLE001 — we want to record the message
-        # The inner work may have left the session in an aborted transaction
-        # (e.g. a DataError during a SQL execute). Roll back first so the
-        # next statement — the failure-record write — runs in a fresh txn.
+    except Exception as e:  # noqa: BLE001
         try:
             session.rollback()
-        except Exception:  # pragma: no cover  -- best-effort cleanup
+        except Exception:  # pragma: no cover
             pass
         job_row = session.get(SyncJob, job_id)
         if job_row is not None:
@@ -129,89 +139,121 @@ def _batched(it: Iterable[T], n: int) -> Iterator[list[T]]:
         yield chunk
 
 
-def _build_client() -> EnverusClient:
-    from app.config import settings
+# ----------------------------------------------------------------------
+# Main entry: sync_permian
+# ----------------------------------------------------------------------
 
-    return PrismClient(api_key=settings.enverus_api_key_prism)
+
+def sync_permian(
+    *,
+    pull_production: bool = True,
+    first_completion_after: date | None = DEFAULT_FIRST_COMPLETION_AFTER,
+    horizontal_only: bool = DEFAULT_HORIZONTAL_ONLY,
+) -> dict[str, int]:
+    """Sync the entire Permian from engineering_db into the local app DB.
+
+    Returns a count dict ``{"headers": N, "production": M}`` for the
+    caller to surface.
+
+    Pulling all-Permian production (~5M rows) takes minutes. If the
+    caller wants only the well headers refreshed (e.g. nightly map
+    refresh without per-month delta), pass ``pull_production=False``.
+    """
+    counts = {"headers": 0, "production": 0}
+
+    wh_engine = _warehouse_engine()
+
+    # ---- 1. Well headers ----
+    with SessionLocal() as session:
+        with _job(session, SyncEntity.WELL_HEADERS, SCOPE_KEY) as job:
+            with Session(wh_engine) as wh:
+                header_iter = fetch_well_headers(
+                    wh,
+                    first_completion_after=first_completion_after,
+                    horizontal_only=horizontal_only,
+                )
+                total = 0
+                # 200/batch keeps Postgres' bind-parameter count well
+                # below the 65 535 limit even with the ON CONFLICT SET
+                # clause expanding the column list. The ingest layer
+                # commits per batch, so progress is durable.
+                for batch in _batched(header_iter, 200):
+                    total += upsert_well_headers(session, batch)
+                    job.items_upserted = total
+                    job.items_seen = total
+                    session.commit()
+                counts["headers"] = total
+            _watermark_set(
+                session,
+                SyncEntity.WELL_HEADERS,
+                SCOPE_KEY,
+                datetime.now(timezone.utc),
+            )
+
+    # ---- 2. Production ----
+    if pull_production:
+        with SessionLocal() as session:
+            # Read the api10 list AFTER headers committed so we cover
+            # every well just loaded.
+            api10s = [
+                r[0]
+                for r in session.execute(select(Well.api10)).all()
+            ]
+            with _job(session, SyncEntity.PRODUCTION, SCOPE_KEY) as job:
+                with Session(wh_engine) as wh:
+                    prod_iter = fetch_production_for_api10s(wh, api10s)
+                    total = 0
+                    # 1 000/batch × 9 columns ≈ 9 000 bind params per
+                    # statement — comfortable margin under the 65 535
+                    # ceiling.
+                    for batch in _batched(prod_iter, 1000):
+                        total += upsert_production_records(session, batch)
+                        job.items_upserted = total
+                        job.items_seen = total
+                        session.commit()
+                    counts["production"] = total
+                _watermark_set(
+                    session,
+                    SyncEntity.PRODUCTION,
+                    SCOPE_KEY,
+                    datetime.now(timezone.utc),
+                )
+
+    log.info("sync_permian_done", **counts)
+    return counts
+
+
+# ----------------------------------------------------------------------
+# Back-compat wrappers (CLI + API still import these symbols)
+# ----------------------------------------------------------------------
 
 
 def sync_county(
     *,
     basin: str = DEFAULT_BASIN,
-    county: str = DEFAULT_COUNTY,
+    county: str | None = None,
     pull_production: bool = True,
     first_prod_after: date | None = DEFAULT_FIRST_PROD_AFTER,
     min_lateral_ft: float | None = DEFAULT_MIN_LATERAL_FT,
-    client: EnverusClient | None = None,
+    client: object | None = None,
 ) -> dict[str, int]:
-    """Synchronous entry — called from CLI and from the background task hook.
+    """Deprecated. Routes to ``sync_permian``.
 
-    Returns a dict of upsert counts for the caller (and the sync status
-    endpoint) to surface.
-
-    Phase 2 of the LateralLine migration removed the survey-fetch phase —
-    Enverus's `LateralLine` column populates the wellstick at header
-    upsert time (~99% horizontal coverage), and `header_to_upsert_values`
-    falls back to a surface→BH straight line for the remainder with both
-    endpoints known. `SyncEntity.SURVEYS` is preserved in the enum for
-    historical sync_jobs rows but no new rows of that entity are emitted.
+    Pre-cutover, this synced one county at a time via Enverus.
+    Post-cutover, the warehouse pulls the entire Permian in one shot
+    and per-county scope is obsolete. ``basin``, ``county``,
+    ``min_lateral_ft``, and ``client`` are accepted-and-ignored;
+    ``first_prod_after`` is honored as ``first_completion_after``.
     """
-    counts = {"headers": 0, "production": 0}
-    cli = client or _build_client()
-    scope_key = f"basin={basin};county={county}"
-
-    # ---- 1. well headers ----
-    with SessionLocal() as session:
-        with _job(session, SyncEntity.WELL_HEADERS, scope_key) as job:
-            header_iter = cli.fetch_well_headers(
-                basin=basin,
-                county=county,
-                first_prod_after=first_prod_after,
-                min_lateral_ft=min_lateral_ft,
-            )
-            total = 0
-            for batch in _batched(header_iter, 200):
-                total += upsert_well_headers(session, batch)
-                job.items_upserted = total
-                job.items_seen = total
-                session.commit()
-            counts["headers"] = total
-            _watermark_set(
-                session, SyncEntity.WELL_HEADERS, scope_key, datetime.now(timezone.utc)
-            )
-
-    # ---- 2. production (per-well, batched) ----
-    if pull_production:
-        with SessionLocal() as session:
-            api14s = [
-                r[0]
-                for r in session.execute(
-                    select(Well.api14).where(Well.county == county)
-                ).all()
-            ]
-            with _job(session, SyncEntity.PRODUCTION, scope_key) as job:
-                prod_iter = cli.fetch_monthly_production(api14s)
-                total = 0
-                # production_monthly has ~13 bound parameters per row, so
-                # the batch size × 13 must stay safely below Postgres'
-                # 65 535 parameter limit per statement. 1 000 → ~13 000
-                # params, comfortable headroom even with the ON CONFLICT
-                # SET clause expanding the column list at parse time.
-                for batch in _batched(prod_iter, 1000):
-                    total += upsert_production_records(session, batch)
-                    job.items_upserted = total
-                    job.items_seen = total
-                    session.commit()
-                counts["production"] = total
-                _watermark_set(
-                    session,
-                    SyncEntity.PRODUCTION,
-                    scope_key,
-                    datetime.now(timezone.utc),
-                )
-
-    log.info("sync_county_done", basin=basin, county=county, **counts)
-    return counts
+    log.warning(
+        "sync_county_deprecated_routing_to_permian",
+        ignored_basin=basin,
+        ignored_county=county,
+    )
+    return sync_permian(
+        pull_production=pull_production,
+        first_completion_after=first_prod_after,
+    )
 
 
 def sync_counties(
@@ -221,31 +263,22 @@ def sync_counties(
     pull_production: bool = True,
     first_prod_after: date | None = DEFAULT_FIRST_PROD_AFTER,
     min_lateral_ft: float | None = DEFAULT_MIN_LATERAL_FT,
-    client: EnverusClient | None = None,
+    client: object | None = None,
 ) -> dict[str, dict[str, int]]:
-    """Run ``sync_county`` for each county in sequence.
+    """Deprecated. Routes to a single ``sync_permian`` call.
 
-    Returns ``{county: counts}`` so the CLI / API can surface per-county
-    totals. Each county gets its own sync_jobs row (scope_key encodes the
-    county), so a partial failure on Reeves doesn't roll back Loving.
-    The client is reused across counties — building one once avoids re-
-    establishing the HTTP session per county.
+    Pre-cutover, this looped per county. Now it's one Permian-wide sync.
+    The return shape ``{county: counts}`` is preserved for back-compat
+    with the API response model; a single synthetic key ``"PERMIAN"``
+    carries the totals.
     """
-    cli = client or _build_client()
-    out: dict[str, dict[str, int]] = {}
-    for county in counties:
-        out[county] = sync_county(
-            basin=basin,
-            county=county,
-            pull_production=pull_production,
-            first_prod_after=first_prod_after,
-            min_lateral_ft=min_lateral_ft,
-            client=cli,
-        )
-    log.info(
-        "sync_counties_done",
-        basin=basin,
-        counties=list(counties),
-        totals={c: sum(v.values()) for c, v in out.items()},
+    log.warning(
+        "sync_counties_deprecated_routing_to_permian",
+        ignored_basin=basin,
+        ignored_counties=list(counties),
     )
-    return out
+    counts = sync_permian(
+        pull_production=pull_production,
+        first_completion_after=first_prod_after,
+    )
+    return {"PERMIAN": counts}

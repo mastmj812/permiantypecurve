@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 import { computeOutliers, type OutlierInput } from "./outliers";
 
-const ROW = (api14: string, eur: number | null, lateral_ft: number | null): OutlierInput => ({
-  api14,
+const ROW = (api10: string, eur: number | null, lateral_ft: number | null): OutlierInput => ({
+  api10,
   eur,
   lateral_ft,
 });
@@ -11,7 +11,7 @@ const ROW = (api14: string, eur: number | null, lateral_ft: number | null): Outl
 describe("computeOutliers", () => {
   it("returns no outliers and null stats on empty input", () => {
     const r = computeOutliers([]);
-    expect(r.outlierApi14s.size).toBe(0);
+    expect(r.outlierApi10s.size).toBe(0);
     expect(r.stats).toBeNull();
   });
 
@@ -20,7 +20,7 @@ describe("computeOutliers", () => {
       ROW("a", 100_000, 10_000),
       ROW("b", 200_000, 10_000),
     ]);
-    expect(r.outlierApi14s.size).toBe(0);
+    expect(r.outlierApi10s.size).toBe(0);
     expect(r.stats).toBeNull();
   });
 
@@ -38,7 +38,7 @@ describe("computeOutliers", () => {
     expect(r.perWell["b"]!.isOutlier).toBe(false);
     expect(r.perWell["c"]!.isOutlier).toBe(false);
     // d-f have eurPerFt 30/40/50 — within 2σ of median 40.
-    expect(r.outlierApi14s.size).toBe(0);
+    expect(r.outlierApi10s.size).toBe(0);
   });
 
   it("flags a high outlier 3σ above median", () => {
@@ -51,9 +51,9 @@ describe("computeOutliers", () => {
       ROW("e", 1_300_000, 10_000),
     ];
     const r = computeOutliers(rows);
-    expect(r.outlierApi14s.has("e")).toBe(true);
-    expect(r.outlierApi14s.has("a")).toBe(false);
-    expect(r.outlierApi14s.has("d")).toBe(false);
+    expect(r.outlierApi10s.has("e")).toBe(true);
+    expect(r.outlierApi10s.has("a")).toBe(false);
+    expect(r.outlierApi10s.has("d")).toBe(false);
   });
 
   it("flags a low outlier 3σ below median", () => {
@@ -65,7 +65,7 @@ describe("computeOutliers", () => {
       ROW("e", 5_000, 10_000), // 0.5 EUR/ft vs median 26
     ];
     const r = computeOutliers(rows);
-    expect(r.outlierApi14s.has("e")).toBe(true);
+    expect(r.outlierApi10s.has("e")).toBe(true);
   });
 
   it("computes median and thresholds correctly", () => {
@@ -84,7 +84,7 @@ describe("computeOutliers", () => {
     expect(r.stats!.lowThreshold).toBeCloseTo(30 - 2 * Math.sqrt(200), 6);
     expect(r.stats!.highThreshold).toBeCloseTo(30 + 2 * Math.sqrt(200), 6);
     // 5-row spread: 10..50, all within ±2σ ≈ 28.3 of median 30. No outliers.
-    expect(r.outlierApi14s.size).toBe(0);
+    expect(r.outlierApi10s.size).toBe(0);
   });
 
   it("handles even-count median correctly (avg of middle two)", () => {

@@ -56,7 +56,7 @@ def _curve(name: str) -> TypeCurve:
     tc.name = name
     tc.notes = "stub for export test"
     tc.filter_spec = {"formation": "Wolfcamp A", "county": "Loving"}
-    tc.included_api14s = ["42100000000001", "42100000000002"]
+    tc.included_api10s = ["42100000000001", "42100000000002"]
     tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
     tc.alignment_method = AlignmentMethod.FIRST_PROD_MONTH
     tc.series = {

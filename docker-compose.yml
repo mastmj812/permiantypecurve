@@ -39,8 +39,15 @@ services:
       PMTILES_PATH: /app/basemap/permian.pmtiles
       PLSS_GEOJSON_PATH: /app/basemap/plss_tx_nm.geojson
       SENTRY_DSN: ${SENTRY_DSN:-}
-      ENVERUS_API_KEY_PRISM: ${ENVERUS_API_KEY_PRISM:-}
-      ENVERUS_API_KEY_DI: ${ENVERUS_API_KEY_DI:-}
+      # Read-only DSN for the engineering_db warehouse (curated.* views).
+      # Defaults to empty so the app boots; warehouse_client calls raise a
+      # clear error when WAREHOUSE_DATABASE_URL is unset.
+      WAREHOUSE_DATABASE_URL: ${WAREHOUSE_DATABASE_URL:-}
+    # Make `host.docker.internal` resolvable on Linux (Windows/Mac Docker
+    # Desktop adds this automatically). engineering_db runs on the host, so
+    # the backend reaches it via this hostname.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     volumes:

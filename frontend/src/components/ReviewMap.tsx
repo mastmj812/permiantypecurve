@@ -117,10 +117,10 @@ interface Props {
   // detect which wells have a fit at all. Parent passes the same list
   // it renders the table from.
   forecasts: ForecastRow[];
-  // Set of api14s the engineer has excluded via the table checkboxes.
+  // Set of api10s the engineer has excluded via the table checkboxes.
   // Excluded wells render gray rather than disappearing — keeps spatial
   // context as the engineer prunes the set.
-  excludedApi14s: Set<string>;
+  excludedApi10s: Set<string>;
   // Currently-selected formation from the Review-tab dropdown. "all"
   // means no formation restriction; anything else narrows the map to
   // wells whose joined `formation` matches. Applied via MapLibre's
@@ -129,7 +129,7 @@ interface Props {
   formationFilter: string;
 }
 
-export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props) {
+export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   // Persistent popup instance. Reusing one popup across mousemoves avoids
@@ -145,34 +145,34 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
   const [blocksError, setBlocksError] = useState<string | null>(null);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
 
-  // Oil forecast lookup keyed by api14. The table uses oil as the
+  // Oil forecast lookup keyed by api10. The table uses oil as the
   // headline stream (per the brief), so EUR/ft on the map is oil EUR
   // ÷ lateral ft. Gas and water aren't visualized here.
   const oilByApi = useMemo(() => {
     const m = new Map<string, ForecastRow>();
     for (const f of forecasts) {
-      if (f.stream === "oil") m.set(f.api14, f);
+      if (f.stream === "oil") m.set(f.api10, f);
     }
     return m;
   }, [forecasts]);
 
-  const api14s = useMemo(
-    () => Array.from(new Set(forecasts.map((f) => f.api14))),
+  const api10s = useMemo(
+    () => Array.from(new Set(forecasts.map((f) => f.api10))),
     [forecasts],
   );
 
-  // Fetch wellsticks whenever the in-scope api14 set changes. Joining
-  // the api14 list into the cache key dedupes back-to-back fetches
-  // when forecasts mutate but the api14 set is stable.
-  const api14sKey = api14s.join(",");
+  // Fetch wellsticks whenever the in-scope api10 set changes. Joining
+  // the api10 list into the cache key dedupes back-to-back fetches
+  // when forecasts mutate but the api10 set is stable.
+  const api10sKey = api10s.join(",");
   useEffect(() => {
-    if (api14s.length === 0) {
+    if (api10s.length === 0) {
       setData(null);
       return;
     }
     let cancelled = false;
     setError(null);
-    fetchWellsticks(api14s)
+    fetchWellsticks(api10s)
       .then((d) => {
         if (!cancelled) setData(d);
       })
@@ -183,7 +183,7 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api14sKey]);
+  }, [api10sKey]);
 
   // Join EUR/ft + excluded flag onto each feature so the MapLibre paint
   // expression can read them directly. Also stash the joined well/forecast
@@ -207,14 +207,14 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
     return {
       type: "FeatureCollection",
       features: data.features.map((feat) => {
-        const f = oilByApi.get(feat.properties.api14);
+        const f = oilByApi.get(feat.properties.api10);
         const eur = f?.eur ?? null;
         const lat = f?.well_lateral_ft ?? null;
         const eur_per_ft =
           eur != null && lat != null && lat > 0 ? eur / lat : null;
         const props: Record<string, unknown> = {
           ...feat.properties,
-          excluded: excludedApi14s.has(feat.properties.api14),
+          excluded: excludedApi10s.has(feat.properties.api10),
           well_name: f?.well_name ?? null,
           well_vintage_year: f?.well_vintage_year ?? null,
           well_lateral_ft: lat,
@@ -226,7 +226,7 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
         return { ...feat, properties: props };
       }),
     };
-  }, [data, oilByApi, excludedApi14s]);
+  }, [data, oilByApi, excludedApi10s]);
 
   // Adaptive color ramp. Fixed thresholds wouldn't translate across
   // plays (Permian unconventionals run 30–100 BBL/ft; conventional
@@ -251,11 +251,11 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
 
   // -------------- init map (once the container is in the DOM) --------------
   // Keyed on `shouldRender` rather than `[]` so the effect re-fires when
-  // api14s populates after the initial empty render. Without this, the
+  // api10s populates after the initial empty render. Without this, the
   // first render returns null (no container ref), the init effect runs
   // against a null ref, and subsequent renders don't re-trigger the
   // init — leaving the map slot blank.
-  const shouldRender = api14s.length > 0;
+  const shouldRender = api10s.length > 0;
   useEffect(() => {
     if (!shouldRender) return;
     if (!containerRef.current || mapRef.current) return;
@@ -558,11 +558,11 @@ export function ReviewMap({ forecasts, excludedApi14s, formationFilter }: Props)
     }
   }, [styleLoaded, joined]);
 
-  // Reset the auto-fit guard whenever the api14 set changes — a fresh
+  // Reset the auto-fit guard whenever the api10 set changes — a fresh
   // review-batch should re-frame to its own footprint.
   useEffect(() => {
     fittedRef.current = false;
-  }, [api14sKey]);
+  }, [api10sKey]);
 
   if (!shouldRender) return null;
 
@@ -680,9 +680,9 @@ function fmtVolHtml(v: unknown): string {
 }
 
 function buildReviewPopupHtml(p: Record<string, unknown>): string {
-  const headline = p.well_name ? escHtml(p.well_name) : escHtml(p.api14);
+  const headline = p.well_name ? escHtml(p.well_name) : escHtml(p.api10);
   const sub = p.well_name
-    ? `<div class="mtt-api">API14 ${escHtml(p.api14)}</div>`
+    ? `<div class="mtt-api">API10 ${escHtml(p.api10)}</div>`
     : "";
   const eurPerFt =
     p.eur_per_ft != null && Number.isFinite(Number(p.eur_per_ft))

@@ -95,7 +95,7 @@ def _curve_summary(tc: TypeCurve) -> TypeCurveSummary:
         notes=tc.notes,
         normalization_basis=tc.normalization_basis,
         alignment_method=tc.alignment_method,
-        n_wells=len(tc.included_api14s or []),
+        n_wells=len(tc.included_api10s or []),
         created_at=tc.created_at,
         version_of=tc.version_of,
         deal_id=tc.deal_id,
@@ -255,13 +255,19 @@ _NORMALIZATION_LABEL: dict[str, str] = {
 }
 
 
-def _write_metadata_sheet(ws: Any, tc: TypeCurve, session: Session) -> None:
+def _write_metadata_sheet(
+    ws: Any, tc: TypeCurve, session: Session | None
+) -> None:
     """Two-column field/value layout mirroring ``_metadata_csv`` for the
     top section, then a wide per-well summary block at the bottom that
-    expands the bare api14 list into completion-design + EUR metrics
+    expands the bare api10 list into completion-design + EUR metrics
     the engineer wants alongside the type-curve params. The CSV-zip
-    export still ships just the api14 list — when an engineer needs
-    the wider context they're already in xlsx territory."""
+    export still ships just the api10 list — when an engineer needs
+    the wider context they're already in xlsx territory.
+
+    ``session`` may be None — the per-well summary block is then
+    skipped (the rest of the metadata sheet still renders). Used by
+    pure-function workbook-shape tests that don't stand up a DB."""
     from openpyxl.styles import Font
 
     bold = Font(bold=True)
@@ -281,7 +287,7 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve, session: Session) -> None:
     ws.append(["alignment_method", tc.alignment_method.value])
     ws.append(["created_at", tc.created_at.isoformat()])
     ws.append(["version_of", str(tc.version_of) if tc.version_of else ""])
-    ws.append(["n_wells", len(tc.included_api14s or [])])
+    ws.append(["n_wells", len(tc.included_api10s or [])])
     ws.append([])
 
     ws.append(["filter_spec_key", "filter_spec_value"])
@@ -337,7 +343,7 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve, session: Session) -> None:
         ws.append([s_name, *(params.get(k) for k in _FITTED_PARAM_KEYS)])
     ws.append([])
 
-    # Per-well summary block — expands the bare api14 list into a wide
+    # Per-well summary block — expands the bare api10 list into a wide
     # table with completion-design (BWPF / PPF) and per-well EUR
     # metrics. Engineers compare these against the cohort's published
     # fit params above to spot wells dragging the TC away from the
@@ -349,11 +355,12 @@ def _write_metadata_sheet(ws: Any, tc: TypeCurve, session: Session) -> None:
     header_row = ws.max_row
     for col_idx in range(1, len(PER_WELL_HEADERS) + 1):
         ws.cell(row=header_row, column=col_idx).font = bold
-    for row in per_well_rows(session, list(tc.included_api14s or [])):
-        ws.append(list(row))
-        data_row = ws.max_row
-        for col, fmt in PER_WELL_COL_FORMATS.items():
-            ws.cell(row=data_row, column=col).number_format = fmt
+    if session is not None:
+        for row in per_well_rows(session, list(tc.included_api10s or [])):
+            ws.append(list(row))
+            data_row = ws.max_row
+            for col, fmt in PER_WELL_COL_FORMATS.items():
+                ws.cell(row=data_row, column=col).number_format = fmt
 
     # Top metadata block is 2 columns; the per-well block extends out
     # to column 12. Size the first two for the metadata field/value
@@ -447,7 +454,9 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
     ws.column_dimensions["A"].width = 10
 
 
-def _build_workbook(deal: Deal, curves: list[TypeCurve], session: Session) -> bytes:
+def _build_workbook(
+    deal: Deal, curves: list[TypeCurve], session: Session | None = None
+) -> bytes:
     from openpyxl import Workbook
 
     wb = Workbook()

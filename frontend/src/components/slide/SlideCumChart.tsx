@@ -23,7 +23,7 @@ interface Props {
   current: TypeCurveRow;
   previous: TypeCurveRow | null;
   wellCurves: WellCurvesResponse[];
-  lateralByApi14: Map<string, number | null>;
+  lateralByApi10: Map<string, number | null>;
   stream?: Stream;
   width?: number;
   height?: number;
@@ -100,7 +100,7 @@ export function SlideCumChart({
   current,
   previous,
   wellCurves,
-  lateralByApi14,
+  lateralByApi10,
   stream = "oil",
   // 5.42" × 2.16" — see SlideRateChart for rationale.
   width = 520,
@@ -117,7 +117,7 @@ export function SlideCumChart({
 
   const histories = buildAlignedWellHistories(
     wellCurves,
-    lateralByApi14,
+    lateralByApi10,
     "history_cum",
     stream,
   );

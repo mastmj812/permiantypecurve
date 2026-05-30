@@ -1,15 +1,16 @@
 """SQLAlchemy ↔ Postgres enum bridge.
 
 Postgres enum types in our migrations use lowercase string values
-(e.g. ``'heel_to_bh'``, ``'well_headers'``). Python enum members use
+(e.g. ``'well_headers'``, ``'oil'``). Python enum members use
 ALL_CAPS names but lowercase ``.value`` strings:
 
-    class WellstickSource(str, enum.Enum):
-        HEEL_TO_BH = "heel_to_bh"
+    class Stream(str, enum.Enum):
+        OIL = "oil"
+        GAS = "gas"
         ...
 
 Without ``values_callable``, SQLAlchemy's default ``Enum`` column type sends
-the member NAME on writes (``"HEEL_TO_BH"``) — Postgres rejects it with
+the member NAME on writes (``"OIL"``) — Postgres rejects it with
 ``invalid input value for enum``. ``pg_enum`` round-trips by ``.value`` so
 the wire format matches what the migration created.
 """

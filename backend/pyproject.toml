@@ -15,7 +15,6 @@ dependencies = [
     "geoalchemy2>=0.15.2",
     "httpx>=0.27.2",
     "tenacity>=9.0.0",
-    "enverus-developer-api>=2.0",
     "apscheduler>=3.10.4",
     "numpy>=2.1.1",
     "pandas>=2.2.2",
@@ -71,12 +70,6 @@ strict = true
 warn_unreachable = true
 warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
-
-[[tool.mypy.overrides]]
-# Boundary adapters tolerate Any (Enverus payloads, SQLAlchemy result rows
-# before we model them). Keep this list narrow.
-module = ["app.enverus_client.*"]
-disallow_any_explicit = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

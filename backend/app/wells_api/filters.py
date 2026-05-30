@@ -40,10 +40,10 @@ class FilterSpec:
     first_prod_end: date | None = None
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
-    # Explicit API14 allow-list. When non-empty, only wells with one of
-    # these api14s pass — pasted from an external tool's well-list so
+    # Explicit api10 allow-list. When non-empty, only wells with one of
+    # these api10s pass — pasted from an external tool's well-list so
     # the engineer can recreate the same selection here and forecast.
-    api14s: tuple[str, ...] = ()
+    api10s: tuple[str, ...] = ()
 
     def to_sqlalchemy_clauses(self) -> list[ColumnElement[bool]]:
         """Compose into the AND chain that goes into WHERE. Returns a list so
@@ -66,8 +66,8 @@ class FilterSpec:
             clauses.append(Well.lateral_ft >= self.lateral_min_ft)
         if self.lateral_max_ft is not None:
             clauses.append(Well.lateral_ft <= self.lateral_max_ft)
-        if self.api14s:
-            clauses.append(Well.api14.in_(self.api14s))
+        if self.api10s:
+            clauses.append(Well.api10.in_(self.api10s))
         return clauses
 
 
@@ -104,8 +104,8 @@ def parse_filter_query(
     ] = None,
     lateral_min_ft: Annotated[float | None, Query(ge=0)] = None,
     lateral_max_ft: Annotated[float | None, Query(ge=0)] = None,
-    api14s: Annotated[
-        str | None, Query(description="CSV of 14-digit API numbers (allow-list)")
+    api10s: Annotated[
+        str | None, Query(description="CSV of 10-digit API numbers (allow-list)")
     ] = None,
 ) -> FilterSpec:
     """FastAPI dependency — turns query params into a FilterSpec.
@@ -126,7 +126,7 @@ def parse_filter_query(
         first_prod_end=first_prod_end,
         lateral_min_ft=lateral_min_ft,
         lateral_max_ft=lateral_max_ft,
-        api14s=tuple(_split_csv(api14s)),
+        api10s=tuple(_split_csv(api10s)),
     )
 
 
@@ -142,5 +142,5 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "first_prod_end": spec.first_prod_end.isoformat() if spec.first_prod_end else None,
         "lateral_min_ft": spec.lateral_min_ft,
         "lateral_max_ft": spec.lateral_max_ft,
-        "api14s": list(spec.api14s),
+        "api10s": list(spec.api10s),
     }

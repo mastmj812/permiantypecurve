@@ -7,10 +7,10 @@
 //     The legacy lasso → forecast flow keeps working unchanged.
 //
 //   * Active cohort: name + count + deal + action buttons:
-//       [Add staged (N)]   adds mapStore.selectedApi14s to the cohort
+//       [Add staged (N)]   adds mapStore.selectedApi10s to the cohort
 //       [Remove staged (N)] removes any staged wells from the cohort
 //       [Inspect (N)]      opens the gun-barrel modal on the staged set
-//       [Forecast]         pushes cohort.api14s to mapStore.forecastApi14s
+//       [Forecast]         pushes cohort.api10s to mapStore.forecastApi10s
 //                          + stashes name+deal_id on the handoff fields,
 //                          navigates to the Forecast tab. Deliberate
 //                          handoff — no confirmation.
@@ -35,15 +35,15 @@ export function CohortBar() {
   const cohorts = useCohortStore((s) => s.cohorts);
   const active = useCohortStore(activeCohort);
   const setActive = useCohortStore((s) => s.setActive);
-  const addApi14s = useCohortStore((s) => s.addApi14s);
-  const removeApi14s = useCohortStore((s) => s.removeApi14s);
+  const addApi10s = useCohortStore((s) => s.addApi10s);
+  const removeApi10s = useCohortStore((s) => s.removeApi10s);
   const renameCohort = useCohortStore((s) => s.rename);
   const setCohortDeal = useCohortStore((s) => s.setDeal);
-  const replaceApi14s = useCohortStore((s) => s.replaceApi14s);
+  const replaceApi10s = useCohortStore((s) => s.replaceApi10s);
   const deleteCohort = useCohortStore((s) => s.deleteCohort);
 
-  const selectedApi14s = useMapStore((s) => s.selectedApi14s);
-  const setForecastApi14s = useMapStore((s) => s.setForecastApi14s);
+  const selectedApi10s = useMapStore((s) => s.selectedApi10s);
+  const setForecastApi10s = useMapStore((s) => s.setForecastApi10s);
   const setCohortHandoff = useMapStore((s) => s.setCohortHandoff);
   const setCurrentPage = useMapStore((s) => s.setCurrentPage);
   const tcAddWellsMode = useMapStore((s) => s.tcAddWellsMode);
@@ -56,12 +56,12 @@ export function CohortBar() {
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
 
-  // Memoize the staged api14 array — cohort mutations care about the
+  // Memoize the staged api10 array — cohort mutations care about the
   // values, not the Set identity. Avoids rebuilding identical arrays on
   // every render.
   const stagedArray = useMemo(
-    () => Array.from(selectedApi14s),
-    [selectedApi14s],
+    () => Array.from(selectedApi10s),
+    [selectedApi10s],
   );
   const stagedCount = stagedArray.length;
 
@@ -71,7 +71,7 @@ export function CohortBar() {
   // with.
   const stagedInCohort = useMemo(() => {
     if (!active) return 0;
-    const set = new Set(active.api14s);
+    const set = new Set(active.api10s);
     let n = 0;
     for (const a of stagedArray) if (set.has(a)) n++;
     return n;
@@ -85,16 +85,19 @@ export function CohortBar() {
     if (stagedCount === 0) return;
     window.dispatchEvent(
       new CustomEvent("cohort:open-inspect", {
-        detail: { api14s: stagedArray },
+        detail: { api10s: stagedArray },
       }),
     );
   };
 
   const handleForecast = () => {
-    if (!active || active.api14s.length === 0) return;
-    setForecastApi14s(active.api14s);
+    if (!active || active.api10s.length === 0) return;
+    setForecastApi10s(active.api10s);
     setCohortHandoff(active.name, active.deal_id);
-    setCurrentPage("forecast");
+    // One-shot trigger — Review consumes this to fire the batch.
+    // Plain tab navigation doesn't set it.
+    useMapStore.getState().setForecastTriggerPending(true);
+    setCurrentPage("review");
   };
 
   // -------- TC add-wells mode: hijack the bar for membership PATCH ---
@@ -103,7 +106,7 @@ export function CohortBar() {
   // alone — this is a separate flow that targets the TC directly.
   if (tcAddWellsMode) {
     const newWells = stagedArray.filter(
-      (a) => !tcAddWellsMode.existingApi14s.has(a),
+      (a) => !tcAddWellsMode.existingApi10s.has(a),
     );
     const dupCount = stagedCount - newWells.length;
     const tcId = tcAddWellsMode.tcId;
@@ -140,7 +143,7 @@ export function CohortBar() {
         <div className="cohort-bar-label">
           <strong>Add wells to {tcName}</strong>
           <span className="muted">
-            · {tcAddWellsMode.existingApi14s.size} already in TC
+            · {tcAddWellsMode.existingApi10s.size} already in TC
           </span>
           <span className="muted">
             · lasso / box / click wells on the map to stage them
@@ -199,7 +202,7 @@ export function CohortBar() {
         </div>
         {showNewModal && (
           <NewCohortModal
-            initialStagedApi14s={stagedArray}
+            initialStagedApi10s={stagedArray}
             onClose={() => setShowNewModal(false)}
           />
         )}
@@ -214,7 +217,7 @@ export function CohortBar() {
         <div className="cohort-bar-label">
           <strong>{active.name}</strong>
           <span className="muted">
-            · {active.api14s.length} well{active.api14s.length === 1 ? "" : "s"}
+            · {active.api10s.length} well{active.api10s.length === 1 ? "" : "s"}
           </span>
           {active.deal_id && (
             <span className="muted">· deal assigned</span>
@@ -246,7 +249,7 @@ export function CohortBar() {
                 ? "Lasso some wells on the map to stage them first"
                 : `Add ${stagedCount} staged well${stagedCount === 1 ? "" : "s"} to the cohort`
             }
-            onClick={() => addApi14s(active.id, stagedArray)}
+            onClick={() => addApi10s(active.id, stagedArray)}
           >
             Add staged ({stagedCount})
           </button>
@@ -259,7 +262,7 @@ export function CohortBar() {
                 ? "None of the staged wells are in this cohort"
                 : `Remove ${stagedInCohort} staged well${stagedInCohort === 1 ? "" : "s"} from the cohort`
             }
-            onClick={() => removeApi14s(active.id, stagedArray)}
+            onClick={() => removeApi10s(active.id, stagedArray)}
           >
             Remove staged ({stagedInCohort})
           </button>
@@ -279,9 +282,9 @@ export function CohortBar() {
           <button
             type="button"
             className="btn-primary"
-            disabled={active.api14s.length === 0}
+            disabled={active.api10s.length === 0}
             title={
-              active.api14s.length === 0
+              active.api10s.length === 0
                 ? "Add at least one well to forecast"
                 : "Forecast every well in this cohort"
             }
@@ -304,7 +307,7 @@ export function CohortBar() {
               onRename={(name) => renameCohort(active.id, name)}
               onSetDeal={(id) => setCohortDeal(active.id, id)}
               onClear={() => {
-                replaceApi14s(active.id, []);
+                replaceApi10s(active.id, []);
                 setShowOverflow(false);
               }}
               onDelete={() => {
@@ -318,7 +321,7 @@ export function CohortBar() {
 
       {showNewModal && (
         <NewCohortModal
-          initialStagedApi14s={stagedArray}
+          initialStagedApi10s={stagedArray}
           onClose={() => setShowNewModal(false)}
         />
       )}
@@ -383,7 +386,7 @@ function CohortSwitcher({
               onClick={() => onSwitch(c.id)}
             >
               <span className="cohort-switcher-name">{c.name}</span>
-              <span className="muted">{c.api14s.length}</span>
+              <span className="muted">{c.api10s.length}</span>
             </button>
           ))}
           <div className="cohort-switcher-divider" />
@@ -467,12 +470,12 @@ function CohortOverflow({
       <button
         type="button"
         className="cohort-switcher-item"
-        disabled={cohort.api14s.length === 0}
+        disabled={cohort.api10s.length === 0}
         onClick={() => {
           if (
             window.confirm(
-              `Clear all ${cohort.api14s.length} well${
-                cohort.api14s.length === 1 ? "" : "s"
+              `Clear all ${cohort.api10s.length} well${
+                cohort.api10s.length === 1 ? "" : "s"
               } from "${cohort.name}"? The cohort name and deal stay; you can rebuild from scratch.`,
             )
           ) {
@@ -504,10 +507,10 @@ function CohortOverflow({
 // ---------------------- new-cohort modal -----------------------------
 
 function NewCohortModal({
-  initialStagedApi14s,
+  initialStagedApi10s,
   onClose,
 }: {
-  initialStagedApi14s: string[];
+  initialStagedApi10s: string[];
   onClose: () => void;
 }) {
   const cohorts = useCohortStore((s) => s.cohorts);
@@ -515,7 +518,7 @@ function NewCohortModal({
   const [name, setName] = useState("");
   const [dealId, setDealId] = useState<string>("");
   const [seedFromStaged, setSeedFromStaged] = useState(
-    initialStagedApi14s.length > 0,
+    initialStagedApi10s.length > 0,
   );
   const [deals, setDeals] = useState<DealSummary[]>([]);
 
@@ -535,7 +538,7 @@ function NewCohortModal({
     createCohort({
       name: nameTrimmed,
       deal_id: dealId || null,
-      initial_api14s: seedFromStaged ? initialStagedApi14s : [],
+      initial_api10s: seedFromStaged ? initialStagedApi10s : [],
     });
     onClose();
   }
@@ -589,15 +592,15 @@ function NewCohortModal({
             </select>
           </label>
 
-          {initialStagedApi14s.length > 0 && (
+          {initialStagedApi10s.length > 0 && (
             <label className="chk-inline">
               <input
                 type="checkbox"
                 checked={seedFromStaged}
                 onChange={(e) => setSeedFromStaged(e.target.checked)}
               />
-              Seed with the {initialStagedApi14s.length} currently-staged well
-              {initialStagedApi14s.length === 1 ? "" : "s"}
+              Seed with the {initialStagedApi10s.length} currently-staged well
+              {initialStagedApi10s.length === 1 ? "" : "s"}
             </label>
           )}
 

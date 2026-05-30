@@ -1,0 +1,103 @@
+"""DTOs for the warehouse_client data layer.
+
+These mirror ``enverus_client.base`` but are keyed on ``api10`` (Novi
+wellbore identifier) rather than ``api14`` — the cutover from Enverus
+direct ingest to engineering_db reads aligns the app with Novi's
+wellbore-level data model. ``api14`` survives as a nullable secondary
+column for cross-reference back to Enverus history.
+
+These DTOs intentionally carry no ``raw`` payload field. Forensics moves
+to querying ``engineering_db.raw_novi.*`` / ``raw_enverus.*`` directly;
+keeping a JSONB blob on every well would duplicate that data.
+
+See the ``project_permian_type_curve_cutover`` memory for the column
+mapping (app field → curated source) and the locked design decisions.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import date
+
+
+@dataclass(frozen=True)
+class WellHeader:
+    """One row from ``curated.wells_enriched``, normalized for app ingest.
+
+    ``status`` is already remapped from Novi's vocabulary (Active,
+    Completed, Inactive, P&A, Abandoned, Spud, DUC) to the app's enum
+    (PDP, INACTIVE, PA, DUC, UNKNOWN) by ``_status_from_curated``.
+
+    ``wellstick_wkt`` is the 4-point LINESTRING from Novi SHL→LP→MP→BHL
+    (curated.wells.wellstick_geom), serialized as WKT in EPSG:4326. The
+    persistence layer parses it into a PostGIS geometry. Replaces the
+    Enverus ``lateral_line_wkt`` + surface→BH fallback used by the
+    legacy ``enverus_client`` DTO.
+
+    ``directional_survey_is_planned`` is a formation-trust diagnostic:
+    when TRUE, the well's formation assignment was made against the
+    operator's pre-drill PLAN, not the actual post-drill survey, and
+    should be treated as provisional. NM wells carry this flag at ~46%
+    vs ~0.1% for TX. See the
+    ``reference_directional_survey_trust`` memory.
+    """
+
+    api10: str
+    api14: str | None = None
+    name: str | None = None
+    operator: str | None = None
+    formation: str | None = None
+    first_prod_date: date | None = None
+    lateral_ft: float | None = None
+    proppant_lbs: float | None = None
+    fluid_bbl: float | None = None
+    tvd_ft: float | None = None
+    county: str | None = None
+    basin: str | None = None
+    status: str = "UNKNOWN"
+    sh_lat: float | None = None
+    sh_lon: float | None = None
+    bh_lat: float | None = None
+    bh_lon: float | None = None
+    wellstick_wkt: str | None = None
+    # Derived in curated.wells_enriched; included here so the app
+    # doesn't need to recompute on persist.
+    vintage_year: int | None = None
+    completion_vintage_bucket: str | None = None
+    is_horizontal: bool | None = None
+    # Formation-trust flag. See class docstring.
+    directional_survey_is_planned: bool | None = None
+    # Novi's 50-yr oil EUR (curated.wells_enriched.eur_50yr_oil_bbl).
+    # Pure passthrough; the Review table surfaces it as a benchmark
+    # column. None when Novi hasn't forecasted the well.
+    novi_oil_eur: float | None = None
+
+
+@dataclass(frozen=True)
+class ProductionRecord:
+    """One row from ``curated.production``, api10-keyed.
+
+    All three calendar-day rate columns (``rate_calday_*``) are direct
+    passthroughs of ``curated.production.{oil,gas,water}_per_day_bbl/mcf``.
+    Novi computes these calendar-day rates upstream — verified during the
+    cutover audit (``oil_per_day_bbl * cal_days_in_month`` matches
+    ``oil_per_month_bbl`` exactly, even on 23-day partial months). So
+    the legacy app-side month-1 ``producing_days`` exception in
+    ``ingest/rates.py`` is retired by the cutover; we just persist the
+    values Novi already computed.
+    """
+
+    api10: str
+    prod_date: date
+    oil_bbl: float | None = None
+    gas_mcf: float | None = None
+    water_bbl: float | None = None
+    # Float because Novi reports fractional producing-days for partial
+    # first months (e.g. 0.166 = ~4 hours online). Integer truncation
+    # would zero-out IP-rich first-month rates.
+    producing_days: float | None = None
+    # Canonical calendar-day rates. Direct passthrough from curated; no
+    # app-side rate math needed.
+    rate_calday_bopd: float | None = None
+    rate_calday_mcfd: float | None = None
+    rate_calday_bwpd: float | None = None

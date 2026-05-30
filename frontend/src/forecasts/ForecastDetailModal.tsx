@@ -1,6 +1,6 @@
 // Per-well detail modal: Cartesian + semi-log plots, editable params with
 // live re-render against /api/forecasts/preview, manual-override lock,
-// stream switcher (oil / gas / water), prodday-rate toggle for diagnostic.
+// stream switcher (oil / gas / water).
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -33,7 +33,7 @@ interface TcContext {
   // workspace's resolved stream payload (source + payload) so the
   // parent page can refresh its row without a second fetch.
   onOverrideChanged: (
-    api14: string,
+    api10: string,
     stream: "oil" | "gas" | "water",
     source: "override" | "global" | "missing",
     payload: Record<string, unknown> | null,
@@ -41,7 +41,7 @@ interface TcContext {
 }
 
 interface Props {
-  api14: string;
+  api10: string;
   forecasts: ForecastRow[];
   onClose: () => void;
   onSaved: (updated: ForecastRow) => void;
@@ -71,7 +71,7 @@ const STREAM_UNITS: Record<Stream, { rate: string; cum: string }> = {
 };
 
 export function ForecastDetailModal({
-  api14,
+  api10,
   forecasts,
   onClose,
   onSaved,
@@ -82,9 +82,15 @@ export function ForecastDetailModal({
   tcContext,
 }: Props) {
   const [stream, setStream] = useState<Stream>("oil");
-  const [showProdday, setShowProdday] = useState(false);
   const [curves, setCurves] = useState<StreamCurves | null>(null);
   const [loading, setLoading] = useState(true);
+  // Linear-rate chart x-axis mode. Defaults to the observed window
+  // (history + a small lookahead) so the actuals aren't compressed
+  // into ~20 pixels by the 50-year forecast tail. Toggle flips to the
+  // full forecast for the rare occasions you want to see the tail
+  // approach the terminal Df decline. Log-rate + cum charts always
+  // show the full range — see notes near the chart row.
+  const [showFullRateAxis, setShowFullRateAxis] = useState(false);
 
   const forecastForStream = useMemo(
     () => forecasts.find((f) => f.stream === stream) ?? null,
@@ -92,10 +98,15 @@ export function ForecastDetailModal({
   );
 
   // Editable parameter state — initialized from the fitted forecast.
+  // qo + peak_index_months let the user re-anchor the ramp prefix
+  // (rate at first prod + ramp length to peak) when the auto-detector
+  // landed wrong on a noisy well.
   const [editQi, setEditQi] = useState<number | null>(null);
   const [editDi, setEditDi] = useState<number | null>(null);
   const [editB, setEditB] = useState<number | null>(null);
   const [editDf, setEditDf] = useState<number | null>(null);
+  const [editQo, setEditQo] = useState<number | null>(null);
+  const [editPeakIndexMonths, setEditPeakIndexMonths] = useState<number | null>(null);
   const [previewPoints, setPreviewPoints] = useState<SeriesPoint[]>([]);
   const [previewCumPoints, setPreviewCumPoints] = useState<SeriesPoint[]>([]);
   const [previewEur, setPreviewEur] = useState<number | null>(null);
@@ -106,6 +117,17 @@ export function ForecastDetailModal({
     setEditDi(forecastForStream.params.Di ?? null);
     setEditB(forecastForStream.params.b ?? null);
     setEditDf(forecastForStream.params.Df ?? 0.08);
+    // Prefer the explicit row columns over the JSONB params dict —
+    // they're the columns the backfill + fit-time persistence write
+    // to; the JSONB copies are denormalization for the evaluator.
+    setEditQo(
+      forecastForStream.qo ?? (forecastForStream.params.qo as number | undefined) ?? null,
+    );
+    setEditPeakIndexMonths(
+      forecastForStream.peak_index_months ??
+        (forecastForStream.params.peak_index_months as number | undefined) ??
+        null,
+    );
     setPreviewPoints([]);
     setPreviewCumPoints([]);
     setPreviewEur(null);
@@ -136,62 +158,43 @@ export function ForecastDetailModal({
 
   useEffect(() => {
     setLoading(true);
-    fetchWellCurves(api14)
+    fetchWellCurves(api10)
       .then((r) => {
         const found = r.streams.find((s) => s.stream === stream) ?? null;
         setCurves(found);
       })
       .finally(() => setLoading(false));
-  }, [api14, stream]);
+  }, [api10, stream]);
 
   const history = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
-    const ratesSrc = showProdday ? curves.history_prodday_rate : curves.history_rate;
     return curves.history_rate
-      .map((_, i) => {
-        const v = ratesSrc[i];
-        return v == null ? null : { t: i, y: v };
-      })
+      .map((v, i) => (v == null ? null : { t: i, y: v }))
       .filter((p): p is SeriesPoint => p !== null);
-  }, [curves, showProdday]);
+  }, [curves]);
+
+  // The backend now anchors forecast_months at first_prod_date when
+  // the row has ramp params (qo / peak_index_months) — same anchor as
+  // history — so the rate chart needs NO offset for the modern case.
+  // For pre-ramp-migration rows the backend still anchors at
+  // peak_month_date; the offset trick recovers the right alignment
+  // for those by snapping forecast_months[0] to its index in the
+  // history months array.
+  const forecastOffset = useMemo(() => {
+    if (!curves || curves.history_cum.length === 0) {
+      return { idx: 0, cum: 0 };
+    }
+    const anchorMonth = curves.forecast_months[0];
+    const idx = anchorMonth ? curves.months.indexOf(anchorMonth) : -1;
+    const anchorIdx = idx >= 0 ? idx : Math.max(0, curves.history_cum.length - 1);
+    return { idx: anchorIdx, cum: curves.history_cum[anchorIdx] ?? 0 };
+  }, [curves]);
 
   const fitForecast = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
-    // Forecast t-axis: months past peak. Index 0 in the forecast arrays
-    // corresponds to peak_month + 1 month, etc.
-    return curves.forecast_rate.map((y, i) => ({ t: i, y }));
-  }, [curves]);
-
-  // Cumulative-vs-time series. History plots at t = i (months from first
-  // production). The /curves endpoint emits forecast_cum starting at 0
-  // at the peak-month boundary; we plot the forecast across the full
-  // peak..peak+600 window, vertically shifted by history_cum at the
-  // peak so the forecast line picks up from the history line AT THE
-  // PEAK MONTH and runs through the data window into the future. This
-  // exposes the model's predicted cum trajectory across the same months
-  // the data covers — Di / b / Df edits visibly change the slope of the
-  // forecast line across that region, the same way the rate chart shows
-  // the model rate alongside the actual dots.
-  //
-  // (An earlier version of this code clipped the forecast to start at
-  // the seam (end-of-history) with the y rebaselined to match actuals
-  // exactly — that hid the forecast in the data window and made it look
-  // like Di edits "did nothing" because they only changed the future
-  // asymptote. Any vertical gap between forecast and actual cum lines
-  // at end-of-history is real fit-quality info; not a bug to hide.)
-  const cumChartOffset = useMemo(() => {
-    if (!curves || curves.history_cum.length === 0) {
-      return { peakIdx: 0, peakCum: 0 };
-    }
-    const peakMonth = curves.forecast_months[0];
-    const idx = peakMonth ? curves.months.indexOf(peakMonth) : -1;
-    // Peak inside history → anchor there. Peak outside (pre-peak well,
-    // very rare) → anchor at end-of-history so the forecast still picks
-    // up cleanly without a y-jump.
-    const peakIdx = idx >= 0 ? idx : Math.max(0, curves.history_cum.length - 1);
-    const peakCum = curves.history_cum[peakIdx] ?? 0;
-    return { peakIdx, peakCum };
-  }, [curves]);
+    const { idx } = forecastOffset;
+    return curves.forecast_rate.map((y, i) => ({ t: idx + i, y }));
+  }, [curves, forecastOffset]);
 
   const historyCum = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
@@ -202,16 +205,32 @@ export function ForecastDetailModal({
 
   const forecastCum = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
-    const { peakIdx, peakCum } = cumChartOffset;
+    const { idx, cum } = forecastOffset;
     return curves.forecast_cum.map((y, i) => ({
-      t: peakIdx + i,
-      y: y + peakCum,
+      t: idx + i,
+      y: y + cum,
     }));
-  }, [curves, cumChartOffset]);
+  }, [curves, forecastOffset]);
 
   const displayedForecast = previewPoints.length > 0 ? previewPoints : fitForecast;
   const displayedForecastCum =
     previewCumPoints.length > 0 ? previewCumPoints : forecastCum;
+
+  // Linear-rate chart x-axis cap. Defaults to history + 24 months so
+  // the actuals dominate the view; when the user clicks "show full"
+  // we fall back to undefined (the chart's auto-derived xMax over
+  // history + forecast, i.e. the 50-year horizon).
+  // Fallback minimum of 60 months handles brand-new wells where
+  // history is just a few points — we want to show enough of the
+  // forecast that the decline shape is visible even if there's
+  // little history to anchor on.
+  const linearRateXMax = useMemo<number | undefined>(() => {
+    if (showFullRateAxis) return undefined;
+    const lastHistoryMonth = history.length
+      ? history[history.length - 1]!.t
+      : 0;
+    return Math.max(60, lastHistoryMonth + 24);
+  }, [showFullRateAxis, history]);
 
   // ----------- live re-render on edits -----------
   async function recompute() {
@@ -221,24 +240,38 @@ export function ForecastDetailModal({
     if (editDi != null) params.Di = editDi;
     if (editB != null) params.b = editB;
     if (editDf != null) params.Df = editDf;
+    // Edited ramp prefix flows through too. The backend evaluates
+    // ramp + Arps when both are present; either one missing falls
+    // back to pure Arps from t=0.
+    if (editQo != null) params.qo = editQo;
+    if (editPeakIndexMonths != null) {
+      params.peak_index_months = editPeakIndexMonths;
+    }
     try {
       const p = await previewForecast({
         model_type: forecastForStream.model_type,
         params,
+        // Monthly resolution across the 50-year horizon. The default
+        // 120 points (one every ~5 months) skips over the ramp's
+        // peak month entirely on most wells — qi edits then appear
+        // to land at a clipped value because the chart's nearest
+        // samples sit on either side of the actual peak.
+        n_points: 600,
         // economic_limit omitted intentionally — this tool integrates
         // the full 50-yr horizon (technical EUR, no econ cutoff).
       });
-      const points = p.rate.map((y, i) => ({ t: p.t_years[i]! * 12, y }));
-      // Peak-anchor the preview cum the same way the saved series does
-      // (see the `forecastCum` useMemo comment): forecast_cum[0] = 0 at
-      // the peak month, vertically shifted by history_cum at the peak.
-      // The forecast then runs across the data window into the future
-      // and Di / b / Df edits visibly change its slope in the same
-      // region the actual cum line is drawn.
-      const { peakIdx, peakCum } = cumChartOffset;
+      // Preview t_years is now measured from the row's anchor (first
+      // prod when ramp params are present; peak otherwise). Use the
+      // same forecastOffset the saved fit uses so preview and saved
+      // line up exactly during the live overlay.
+      const { idx, cum: anchorCum } = forecastOffset;
+      const points = p.rate.map((y, i) => ({
+        t: idx + (p.t_years[i] ?? 0) * 12,
+        y,
+      }));
       const cumPoints: SeriesPoint[] = p.cum.map((y, i) => ({
-        t: peakIdx + (p.t_years[i] ?? 0) * 12,
-        y: y + peakCum,
+        t: idx + (p.t_years[i] ?? 0) * 12,
+        y: y + anchorCum,
       }));
       setPreviewPoints(points);
       setPreviewCumPoints(cumPoints);
@@ -255,6 +288,10 @@ export function ForecastDetailModal({
     if (editDi != null) params.Di = editDi;
     if (editB != null) params.b = editB;
     if (editDf != null) params.Df = editDf;
+    if (editQo != null) params.qo = editQo;
+    if (editPeakIndexMonths != null) {
+      params.peak_index_months = editPeakIndexMonths;
+    }
 
     if (tcContext) {
       // TC-context save: write a per-TC override. The global forecast
@@ -263,7 +300,7 @@ export function ForecastDetailModal({
       // because the global curve didn't change — preview just clears.
       const resolved = await putForecastOverride(
         tcContext.id,
-        api14,
+        api10,
         stream,
         {
           qi: params.qi ?? editQi ?? 0,
@@ -273,7 +310,7 @@ export function ForecastDetailModal({
         },
       );
       tcContext.onOverrideChanged(
-        api14,
+        api10,
         stream,
         resolved.source,
         resolved.payload,
@@ -297,7 +334,7 @@ export function ForecastDetailModal({
     // original auto-fit curve (cached in `curves` from the modal-open
     // fetch), making it look like the save reverted.
     try {
-      const r = await fetchWellCurves(api14);
+      const r = await fetchWellCurves(api10);
       const found = r.streams.find((s) => s.stream === stream) ?? null;
       setCurves(found);
     } catch (e) {
@@ -307,8 +344,8 @@ export function ForecastDetailModal({
 
   async function revertOverride() {
     if (!tcContext) return;
-    const resolved = await deleteForecastOverride(tcContext.id, api14, stream);
-    tcContext.onOverrideChanged(api14, stream, resolved.source, resolved.payload);
+    const resolved = await deleteForecastOverride(tcContext.id, api10, stream);
+    tcContext.onOverrideChanged(api10, stream, resolved.source, resolved.payload);
     setPreviewPoints([]);
     setPreviewCumPoints([]);
     setPreviewEur(null);
@@ -354,7 +391,7 @@ export function ForecastDetailModal({
                 {position.index} of {position.total}
               </span>
             )}
-            <strong style={{ marginLeft: 8 }}>{api14}</strong>
+            <strong style={{ marginLeft: 8 }}>{api10}</strong>
             {forecasts[0]?.well_name && (
               <span>— {forecasts[0].well_name}</span>
             )}
@@ -391,14 +428,28 @@ export function ForecastDetailModal({
                 </button>
               ))}
             </div>
-            <label className="chk-inline">
-              <input
-                type="checkbox"
-                checked={showProdday}
-                onChange={(e) => setShowProdday(e.target.checked)}
-              />
-              show prodday rate (diagnostic)
-            </label>
+            <div className="toolbar-group">
+              {/* Affects the LINEAR rate chart only — log + cum charts
+                  always show the full range since they're informative
+                  across the whole forecast. */}
+              <span className="toolbar-label">Rate axis:</span>
+              <button
+                type="button"
+                className={`tb-btn ${!showFullRateAxis ? "tb-active" : ""}`}
+                onClick={() => setShowFullRateAxis(false)}
+                title="x-axis fits history + 24 months"
+              >
+                fit history
+              </button>
+              <button
+                type="button"
+                className={`tb-btn ${showFullRateAxis ? "tb-active" : ""}`}
+                onClick={() => setShowFullRateAxis(true)}
+                title="x-axis runs the full 50-year forecast horizon"
+              >
+                full forecast
+              </button>
+            </div>
           </div>
 
           {loading && <p className="muted">loading curves…</p>}
@@ -409,19 +460,25 @@ export function ForecastDetailModal({
               forecast={displayedForecast}
               yAxisType="linear"
               yLabel={units.rate}
+              xLabel="Months from first production"
+              xMaxOverride={linearRateXMax}
             />
             <DeclineChart
               history={history}
               forecast={displayedForecast}
               yAxisType="log"
               yLabel={units.rate}
+              xLabel="Months from first production"
             />
           </div>
 
           {/* Cum-vs-time row. Linear-Y only — log on a monotone cum
-              curve doesn't help. The cum-forecast line picks up from
-              where cum-actual leaves off via cumChartOffset (peak-month
-              index + cum-at-peak); see forecastCum useMemo above. */}
+              curve doesn't help. The cum-forecast line is shifted by
+              forecastOffset.idx so it lines up with history at the
+              forecast's anchor month (first prod under the new ramp
+              convention; peak under the old back-compat path).
+              Param editor sits in the row's right cell so it uses
+              the empty space next to the cum chart. */}
           <div className="chart-row">
             <DeclineChart
               history={historyCum}
@@ -430,13 +487,25 @@ export function ForecastDetailModal({
               yLabel={units.cum}
               xLabel="Months from first production"
             />
-          </div>
-
           {forecastForStream && (
             <div className="param-editor">
               <h3>Fit parameters{readOnly && " (read-only)"}</h3>
               <table>
                 <tbody>
+                  <ParamRow
+                    label="qo"
+                    unit={units.rate}
+                    value={editQo}
+                    onChange={setEditQo}
+                    readOnly={readOnly}
+                  />
+                  <ParamRow
+                    label="peak month"
+                    unit="mo"
+                    value={editPeakIndexMonths}
+                    onChange={setEditPeakIndexMonths}
+                    readOnly={readOnly}
+                  />
                   <ParamRow
                     label="qi"
                     unit={units.rate}
@@ -537,6 +606,7 @@ export function ForecastDetailModal({
               </div>
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>

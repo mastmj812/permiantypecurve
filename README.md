@@ -1,8 +1,10 @@
 # Permian Type Curve Tool
 
 ComboCurve-style workflow for generating well-level decline forecasts and
-aggregated type curves from cached Enverus data. Single-user, local-first,
-Permian-focused.
+aggregated type curves from a Permian-focused data warehouse. Single-user,
+local-first, Permian-focused. As of 2026-05-29 the app reads from a
+separate `engineering_db` warehouse (Enverus + Novi merged at the
+warehouse layer) rather than calling Enverus directly.
 
 ## Stack
 
@@ -19,17 +21,24 @@ Permian-focused.
 ## Repo layout
 
 ```
-backend/    FastAPI app, models, forecasting math, Enverus client
+backend/    FastAPI app, models, forecasting math, warehouse_client
 frontend/   Vite + React + MapLibre
 infra/      docker init scripts, PMTiles fetch, PLSS overlay
 docs/       architecture diagrams, decision notes
 ```
 
+## Prerequisites
+
+- The `engineering_db` warehouse must be running and populated with
+  Permian curated data (see that repo's README). The type-curve app
+  reads from `curated.wells_enriched` and `curated.production` over a
+  network connection — no direct Enverus or Novi calls happen here.
+
 ## First-run
 
 ```powershell
 # 1. Copy env template. Set JWT_SECRET to a long random string for prod.
-#    Enverus keys can wait — synthetic data flow works without them.
+#    Set WAREHOUSE_DATABASE_URL to point at the running engineering_db.
 cp .env.example .env
 
 # 2. Download the Texas+NM PMTiles basemap (one-time, ~150–250 MB).
@@ -43,8 +52,9 @@ docker compose up --build -d
 docker compose exec backend python -m app.cli.create_user --email you@example.com
 #    → prompts for password (≥ 8 chars, typed twice)
 
-# 5. Seed synthetic Permian wells so you have something to forecast.
-docker compose exec backend python -m app.seed.seed_synthetic --n 50 --seed 42
+# 5. Bulk-load wells + production from the warehouse into the local DB.
+#    Takes ~10–15 min for the full Permian (~61k wells, ~4.2M production rows).
+docker compose exec backend python -c "from app.sync.orchestrator import sync_permian; print(sync_permian())"
 ```
 
 Then in the browser:
@@ -52,7 +62,7 @@ Then in the browser:
 - **Backend API docs**: http://localhost:8000/docs (protected endpoints require the bearer token)
 - **Health probe (unauth)**: http://localhost:8000/api/health
 
-You should land on the **Map** tab with 50 synthetic Loving County wells colored by formation. The header shows your email, a green "api ok" pill, and a sign-out link.
+You should land on the **Map** tab with the freshly-synced Permian wells colored by formation. The header shows your email, a green "api ok" pill, and a sign-out link.
 
 ## Environment variables
 
@@ -60,19 +70,18 @@ See `.env.example`. The ones that matter:
 
 | Variable                 | Purpose                                                  |
 | ------------------------ | -------------------------------------------------------- |
-| `DATABASE_URL`           | SQLAlchemy URL — defaults to the compose Postgres        |
+| `DATABASE_URL`           | SQLAlchemy URL — the local app DB; defaults to the compose Postgres |
+| `WAREHOUSE_DATABASE_URL` | Read-only DSN for `engineering_db`'s `curated.*` views — required for sync |
 | `JWT_SECRET`             | **Must be set in production.** HS256 signing secret      |
 | `LOG_LEVEL`              | `DEBUG` / `INFO` / `WARNING`                             |
 | `PMTILES_PATH`           | Absolute path to the PMTiles file inside the backend     |
 | `PLSS_GEOJSON_PATH`      | Absolute path to the optional BLM PLSS GeoJSON           |
 | `SENTRY_DSN`             | Optional; structlog → Sentry if set                      |
-| `ENVERUS_API_KEY_PRISM`  | Required only for real-data sync                         |
-| `ENVERUS_API_KEY_DI`     | Required only for DI-Direct fallback fields              |
 
 ## Tests
 
 ```bash
-# Backend (pure-function tests, ~70 cases including real-well baselines)
+# Backend (pure-function tests, ~100 cases including real-well baselines)
 docker compose exec backend pytest
 
 # Frontend
@@ -91,62 +100,40 @@ Nightly pg_dump (`infra/backup/`):
 
 Restore is documented in `infra/backup/README.md`.
 
-## Seed flow
+## Sync flow
 
-Two paths — pick whichever you have credentials for. Both exercise the same
-ingest pipeline (header upsert → rate calc with month-1 exception → heel
-point → wellstick LINESTRING in PostGIS → watermarks).
+Single path, all from the warehouse:
 
 ```bash
-# Bring the stack up first (migrations run automatically).
-docker compose up --build
+# Via Python (canonical entry point)
+docker compose exec backend python -c "from app.sync.orchestrator import sync_permian; print(sync_permian())"
 
-# --- Path A: synthetic (no Enverus credentials needed) ---
-# 50 deterministic Loving County wells with realistic vintages, formations,
-# laterals, surveys, and Arps-decline production. Use this to develop and
-# test steps 3+ before real keys arrive.
-docker compose exec backend python -m app.seed.seed_synthetic --n 50 --seed 42
-
-# --- Path B: real Enverus Prism pull ---
-# Requires ENVERUS_API_KEY_PRISM in .env. Validate the field-name
-# assumptions in app/enverus_client/prism.py (_PATH_* + _parse_*) before
-# the first pull — these are placeholders until live payloads land.
-docker compose exec backend python -m app.seed.seed_county --county Loving
-
-# --- Via the API (either path; status is pollable) ---
+# Via the API (pollable status)
 curl -X POST localhost:8000/api/sync/run \
-  -H "content-type: application/json" \
-  -d '{"basin":"Permian","county":"Loving"}'
+  -H "content-type: application/json" -d '{}'
 curl localhost:8000/api/sync/status
 ```
 
-Sync runs three phases per county:
-1. `well_headers` — full bulk pull, upserted by api14
-2. `production`   — monthly volumes; calday + prodday rates computed on write
-3. `surveys`      — per-well; on each insert, heel point + wellstick LINESTRING are recomputed in PostGIS
+`sync_permian` runs two phases:
+1. `well_headers` — bulk-fetch from `engineering_db.curated.wells_enriched` filtered to `first_completion_date >= 2010-01-01` AND `is_horizontal = TRUE` (entire Permian; no county filter); upserted into local `wells` keyed by **api10** (Novi 10-char wellbore identifier).
+2. `production` — fetch from `curated.production` for every api10 just loaded; upserted into `production_monthly` keyed by `(api10, prod_date)`. Calendar-day rates come pre-computed from Novi upstream — no app-side rate math.
 
-Watermarks land in `sync_watermarks(entity, scope_key)` and feed the next
-incremental pull via `updated_since`.
+Sync state lands in `sync_jobs` + `sync_watermarks(entity, scope_key)`; both keyed on a single `scope_key = "env_region=PERMIAN"` since the sync no longer splits by county.
 
-The synthetic seeder deliberately includes edge-case wells so the map
-renders all wellstick variants:
-* 2 wells with no survey → `wellstick_source = surface_to_bh`
-* 1 well that's never above 80° inclination → `surface_to_bh` fallback
-* 1 well with a malformed high-inclination station → second high-incl station wins
+`sync_county` / `sync_counties` remain as deprecated back-compat wrappers (the API endpoint + the `seed_county` CLI both still work); they accept-and-ignore the `basin` / `counties` args and route to `sync_permian`. Existing scripts keep working without modification.
 
 ## Build status (where we are)
 
 - [x] **Step 1** — monorepo scaffold, Docker Compose, PMTiles fetch +
       range-serving endpoint, blank MapLibre map with Protomaps basemap.
-- [x] **Step 2** — schema + Alembic, Enverus Prism client (HTTP-mocked
-      tests), Loving County seed CLI + `/api/sync/run`, heel-point +
-      wellstick generation, calday/prodday rates with month-1 exception.
+- [x] **Step 2** — schema + Alembic, ingest pipeline, sync orchestrator,
+      heel-point + wellstick generation, calday/prodday rates with
+      month-1 exception.
 - [x] **Step 3** — Map page: PostGIS-backed MVT tile endpoint with filter
-      composition, formation-colored wellsticks (solid/dashed for survey
-      vs no-survey), zoom-switched points→lines at z9, lasso/box/click
-      selection with server-enforced 500-well cap, summary drawer with
-      median lateral + vintage histogram + top-5 operators, PLSS overlay
-      toggle.
+      composition, formation-colored wellsticks, zoom-switched
+      points→lines at z9, lasso/box/click selection with server-enforced
+      500-well cap, summary drawer with median lateral + vintage
+      histogram + top-5 operators, PLSS overlay toggle.
 - [x] **Step 4** — Forecasting module + auto-forecast page: Arps
       exponential/hyperbolic/harmonic + modified hyperbolic (continuous
       switchover at Df=8%/yr) + Duong; rate-cum NLS fitter (default) and
@@ -168,6 +155,13 @@ renders all wellstick variants:
       structured for future SSO), bearer-protected routes, login UI +
       sign-out, pg_dump backup script with Windows / cron schedules,
       README walkthrough.
+- [x] **Cutover** (2026-05-28 → 2026-05-29) — replaced direct-Enverus
+      ingest with reads from the `engineering_db` warehouse. Local schema
+      migrated from api14 PK to api10 PK; raw_payload / wellstick_source
+      / stages / source / rate_prodday_* columns retired; legacy
+      Enverus client package deleted. Single Novi-sourced 4-point
+      wellstick replaces Enverus LateralLine + the heel-from-survey
+      pipeline.
 
 ## Architecture diagram
 

@@ -6,14 +6,14 @@
     # Clear flags on every forecast in the DB:
     python -m app.cli.reset_forecast_flags
 
-    # Scope to a specific api14 list (CSV or repeated --api14):
+    # Scope to a specific api10 list (CSV or repeated --api10):
     python -m app.cli.reset_forecast_flags \\
-        --api14s 42301343020000,42301372360000,42301366170000
+        --api10s 42301343020000,42301372360000,42301366170000
 
     # Same scope but also wipe the override params back to whatever the
     # current auto-fitter would produce. Re-runs the orchestrator on
     # those wells in process — slower; expect a few seconds per well.
-    python -m app.cli.reset_forecast_flags --api14s ... --refit
+    python -m app.cli.reset_forecast_flags --api10s ... --refit
 
 The two flags exist for two distinct reasons:
   * `manual_override = True` is set whenever the detail-modal Save
@@ -44,7 +44,7 @@ from app.db.models import Forecast
 from app.db.session import SessionLocal
 
 
-def _parse_api14s(raw: list[str] | None) -> list[str] | None:
+def _parse_api10s(raw: list[str] | None) -> list[str] | None:
     if not raw:
         return None
     out: list[str] = []
@@ -61,10 +61,10 @@ def main(argv: list[str] | None = None) -> int:
         description="Clear manual_override + locked on stored forecasts"
     )
     parser.add_argument(
-        "--api14s",
+        "--api10s",
         action="append",
         default=None,
-        help="Comma-separated api14 list (or repeated --api14s) to scope "
+        help="Comma-separated api10 list (or repeated --api10s) to scope "
              "the reset. Omit to hit every forecast row.",
     )
     parser.add_argument(
@@ -85,21 +85,21 @@ def main(argv: list[str] | None = None) -> int:
     configure_logging(args.log_level)
     log = get_logger("cli.reset_forecast_flags")
 
-    api14s = _parse_api14s(args.api14s)
+    api10s = _parse_api10s(args.api10s)
 
     with SessionLocal() as session:
         # Count what would be touched. Two flavors so the operator can
         # see whether they're clearing edits, locks, or both.
         q_edited = select(Forecast).where(Forecast.manual_override.is_(True))
         q_locked = select(Forecast).where(Forecast.locked.is_(True))
-        if api14s is not None:
-            q_edited = q_edited.where(Forecast.api14.in_(api14s))
-            q_locked = q_locked.where(Forecast.api14.in_(api14s))
+        if api10s is not None:
+            q_edited = q_edited.where(Forecast.api10.in_(api10s))
+            q_locked = q_locked.where(Forecast.api10.in_(api10s))
         n_edited = len(session.execute(q_edited).scalars().all())
         n_locked = len(session.execute(q_locked).scalars().all())
 
         scope_desc = (
-            f"{len(api14s)} api14s" if api14s is not None else "all wells"
+            f"{len(api10s)} api10s" if api10s is not None else "all wells"
         )
         print(
             f"Scope: {scope_desc}. "
@@ -115,8 +115,8 @@ def main(argv: list[str] | None = None) -> int:
             .values(manual_override=False, locked=False)
             .where((Forecast.manual_override.is_(True)) | (Forecast.locked.is_(True)))
         )
-        if api14s is not None:
-            stmt = stmt.where(Forecast.api14.in_(api14s))
+        if api10s is not None:
+            stmt = stmt.where(Forecast.api10.in_(api10s))
         result = session.execute(stmt)
         session.commit()
         log.info(
@@ -132,19 +132,19 @@ def main(argv: list[str] | None = None) -> int:
         from app.forecasting.orchestrator import forecast_wells
         from app.forecasting.types import ForecastConfig
 
-        if api14s is None:
-            # The orchestrator wants an explicit api14 list. Pull every
-            # api14 with a forecast row so "refit everything" still works.
+        if api10s is None:
+            # The orchestrator wants an explicit api10 list. Pull every
+            # api10 with a forecast row so "refit everything" still works.
             with SessionLocal() as session:
-                api14s = [
+                api10s = [
                     r[0]
-                    for r in session.execute(select(Forecast.api14).distinct()).all()
+                    for r in session.execute(select(Forecast.api10).distinct()).all()
                 ]
 
-        print(f"Re-fitting {len(api14s)} well(s)…")
+        print(f"Re-fitting {len(api10s)} well(s)…")
         cfg = ForecastConfig()
         with SessionLocal() as session:
-            results = forecast_wells(session, api14s, config=cfg)
+            results = forecast_wells(session, api10s, config=cfg)
         n_ok = sum(
             1
             for streams in results.values()
@@ -159,12 +159,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         log.info(
             "refit_done",
-            wells=len(api14s),
+            wells=len(api10s),
             streams_ok=n_ok,
             streams_failed=n_failed,
         )
         print(
-            f"Refit: {len(api14s)} wells, {n_ok} stream-fits succeeded, "
+            f"Refit: {len(api10s)} wells, {n_ok} stream-fits succeeded, "
             f"{n_failed} skipped/failed."
         )
 

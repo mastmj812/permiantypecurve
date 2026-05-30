@@ -5,7 +5,7 @@
 // selection. Pure function — no React, no DOM — so it's trivial to test.
 
 export interface OutlierInput {
-  api14: string;
+  api10: string;
   eur: number | null;
   lateral_ft: number | null;
 }
@@ -20,7 +20,7 @@ export interface OutlierStats {
 }
 
 export interface OutlierResult {
-  outlierApi14s: Set<string>;
+  outlierApi10s: Set<string>;
   perWell: Record<string, { eurPerFt: number | null; isOutlier: boolean }>;
   stats: OutlierStats | null; // null when there's no usable data
 }
@@ -29,21 +29,21 @@ const OUTLIER_SIGMA: number = 2;
 
 export function computeOutliers(rows: OutlierInput[]): OutlierResult {
   const perWell: Record<string, { eurPerFt: number | null; isOutlier: boolean }> = {};
-  const usable: { api14: string; eurPerFt: number }[] = [];
+  const usable: { api10: string; eurPerFt: number }[] = [];
 
   for (const r of rows) {
     if (r.eur == null || r.lateral_ft == null || r.lateral_ft <= 0) {
-      perWell[r.api14] = { eurPerFt: null, isOutlier: false };
+      perWell[r.api10] = { eurPerFt: null, isOutlier: false };
       continue;
     }
     const v = r.eur / r.lateral_ft;
-    perWell[r.api14] = { eurPerFt: v, isOutlier: false };
-    usable.push({ api14: r.api14, eurPerFt: v });
+    perWell[r.api10] = { eurPerFt: v, isOutlier: false };
+    usable.push({ api10: r.api10, eurPerFt: v });
   }
 
   if (usable.length < 3) {
     // 2σ on a 2-sample population is meaningless; bail rather than flag noise.
-    return { outlierApi14s: new Set(), perWell, stats: null };
+    return { outlierApi10s: new Set(), perWell, stats: null };
   }
 
   const values = usable.map((u) => u.eurPerFt);
@@ -59,16 +59,16 @@ export function computeOutliers(rows: OutlierInput[]): OutlierResult {
   const lowThreshold = median - OUTLIER_SIGMA * stddev;
   const highThreshold = median + OUTLIER_SIGMA * stddev;
 
-  const outlierApi14s = new Set<string>();
+  const outlierApi10s = new Set<string>();
   for (const u of usable) {
     if (u.eurPerFt < lowThreshold || u.eurPerFt > highThreshold) {
-      outlierApi14s.add(u.api14);
-      perWell[u.api14]!.isOutlier = true;
+      outlierApi10s.add(u.api10);
+      perWell[u.api10]!.isOutlier = true;
     }
   }
 
   return {
-    outlierApi14s,
+    outlierApi10s,
     perWell,
     stats: { values, median, mean, stddev, lowThreshold, highThreshold },
   };

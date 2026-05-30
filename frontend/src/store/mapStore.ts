@@ -1,12 +1,13 @@
 // Single Zustand store for map state. Two top-level slices:
 //   * filters       — what the tile endpoint should render
-//   * selection     — which api14s the user has picked, plus the drawer summary
+//   * selection     — which api10s the user has picked, plus the drawer summary
 //
 // Components read from this store; tile-source URL derives from filters via a
 // selector so MapLibre re-fetches tiles automatically when filters change.
 
 import { create } from "zustand";
 
+import type { AggregatePayload } from "../api/typeCurves";
 import {
   DEFAULT_FILTER_SPEC,
   type FilterSpec,
@@ -15,16 +16,69 @@ import {
 } from "../api/types";
 
 export type DrawMode = "off" | "lasso" | "box" | "click";
-export type PageId = "map" | "forecast" | "review" | "type_curve";
+export type PageId = "map" | "review" | "type_curve";
 
 export interface MapState {
   // ---- top-level nav ----
   currentPage: PageId;
   setCurrentPage: (p: PageId) => void;
-  // api14s carried across nav from map → forecast page
-  forecastApi14s: string[];
-  setForecastApi14s: (api14s: string[]) => void;
-  // Cohort-handoff metadata that rides alongside forecastApi14s when
+  // api10s carried across nav from map → forecast page
+  forecastApi10s: string[];
+  setForecastApi10s: (api10s: string[]) => void;
+  // Short-history cutoff (months post-peak) applied when the batch
+  // autoforecast fires. Lives in the map store so the user sets it
+  // BEFORE clicking Forecast — otherwise the field would only appear
+  // on the destination page after the fit already started with
+  // whatever value happened to be loaded. See app.forecasting.cohort.
+  forecastCutoffMonths: number;
+  setForecastCutoffMonths: (n: number) => void;
+  // One-shot trigger: the Forecast button on the Map tab sets this to
+  // true; the Review page consumes it (fires the batch) and clears it.
+  // Tab navigation does NOT set it, so coming back to Review from
+  // Type Curve or Map doesn't re-fire the batch.
+  forecastTriggerPending: boolean;
+  setForecastTriggerPending: (v: boolean) => void;
+  // Partition produced by the most recent batch run. Persisted in the
+  // store so the "pending transfer" badges + the cohort-transfer
+  // button on Review survive tab navigation. Null when there's no
+  // recent batch (fresh session) or after a successful transfer
+  // cleared the short list.
+  forecastPartition: {
+    long: string[];
+    short: string[];
+    noPeak: string[];
+    cutoffUsed: number;
+  } | null;
+  setForecastPartition: (p: MapState["forecastPartition"]) => void;
+  // Same one-shot pattern as forecastTriggerPending — set by the
+  // "Aggregate XX into type curve" button on Review, consumed by
+  // TypeCurvePage. Plain tab nav doesn't set it, so coming back to
+  // the TC tab doesn't recompute. Alignment changes ON the TC page
+  // still recompute (user-driven, not nav-driven).
+  typeCurveTriggerPending: boolean;
+  setTypeCurveTriggerPending: (v: boolean) => void;
+  // Persisted compute result so the TC tab shows the previous build
+  // on nav-return instead of going blank. Cleared when the user
+  // clicks Aggregate again (the next build overwrites it).
+  typeCurveAgg: AggregatePayload | null;
+  setTypeCurveAgg: (agg: AggregatePayload | null) => void;
+  // Live fit status for the most recent batch — moved here from
+  // ReviewPage local state so StrictMode's double-effect-run +
+  // simulated unmount doesn't lose updates from the polling loop.
+  // The polling can write to the store regardless of which mount
+  // is currently rendering.
+  fitStatus: "idle" | "running" | "succeeded" | "failed";
+  fitStatusNote: string;
+  setFitStatus: (s: MapState["fitStatus"]) => void;
+  setFitStatusNote: (n: string) => void;
+  // One-shot guard against the batch being kicked off twice (e.g.
+  // StrictMode double-effect-run, or a click handler firing twice).
+  // Set to the in-flight job_id when a batch starts; cleared when
+  // the polling loop terminates. A second concurrent attempt to fire
+  // a batch sees this is set and bails.
+  fitJobId: string | null;
+  setFitJobId: (id: string | null) => void;
+  // Cohort-handoff metadata that rides alongside forecastApi10s when
   // the user clicks "Forecast" on the cohort bar. The Type Curve save
   // form pre-fills its name + deal dropdown from these when present;
   // both stay null when the user reaches Forecast via the legacy
@@ -35,9 +89,9 @@ export interface MapState {
   setCohortHandoff: (name: string | null, deal_id: string | null) => void;
   // Wells the engineer un-ticked on the Review page. Stays out of any
   // type-curve aggregation (step 6) but stays in the forecasts table.
-  excludedApi14s: Set<string>;
-  toggleExcluded: (api14: string) => void;
-  setExcluded: (api14s: string[]) => void;
+  excludedApi10s: Set<string>;
+  toggleExcluded: (api10: string) => void;
+  setExcluded: (api10s: string[]) => void;
   clearExcluded: () => void;
 
   // ---- filters ----
@@ -47,14 +101,14 @@ export interface MapState {
   setStatuses: (statuses: WellStatus[]) => void;
   setVintageRange: (start: string | null, end: string | null) => void;
   setLateralRange: (min: number | null, max: number | null) => void;
-  setApi14s: (api14s: string[]) => void;
+  setApi10s: (api10s: string[]) => void;
   resetFilters: () => void;
 
   // ---- selection ----
-  selectedApi14s: Set<string>;
+  selectedApi10s: Set<string>;
   summary: SelectionSummary | null;
-  setSelection: (api14s: string[], summary: SelectionSummary | null) => void;
-  toggleApi14: (api14: string) => void;
+  setSelection: (api10s: string[], summary: SelectionSummary | null) => void;
+  toggleApi10: (api10: string) => void;
   clearSelection: () => void;
 
   // ---- draw mode ----
@@ -78,36 +132,55 @@ export interface MapState {
   tcAddWellsMode: {
     tcId: string;
     tcName: string;
-    // Snapshot of the TC's current included_api14s — lets the panel
+    // Snapshot of the TC's current included_api10s — lets the panel
     // count "wells you're about to add (excluding those already in
     // the TC)" without re-fetching the TC on every selection change.
-    existingApi14s: Set<string>;
+    existingApi10s: Set<string>;
   } | null;
   setTcAddWellsMode: (
-    mode: { tcId: string; tcName: string; existingApi14s: Set<string> } | null,
+    mode: { tcId: string; tcName: string; existingApi10s: Set<string> } | null,
   ) => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
   currentPage: "map",
   setCurrentPage: (currentPage) => set({ currentPage }),
-  forecastApi14s: [],
-  setForecastApi14s: (forecastApi14s) => set({ forecastApi14s }),
+  forecastApi10s: [],
+  setForecastApi10s: (forecastApi10s) => set({ forecastApi10s }),
+  forecastCutoffMonths: 6,
+  setForecastCutoffMonths: (forecastCutoffMonths) =>
+    set({ forecastCutoffMonths }),
+  forecastTriggerPending: false,
+  setForecastTriggerPending: (forecastTriggerPending) =>
+    set({ forecastTriggerPending }),
+  forecastPartition: null,
+  setForecastPartition: (forecastPartition) => set({ forecastPartition }),
+  typeCurveTriggerPending: false,
+  setTypeCurveTriggerPending: (typeCurveTriggerPending) =>
+    set({ typeCurveTriggerPending }),
+  typeCurveAgg: null,
+  setTypeCurveAgg: (typeCurveAgg) => set({ typeCurveAgg }),
+  fitStatus: "idle",
+  fitStatusNote: "",
+  setFitStatus: (fitStatus) => set({ fitStatus }),
+  setFitStatusNote: (fitStatusNote) => set({ fitStatusNote }),
+  fitJobId: null,
+  setFitJobId: (fitJobId) => set({ fitJobId }),
   activeCohortName: null,
   activeCohortDealId: null,
   setCohortHandoff: (activeCohortName, activeCohortDealId) =>
     set({ activeCohortName, activeCohortDealId }),
 
-  excludedApi14s: new Set<string>(),
-  toggleExcluded: (api14) =>
+  excludedApi10s: new Set<string>(),
+  toggleExcluded: (api10) =>
     set((s) => {
-      const next = new Set(s.excludedApi14s);
-      if (next.has(api14)) next.delete(api14);
-      else next.add(api14);
-      return { excludedApi14s: next };
+      const next = new Set(s.excludedApi10s);
+      if (next.has(api10)) next.delete(api10);
+      else next.add(api10);
+      return { excludedApi10s: next };
     }),
-  setExcluded: (api14s) => set({ excludedApi14s: new Set(api14s) }),
-  clearExcluded: () => set({ excludedApi14s: new Set<string>() }),
+  setExcluded: (api10s) => set({ excludedApi10s: new Set(api10s) }),
+  clearExcluded: () => set({ excludedApi10s: new Set<string>() }),
 
   filters: DEFAULT_FILTER_SPEC,
   setFormations: (formations) =>
@@ -124,22 +197,22 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({
       filters: { ...s.filters, lateral_min_ft: min, lateral_max_ft: max },
     })),
-  setApi14s: (api14s) =>
-    set((s) => ({ filters: { ...s.filters, api14s } })),
+  setApi10s: (api10s) =>
+    set((s) => ({ filters: { ...s.filters, api10s } })),
   resetFilters: () => set({ filters: DEFAULT_FILTER_SPEC }),
 
-  selectedApi14s: new Set<string>(),
+  selectedApi10s: new Set<string>(),
   summary: null,
-  setSelection: (api14s, summary) =>
-    set({ selectedApi14s: new Set(api14s), summary }),
-  toggleApi14: (api14) =>
+  setSelection: (api10s, summary) =>
+    set({ selectedApi10s: new Set(api10s), summary }),
+  toggleApi10: (api10) =>
     set((s) => {
-      const next = new Set(s.selectedApi14s);
-      if (next.has(api14)) next.delete(api14);
-      else next.add(api14);
-      return { selectedApi14s: next };
+      const next = new Set(s.selectedApi10s);
+      if (next.has(api10)) next.delete(api10);
+      else next.add(api10);
+      return { selectedApi10s: next };
     }),
-  clearSelection: () => set({ selectedApi14s: new Set<string>(), summary: null }),
+  clearSelection: () => set({ selectedApi10s: new Set<string>(), summary: null }),
 
   drawMode: "off",
   setDrawMode: (drawMode) => set({ drawMode }),

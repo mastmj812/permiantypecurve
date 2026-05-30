@@ -6,7 +6,7 @@ populates it in place:
   * Slide 1 — title text, 17-column param table, single composite
     picture (rate + cum + map, snapshotted by the client from the
     in-app slide preview).
-  * Slide 2 — 12-column well table, one row per included api14.
+  * Slide 2 — 12-column well table, one row per included api10.
 
 Shape discovery is by **type**, not by name, because the template
 uses PowerPoint's auto-generated shape names ("Title 1", "Table 6",
@@ -142,7 +142,7 @@ def build_deal_slide_pptx(
     # --- wells slide (now at index 3) ---
     wells_slide = pres.slides[3]
     well_table = _find_table(wells_slide)
-    rows = per_well_rows(session, list(tc.included_api14s or []))
+    rows = per_well_rows(session, list(tc.included_api10s or []))
     _fill_well_table(well_table, rows)
 
     buf = io.BytesIO()
@@ -387,7 +387,7 @@ def _format_well_cell(col_idx: int, val: Any) -> str:
     """
     if val is None:
         return ""
-    # 0-indexed: api14=0, Wellname=1, Operator=2, Formation=3, Lateral=4,
+    # 0-indexed: api10=0, Wellname=1, Operator=2, Formation=3, Lateral=4,
     # BWPF=5, PPF=6, Oil EUR=7, Gas EUR=8, Oil EUR/ft=9, GOR=10, WOR=11
     if col_idx == 4:  # Lateral Length — display as plain integer
         try:

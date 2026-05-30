@@ -29,8 +29,13 @@ class Settings(BaseSettings):
         alias="SECTIONS_GEOJSON_PATH",
     )
 
-    enverus_api_key_prism: str | None = Field(default=None, alias="ENVERUS_API_KEY_PRISM")
-    enverus_api_key_di: str | None = Field(default=None, alias="ENVERUS_API_KEY_DI")
+    # Read-only DSN for engineering_db's curated.* materialized views. Powers
+    # the warehouse_client data layer (replaces enverus_client post-cutover).
+    # None = warehouse not configured; warehouse_client calls raise on use,
+    # but the app still boots so the legacy Enverus path keeps working.
+    warehouse_database_url: str | None = Field(
+        default=None, alias="WAREHOUSE_DATABASE_URL"
+    )
 
 
 settings = Settings()

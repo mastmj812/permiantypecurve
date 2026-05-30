@@ -2,7 +2,7 @@
 
 A Type Curve can carry per-well forecast overrides in
 ``type_curves.forecast_overrides``. When an override is present for a
-given (api14, stream) pair, it wins over the global ``forecasts`` row.
+given (api10, stream) pair, it wins over the global ``forecasts`` row.
 This module is the single source of truth for that fallback rule so
 Phase 1 reads and Phase 2 writes never diverge on what "the resolved
 forecast for this well in this TC" means.
@@ -10,7 +10,7 @@ forecast for this well in this TC" means.
 Shape contract for ``type_curves.forecast_overrides``::
 
     {
-      "<api14>": {
+      "<api10>": {
         "oil":   { "params": {...}, "qi": ..., "Di": ..., "b": ...,
                    "Df": ..., "eur": ..., "model_type": "...",
                    "fit_r2": ..., "manual_override": true },
@@ -45,7 +45,7 @@ class ResolvedForecast:
     bundle the frontend reads from the global forecast row.
     """
 
-    api14: str
+    api10: str
     stream: Stream
     source: Source
     payload: dict[str, Any] | None  # None when source == "missing"
@@ -76,29 +76,29 @@ def _payload_from_global(f: Forecast) -> dict[str, Any]:
 
 def resolve_forecast(
     tc: TypeCurve,
-    api14: str,
+    api10: str,
     stream: Stream,
     global_forecast: Forecast | None,
 ) -> ResolvedForecast:
     """Return the override → global → missing fallback for one (well, stream).
 
     Phase 2 will reuse this for write-back: an edit in TC-context creates
-    a new entry under ``tc.forecast_overrides[api14][stream]``; an edit
+    a new entry under ``tc.forecast_overrides[api10][stream]``; an edit
     in Review-context patches ``global_forecast``. Either way this is
     where the read of "what should the workspace show" lives.
     """
     overrides = tc.forecast_overrides or {}
-    well_overrides = overrides.get(api14) or {}
+    well_overrides = overrides.get(api10) or {}
     override_payload = well_overrides.get(stream.value)
     if override_payload:
         return ResolvedForecast(
-            api14=api14, stream=stream, source="override", payload=dict(override_payload)
+            api10=api10, stream=stream, source="override", payload=dict(override_payload)
         )
     if global_forecast is not None:
         return ResolvedForecast(
-            api14=api14,
+            api10=api10,
             stream=stream,
             source="global",
             payload=_payload_from_global(global_forecast),
         )
-    return ResolvedForecast(api14=api14, stream=stream, source="missing", payload=None)
+    return ResolvedForecast(api10=api10, stream=stream, source="missing", payload=None)

@@ -1,9 +1,9 @@
 """Per-well detail + filter facets.
 
-  GET /api/wells/{api14}                 → full attributes + geometry as GeoJSON
+  GET /api/wells/{api10}                 → full attributes + geometry as GeoJSON
   GET /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
   GET /api/wells/filters/facets          → formation + status counts for the left rail
-  GET /api/wells/wellsticks?api14s=...   → GeoJSON FeatureCollection for the review-tab map
+  GET /api/wells/wellsticks?api10s=...   → GeoJSON FeatureCollection for the review-tab map
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import Well, WellstickSource, WellStatus
+from app.db.models import Well, WellStatus
 from app.db.session import get_session
 from app.wells_api.filters import FilterSpec, parse_filter_query
 
@@ -26,7 +26,7 @@ router = APIRouter(prefix="/wells", tags=["wells"])
 
 
 class WellDetail(BaseModel):
-    api14: str
+    api10: str
     operator: str | None
     formation: str | None
     first_prod_date: date | None
@@ -34,12 +34,10 @@ class WellDetail(BaseModel):
     lateral_ft: float | None
     proppant_lbs: float | None
     fluid_bbl: float | None
-    stages: int | None
     tvd_ft: float | None
     county: str | None
     basin: str | None
     status: WellStatus
-    wellstick_source: WellstickSource
     sh_lat: float | None
     sh_lon: float | None
     bh_lat: float | None
@@ -48,16 +46,18 @@ class WellDetail(BaseModel):
 
 
 class WellDetailLite(BaseModel):
-    """Lightweight bundle for the gun-barrel inspect modal.
+    """Lightweight bundle for the gun-barrel inspect modal AND for
+    synthesizing stub Review-table rows for short-history wells that
+    don't yet have a forecast (pending cohort transfer).
 
-    Just the fields the cross-section renderer + tooltip need —
-    sh/bh coords (for the perpendicular-offset math), TVD, lateral_ft,
-    formation, first_prod_date (for parent/child eyeballing). No
-    proppant / fluid / stages / status / wellstick_source — those
-    don't show in the gun-barrel view.
+    Originally just the fields the gun-barrel renderer + tooltip
+    needed (sh/bh coords, TVD, lateral_ft, formation, first_prod_date).
+    Extended with vintage_year / county / novi_oil_eur so the Review
+    table can render unfit wells with the same column set as fit
+    wells — additive change, existing callers ignore the new keys.
     """
 
-    api14: str
+    api10: str
     name: str | None
     formation: str | None
     operator: str | None
@@ -68,11 +68,14 @@ class WellDetailLite(BaseModel):
     bh_lat: float | None
     bh_lon: float | None
     first_prod_date: date | None
+    vintage_year: int | None = None
+    county: str | None = None
+    novi_oil_eur: float | None = None
 
 
 @router.get("/wellsticks")
 def wellsticks_geojson(
-    api14s: str = Query(..., description="CSV of api14s to fetch wellsticks for"),
+    api10s: str = Query(..., description="CSV of api10s to fetch wellsticks for"),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """Return wellstick LineStrings as a GeoJSON FeatureCollection.
@@ -83,26 +86,26 @@ def wellsticks_geojson(
     whose wellstick is null (surveys not yet synced) — they just don't
     appear on the map; their row still shows in the table.
 
-    The api14s list is bounded by the same 500-well cap as the
+    The api10s list is bounded by the same 500-well cap as the
     forecast workflow, so we don't worry about query-string overflow.
     """
-    ids = [a.strip() for a in api14s.split(",") if a.strip()]
+    ids = [a.strip() for a in api10s.split(",") if a.strip()]
     if not ids:
         return {"type": "FeatureCollection", "features": []}
     rows = session.execute(
         select(
-            Well.api14,
+            Well.api10,
             Well.formation,
             Well.operator,
             func.ST_AsGeoJSON(Well.wellstick).label("geom"),
-        ).where(Well.api14.in_(ids), Well.wellstick.is_not(None))
+        ).where(Well.api10.in_(ids), Well.wellstick.is_not(None))
     ).all()
     features = [
         {
             "type": "Feature",
             "geometry": json.loads(r.geom),
             "properties": {
-                "api14": r.api14,
+                "api10": r.api10,
                 "formation": r.formation,
                 "operator": r.operator,
             },
@@ -114,22 +117,22 @@ def wellsticks_geojson(
 
 @router.get("/details", response_model=list[WellDetailLite])
 def well_details(
-    api14s: str = Query(..., description="CSV of api14s to fetch detail bundles for"),
+    api10s: str = Query(..., description="CSV of api10s to fetch detail bundles for"),
     session: Session = Depends(get_session),
 ) -> list[WellDetailLite]:
     """Batched well-detail bundle for the gun-barrel inspect modal.
 
     Single query against the wells table; reuses the same ST_X/ST_Y
     lat/lon extraction pattern the single-well endpoint uses below.
-    Registered before ``/{api14}`` so FastAPI matches the literal path
-    instead of treating "details" as an api14 value.
+    Registered before ``/{api10}`` so FastAPI matches the literal path
+    instead of treating "details" as an api10 value.
     """
-    ids = [a.strip() for a in api14s.split(",") if a.strip()]
+    ids = [a.strip() for a in api10s.split(",") if a.strip()]
     if not ids:
         return []
     rows = session.execute(
         select(
-            Well.api14,
+            Well.api10,
             Well.name,
             Well.formation,
             Well.operator,
@@ -140,11 +143,14 @@ def well_details(
             func.ST_Y(Well.bh_geom).label("bh_lat"),
             func.ST_X(Well.bh_geom).label("bh_lon"),
             Well.first_prod_date,
-        ).where(Well.api14.in_(ids))
+            Well.vintage_year,
+            Well.county,
+            Well.novi_oil_eur,
+        ).where(Well.api10.in_(ids))
     ).all()
     return [
         WellDetailLite(
-            api14=r.api14,
+            api10=r.api10,
             name=r.name,
             formation=r.formation,
             operator=r.operator,
@@ -155,17 +161,22 @@ def well_details(
             bh_lat=r.bh_lat,
             bh_lon=r.bh_lon,
             first_prod_date=r.first_prod_date,
+            vintage_year=int(r.vintage_year) if r.vintage_year is not None else None,
+            county=r.county,
+            novi_oil_eur=(
+                float(r.novi_oil_eur) if r.novi_oil_eur is not None else None
+            ),
         )
         for r in rows
     ]
 
 
-@router.get("/{api14}", response_model=WellDetail)
-def well_detail(api14: str, session: Session = Depends(get_session)) -> WellDetail:
+@router.get("/{api10}", response_model=WellDetail)
+def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDetail:
     # Pull lat/lon via ST_X / ST_Y so we don't ship full WKB to the client.
     row = session.execute(
         select(
-            Well.api14,
+            Well.api10,
             Well.operator,
             Well.formation,
             Well.first_prod_date,
@@ -173,24 +184,22 @@ def well_detail(api14: str, session: Session = Depends(get_session)) -> WellDeta
             Well.lateral_ft,
             Well.proppant_lbs,
             Well.fluid_bbl,
-            Well.stages,
             Well.tvd_ft,
             Well.county,
             Well.basin,
             Well.status,
-            Well.wellstick_source,
             func.ST_Y(Well.sh_geom).label("sh_lat"),
             func.ST_X(Well.sh_geom).label("sh_lon"),
             func.ST_Y(Well.bh_geom).label("bh_lat"),
             func.ST_X(Well.bh_geom).label("bh_lon"),
             Well.last_synced_at,
-        ).where(Well.api14 == api14)
+        ).where(Well.api10 == api10)
     ).first()
     if row is None:
-        raise HTTPException(status_code=404, detail=f"well {api14} not found")
+        raise HTTPException(status_code=404, detail=f"well {api10} not found")
 
     return WellDetail(
-        api14=row.api14,
+        api10=row.api10,
         operator=row.operator,
         formation=row.formation,
         first_prod_date=row.first_prod_date,
@@ -198,12 +207,10 @@ def well_detail(api14: str, session: Session = Depends(get_session)) -> WellDeta
         lateral_ft=row.lateral_ft,
         proppant_lbs=row.proppant_lbs,
         fluid_bbl=row.fluid_bbl,
-        stages=row.stages,
         tvd_ft=row.tvd_ft,
         county=row.county,
         basin=row.basin,
         status=row.status,
-        wellstick_source=row.wellstick_source,
         sh_lat=row.sh_lat,
         sh_lon=row.sh_lon,
         bh_lat=row.bh_lat,

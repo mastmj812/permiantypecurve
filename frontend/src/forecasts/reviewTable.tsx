@@ -76,7 +76,7 @@ export function median(vals: number[]): number | null {
 }
 
 /**
- * Build a per-(api14, stream) lookup from a flat ForecastRow list.
+ * Build a per-(api10, stream) lookup from a flat ForecastRow list.
  * Used by the Review tab to surface gas/water decline alongside oil
  * without a second fetch.
  */
@@ -85,10 +85,10 @@ export function indexFitsByWellStream(
 ): Map<string, Map<Stream, ForecastRow>> {
   const m = new Map<string, Map<Stream, ForecastRow>>();
   for (const f of rows) {
-    let per = m.get(f.api14);
+    let per = m.get(f.api10);
     if (!per) {
       per = new Map<Stream, ForecastRow>();
-      m.set(f.api14, per);
+      m.set(f.api10, per);
     }
     per.set(f.stream, f);
   }

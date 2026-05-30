@@ -12,13 +12,13 @@ import { GunBarrel } from "./GunBarrel";
 import { InspectProductionCharts } from "./InspectProductionCharts";
 
 export interface InspectModalProps {
-  api14s: string[];
+  api10s: string[];
   onClose: () => void;
 }
 
-export function InspectModal({ api14s, onClose }: InspectModalProps) {
+export function InspectModal({ api10s, onClose }: InspectModalProps) {
   const cohort = useCohortStore(activeCohort);
-  const addApi14s = useCohortStore((s) => s.addApi14s);
+  const addApi10s = useCohortStore((s) => s.addApi10s);
 
   const [wells, setWells] = useState<WellDetailLite[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -26,13 +26,13 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
 
   // All wells start checked — engineer un-ticks the ones to drop.
   const [selected, setSelected] = useState<Set<string>>(
-    () => new Set(api14s),
+    () => new Set(api10s),
   );
 
   // Lifted hover state so the gun-barrel and the rate/cum charts stay
   // in lockstep: hovering a circle bolds the corresponding line (and
   // vice versa). Null when nothing is hovered.
-  const [hoveredApi14, setHoveredApi14] = useState<string | null>(null);
+  const [hoveredApi10, setHoveredApi10] = useState<string | null>(null);
 
   // ESC closes, same convention as ForecastDetailModal. Skip when
   // focus is in an input so we don't fight inputs in nested controls.
@@ -54,7 +54,7 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
   // chart formation colors + per-10kft scaling.
   useEffect(() => {
     let cancelled = false;
-    if (api14s.length === 0) {
+    if (api10s.length === 0) {
       setWells([]);
       setLoading(false);
       return () => {
@@ -63,7 +63,7 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
     }
     setLoading(true);
     setError(null);
-    fetchWellDetails(api14s)
+    fetchWellDetails(api10s)
       .then((rows) => {
         if (!cancelled) setWells(rows);
       })
@@ -76,31 +76,31 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [api14s]);
+  }, [api10s]);
 
-  const wellsByApi14 = useMemo(() => {
+  const wellsByApi10 = useMemo(() => {
     const m = new Map<string, WellDetailLite>();
-    for (const w of wells ?? []) m.set(w.api14, w);
+    for (const w of wells ?? []) m.set(w.api10, w);
     return m;
   }, [wells]);
 
-  function toggle(api14: string) {
+  function toggle(api10: string) {
     setSelected((prev) => {
       const next = new Set(prev);
-      if (next.has(api14)) next.delete(api14);
-      else next.add(api14);
+      if (next.has(api10)) next.delete(api10);
+      else next.add(api10);
       return next;
     });
   }
 
   function commit() {
     if (!cohort) return;
-    addApi14s(cohort.id, Array.from(selected));
+    addApi10s(cohort.id, Array.from(selected));
     onClose();
   }
 
   const selectedCount = selected.size;
-  const totalCount = api14s.length;
+  const totalCount = api10s.length;
   const hasCohort = cohort != null;
 
   return (
@@ -118,7 +118,7 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
             Inspect — {totalCount} well{totalCount === 1 ? "" : "s"} from staging
             {cohort && (
               <span className="inspect-modal-subtitle">
-                → {cohort.name} ({cohort.api14s.length} in cohort)
+                → {cohort.name} ({cohort.api10s.length} in cohort)
               </span>
             )}
           </div>
@@ -144,19 +144,19 @@ export function InspectModal({ api14s, onClose }: InspectModalProps) {
               <div className="inspect-modal-section">
                 <GunBarrel
                   wells={wells}
-                  selectedApi14s={selected}
-                  hoveredApi14={hoveredApi14}
-                  onHover={setHoveredApi14}
+                  selectedApi10s={selected}
+                  hoveredApi10={hoveredApi10}
+                  onHover={setHoveredApi10}
                   onToggle={toggle}
                 />
               </div>
               <div className="inspect-modal-section">
                 <InspectProductionCharts
-                  api14s={api14s}
-                  wellsByApi14={wellsByApi14}
-                  selectedApi14s={selected}
-                  hoveredApi14={hoveredApi14}
-                  onHover={setHoveredApi14}
+                  api10s={api10s}
+                  wellsByApi10={wellsByApi10}
+                  selectedApi10s={selected}
+                  hoveredApi10={hoveredApi10}
+                  onHover={setHoveredApi10}
                 />
               </div>
             </>

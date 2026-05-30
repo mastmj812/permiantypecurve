@@ -125,6 +125,12 @@ STREAM_ECON_LIMIT_FIELD = {
     "gas": "economic_limit_mcfd",
     "water": "economic_limit_bwpd",
 }
+# Per-stream absolute downtime floor — see _flag_downtime / ForecastConfig.
+STREAM_DOWNTIME_FLOOR_FIELD = {
+    "oil": "downtime_floor_bopd",
+    "gas": "downtime_floor_mcfd",
+    "water": "downtime_floor_bwpd",
+}
 
 # Models that take the same parameter set as modified_hyperbolic — Df is
 # fixed during the fit (per brief; user can override at the call site).
@@ -154,23 +160,29 @@ _DOWNTIME_WINDOW: int = 7
 _DOWNTIME_THRESHOLD: float = 0.30
 
 
-def _flag_downtime(rates: pd.Series) -> pd.Series:
+def _flag_downtime(rates: pd.Series, absolute_floor: float = 0.0) -> pd.Series:
     """Return a boolean Series — True where the month looks like downtime.
 
-    Computed against the centered rolling max so single-month and
-    multi-month dips both surface as long as the surrounding window
-    still contains at least one normal-flow month. min_periods=1 keeps
-    the edges from going NaN; the first/last months use whatever
-    neighbors exist."""
+    Two-part rule, OR-combined:
+
+      1. Relative: rate < 30% of the centered 7-month rolling max.
+         Catches dips that stand out against producing neighbors.
+      2. Absolute: rate < ``absolute_floor``. Catches the choppy-restart
+         pattern where a well bounces between zero and a low residual
+         rate — the rolling-max dips toward the low residual along with
+         the zeros, so the relative test alone lets the residual months
+         through. A hard floor (e.g. 5 BOPD for oil) drops them.
+
+    The relative threshold is floored at 1.0 in rate units so an
+    all-zero late-tail doesn't flag itself against a near-zero local
+    max. The absolute floor is separate from that — pass 0.0 to
+    disable the absolute leg entirely (the pre-floor behavior).
+    """
     local_max = rates.rolling(
         window=_DOWNTIME_WINDOW, center=True, min_periods=1
     ).max()
-    # Floor the threshold at 1.0 BOPD-equivalent so all-zero late-tail
-    # months don't accidentally flag as downtime against a near-zero
-    # local max. Real downtime months stand out against a non-trivial
-    # local max from a producing neighbor.
-    threshold = (_DOWNTIME_THRESHOLD * local_max).clip(lower=1.0)
-    return rates < threshold
+    relative_threshold = (_DOWNTIME_THRESHOLD * local_max).clip(lower=1.0)
+    return (rates < relative_threshold) | (rates < absolute_floor)
 
 
 def _post_peak_slice(
@@ -180,6 +192,7 @@ def _post_peak_slice(
     vol_col: str,
     *,
     filter_downtime: bool = True,
+    downtime_floor: float = 0.0,
 ) -> tuple[pd.DataFrame, float]:
     """Return (rows-from-peak-forward-after-downtime-filter, downtime_ratio).
 
@@ -187,6 +200,10 @@ def _post_peak_slice(
     still carry the true cumulative volume as of their calendar month —
     the cum-fit doesn't lose the (small) production from the dropped
     downtime months.
+
+    `downtime_floor` is the per-stream absolute rate threshold below
+    which a month is flagged regardless of local context. Pass 0.0 to
+    disable the absolute leg and use only the rolling-max-relative rule.
 
     `downtime_ratio` is the fraction of post-peak months that were
     flagged. Persisted on the Forecast row so the Review grid can
@@ -203,7 +220,7 @@ def _post_peak_slice(
     if not filter_downtime or len(df) == 0:
         return df, 0.0
 
-    downtime_mask = _flag_downtime(df["rate"])
+    downtime_mask = _flag_downtime(df["rate"], absolute_floor=downtime_floor)
     ratio = float(downtime_mask.sum()) / float(len(df))
     if downtime_mask.any():
         df = df.loc[~downtime_mask].reset_index(drop=True)
@@ -378,7 +395,10 @@ def fit_rate_cum(
     cfg = config or ForecastConfig()
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
-    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
+    floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
+    df, downtime_ratio = _post_peak_slice(
+        monthly_df, peak, rate_col, vol_col, downtime_floor=floor
+    )
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
@@ -415,7 +435,10 @@ def fit_rate_time(
     cfg = config or ForecastConfig()
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
-    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col)
+    floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
+    df, downtime_ratio = _post_peak_slice(
+        monthly_df, peak, rate_col, vol_col, downtime_floor=floor
+    )
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)

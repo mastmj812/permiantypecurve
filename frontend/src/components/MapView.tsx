@@ -12,18 +12,15 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
-import { selectWellsSpatial, summaryForApi14s, tileUrlTemplate } from "../api/wells";
+import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
   WELLS_INTERACTIVE_LAYERS,
-  WELLS_LINES_DASHED_COHORT_LAYER,
   WELLS_LINES_SOLID_COHORT_LAYER,
   WELLS_POINTS_COHORT_LAYER,
   WELLS_SOURCE_ID,
   cohortLineFilter,
   cohortPointFilter,
-  wellsLinesDashedCohortLayer,
-  wellsLinesDashedLayer,
   wellsLinesSolidCohortLayer,
   wellsLinesSolidLayer,
   wellsPointsCohortLayer,
@@ -32,7 +29,7 @@ import {
 import { useMapStore } from "../store/mapStore";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
 
-const EMPTY_COHORT_API14S: string[] = [];
+const EMPTY_COHORT_API10S: string[] = [];
 
 // Register the pmtiles:// protocol once per page. MapLibre's addProtocol is
 // idempotent in practice but we guard anyway since StrictMode double-invokes.
@@ -151,13 +148,13 @@ export function MapView() {
   const showBlocks = useMapStore((s) => s.showBlocks);
   const showSections = useMapStore((s) => s.showSections);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
-  const selectedApi14s = useMapStore((s) => s.selectedApi14s);
+  const selectedApi10s = useMapStore((s) => s.selectedApi10s);
   const setSelection = useMapStore((s) => s.setSelection);
-  const toggleApi14 = useMapStore((s) => s.toggleApi14);
-  // Cohort api14s drive the sky-blue halo. Stable empty-array fallback
+  const toggleApi10 = useMapStore((s) => s.toggleApi10);
+  // Cohort api10s drive the sky-blue halo. Stable empty-array fallback
   // so React doesn't re-run the effect just because there's no cohort.
-  const cohortApi14s = useCohortStore(
-    (s) => activeCohort(s)?.api14s ?? EMPTY_COHORT_API14S,
+  const cohortApi10s = useCohortStore(
+    (s) => activeCohort(s)?.api10s ?? EMPTY_COHORT_API10S,
   );
 
   // -------------- init map (once) --------------
@@ -195,7 +192,7 @@ export function MapView() {
         tiles: [withOrigin(tileUrlTemplate(useMapStore.getState().filters))],
         minzoom: 3,
         maxzoom: 14,
-        promoteId: { wells_points: "api14", wells_lines: "api14" },
+        promoteId: { wells_points: "api10", wells_lines: "api10" },
       });
       // Cohort halos are added BEFORE the matching regular layer so
       // they paint underneath — the formation-colored stroke/circle
@@ -204,8 +201,6 @@ export function MapView() {
       map.addLayer(wellsPointsLayer);
       map.addLayer(wellsLinesSolidCohortLayer);
       map.addLayer(wellsLinesSolidLayer);
-      map.addLayer(wellsLinesDashedCohortLayer);
-      map.addLayer(wellsLinesDashedLayer);
 
       const drawer = new DrawingController(map, {
         onPolygon: async (polygon) => {
@@ -214,7 +209,7 @@ export function MapView() {
               polygon,
               filters: useMapStore.getState().filters,
             });
-            setSelection(r.api14s, r.summary);
+            setSelection(r.api10s, r.summary);
           } catch (e) {
             console.error("lasso selection failed", e);
           }
@@ -225,7 +220,7 @@ export function MapView() {
               bbox,
               filters: useMapStore.getState().filters,
             });
-            setSelection(r.api14s, r.summary);
+            setSelection(r.api10s, r.summary);
           } catch (e) {
             console.error("box selection failed", e);
           }
@@ -235,11 +230,11 @@ export function MapView() {
             layers: WELLS_INTERACTIVE_LAYERS,
           });
           if (!feats.length) return;
-          const api14 = feats[0]!.properties?.api14 as string | undefined;
-          if (!api14) return;
-          toggleApi14(api14);
-          const nextSet = new Set(useMapStore.getState().selectedApi14s);
-          const summary = await summaryForApi14s(Array.from(nextSet));
+          const api10 = feats[0]!.properties?.api10 as string | undefined;
+          if (!api10) return;
+          toggleApi10(api10);
+          const nextSet = new Set(useMapStore.getState().selectedApi10s);
+          const summary = await summaryForApi10s(Array.from(nextSet));
           setSelection(Array.from(nextSet), summary);
         },
       });
@@ -318,19 +313,19 @@ export function MapView() {
     if (!map) return;
     map.removeFeatureState({ source: WELLS_SOURCE_ID, sourceLayer: "wells_points" });
     map.removeFeatureState({ source: WELLS_SOURCE_ID, sourceLayer: "wells_lines" });
-    for (const api14 of selectedApi14s) {
+    for (const api10 of selectedApi10s) {
       for (const sl of ["wells_points", "wells_lines"]) {
         map.setFeatureState(
-          { source: WELLS_SOURCE_ID, sourceLayer: sl, id: api14 },
+          { source: WELLS_SOURCE_ID, sourceLayer: sl, id: api10 },
           { selected: true },
         );
       }
     }
-  }, [selectedApi14s, styleLoaded]);
+  }, [selectedApi10s, styleLoaded]);
 
   // -------------- active cohort → halo layer filters --------------
   // Drives the sky-blue halo by swapping each cohort halo layer's
-  // filter to match only api14s in the active cohort. Filter-based
+  // filter to match only api10s in the active cohort. Filter-based
   // (vs feature-state) so membership doesn't depend on tiles being
   // loaded at write time — MapLibre re-evaluates the filter every
   // time tiles render.
@@ -339,21 +334,15 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     if (map.getLayer(WELLS_POINTS_COHORT_LAYER)) {
-      map.setFilter(WELLS_POINTS_COHORT_LAYER, cohortPointFilter(cohortApi14s));
+      map.setFilter(WELLS_POINTS_COHORT_LAYER, cohortPointFilter(cohortApi10s));
     }
     if (map.getLayer(WELLS_LINES_SOLID_COHORT_LAYER)) {
       map.setFilter(
         WELLS_LINES_SOLID_COHORT_LAYER,
-        cohortLineFilter(cohortApi14s, "heel_to_bh"),
+        cohortLineFilter(cohortApi10s),
       );
     }
-    if (map.getLayer(WELLS_LINES_DASHED_COHORT_LAYER)) {
-      map.setFilter(
-        WELLS_LINES_DASHED_COHORT_LAYER,
-        cohortLineFilter(cohortApi14s, "surface_to_bh"),
-      );
-    }
-  }, [cohortApi14s, styleLoaded]);
+  }, [cohortApi10s, styleLoaded]);
 
   // -------------- wellsticks toggle --------------
   useEffect(() => {
@@ -369,7 +358,6 @@ export function MapView() {
     for (const id of [
       WELLS_POINTS_COHORT_LAYER,
       WELLS_LINES_SOLID_COHORT_LAYER,
-      WELLS_LINES_DASHED_COHORT_LAYER,
     ]) {
       if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
     }
@@ -579,37 +567,25 @@ function fmtIntHtml(v: unknown): string {
   return Math.round(Number(v)).toLocaleString();
 }
 
-// Wellstick source enum values are short and underscore-cased; humanize
-// them for the tooltip so the engineer doesn't have to read the schema.
-function wellstickSourceLabel(v: unknown): string {
-  switch (String(v)) {
-    case "heel_to_bh":     return "heel → BH (survey)";
-    case "surface_to_bh":  return "surface → BH (no survey)";
-    case "none":           return "—";
-    default:               return escHtml(v);
-  }
-}
-
 function buildWellPopupHtml(p: Record<string, unknown>): string {
-  // Headline is the human-readable name; API14 demotes into the table.
-  // Falls back to API14 in the headline when the well's name is missing
+  // Headline is the human-readable name; API10 demotes into the table.
+  // Falls back to API10 in the headline when the well's name is missing
   // so the popup still identifies the well.
   const name = (p.name as string | null | undefined) ?? null;
-  const headline = name ? escHtml(name) : `API14 ${escHtml(p.api14)}`;
-  const api14Row = name
-    ? `<tr><td>API14</td><td>${escHtml(p.api14)}</td></tr>`
+  const headline = name ? escHtml(name) : `API10 ${escHtml(p.api10)}`;
+  const api10Row = name
+    ? `<tr><td>API10</td><td>${escHtml(p.api10)}</td></tr>`
     : "";
   return `
     <div class="mtt">
       <div class="mtt-name">${headline}</div>
       <table class="mtt-table">
-        ${api14Row}
+        ${api10Row}
         <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.vintage_year)}</td></tr>
         <tr><td>Lateral</td><td>${fmtIntHtml(p.lateral_ft)} ft</td></tr>
-        <tr><td>Stick</td><td>${wellstickSourceLabel(p.wellstick_source)}</td></tr>
       </table>
     </div>`;
 }

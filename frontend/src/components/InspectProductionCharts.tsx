@@ -19,28 +19,28 @@ import {
 import { colorForFormation } from "../map/formations";
 
 export interface InspectProductionChartsProps {
-  api14s: string[];
-  // Per-well metadata keyed by api14 — supplies the formation color
+  api10s: string[];
+  // Per-well metadata keyed by api10 — supplies the formation color
   // and the lateral_ft used by the /10kft normalization. Comes from
   // the same fetchWellDetails() call that feeds the gun-barrel.
-  wellsByApi14: Map<string, WellDetailLite>;
-  // Deselected wells (api14s NOT in this set) render as ghosted lines
+  wellsByApi10: Map<string, WellDetailLite>;
+  // Deselected wells (api10s NOT in this set) render as ghosted lines
   // — matches the gun-barrel's dimmed-circle convention so the two
   // views agree on what "unselected" looks like. Optional so this
   // component still renders standalone outside the inspect modal.
-  selectedApi14s?: Set<string>;
+  selectedApi10s?: Set<string>;
   // Lifted hover state — when set, the matching polyline bolds up
   // (and the gun-barrel circle bolds too via the same prop on the
   // sibling component).
-  hoveredApi14?: string | null;
-  onHover?: (api14: string | null) => void;
+  hoveredApi10?: string | null;
+  onHover?: (api10: string | null) => void;
 }
 
 const PAD = { top: 24, right: 16, bottom: 36, left: 56 };
 const STREAMS: Stream[] = ["oil", "gas", "water"];
 
 interface WellSeries {
-  api14: string;
+  api10: string;
   formation: string | null;
   // Aligned to "months since first prod" — index = X position (months).
   // null entries preserve the gaps (downtime) that history_rate may
@@ -50,10 +50,10 @@ interface WellSeries {
 }
 
 export function InspectProductionCharts({
-  api14s,
-  wellsByApi14,
-  selectedApi14s,
-  hoveredApi14 = null,
+  api10s,
+  wellsByApi10,
+  selectedApi10s,
+  hoveredApi10 = null,
   onHover,
 }: InspectProductionChartsProps) {
   const [stream, setStream] = useState<Stream>("oil");
@@ -64,12 +64,12 @@ export function InspectProductionCharts({
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fan out curves fetch on api14 set change. Promise.allSettled so a
+  // Fan out curves fetch on api10 set change. Promise.allSettled so a
   // single 404 doesn't blank the whole modal — wells without
   // production show up as "no production data".
   useEffect(() => {
     let cancelled = false;
-    if (api14s.length === 0) {
+    if (api10s.length === 0) {
       setCurves(new Map());
       return () => {
         cancelled = true;
@@ -77,14 +77,14 @@ export function InspectProductionCharts({
     }
     setLoading(true);
     setError(null);
-    Promise.allSettled(api14s.map((a) => fetchWellCurves(a)))
+    Promise.allSettled(api10s.map((a) => fetchWellCurves(a)))
       .then((results) => {
         if (cancelled) return;
         const out = new Map<string, WellCurvesResponse>();
         for (let i = 0; i < results.length; i++) {
           const r = results[i]!;
           if (r.status === "fulfilled") {
-            out.set(api14s[i]!, r.value);
+            out.set(api10s[i]!, r.value);
           }
         }
         setCurves(out);
@@ -98,19 +98,19 @@ export function InspectProductionCharts({
     return () => {
       cancelled = true;
     };
-  }, [api14s]);
+  }, [api10s]);
 
   // Build per-well aligned series for the active stream + normalize
   // mode. Memoized so toggling normalize doesn't re-fetch.
   const series = useMemo<WellSeries[]>(() => {
     if (!curves) return [];
     const out: WellSeries[] = [];
-    for (const api14 of api14s) {
-      const resp = curves.get(api14);
+    for (const api10 of api10s) {
+      const resp = curves.get(api10);
       if (!resp) continue;
       const sc = resp.streams.find((s) => s.stream === stream);
       if (!sc) continue;
-      const meta = wellsByApi14.get(api14) ?? null;
+      const meta = wellsByApi10.get(api10) ?? null;
       const lateralFt = meta?.lateral_ft ?? null;
       // Normalize per 10kft when requested AND lateral is known.
       // Unknown-lateral wells fall back to raw so a missing length
@@ -126,14 +126,14 @@ export function InspectProductionCharts({
         v == null ? null : v * norm,
       );
       out.push({
-        api14,
+        api10,
         formation: meta?.formation ?? null,
         rate,
         cum,
       });
     }
     return out;
-  }, [curves, api14s, stream, normalize, wellsByApi14]);
+  }, [curves, api10s, stream, normalize, wellsByApi10]);
 
   // The "hide entirely" rule from the plan: fewer than 2 wells with
   // any non-null production → don't bother showing the panel. Caller
@@ -200,8 +200,8 @@ export function InspectProductionCharts({
           yLabel={normalize ? "rate / 10kft" : "rate"}
           series={wellsWithData}
           accessor={(s) => s.rate}
-          selectedApi14s={selectedApi14s}
-          hoveredApi14={hoveredApi14}
+          selectedApi10s={selectedApi10s}
+          hoveredApi10={hoveredApi10}
           onHover={onHover}
         />
         <OverlayChart
@@ -209,8 +209,8 @@ export function InspectProductionCharts({
           yLabel={normalize ? "cum / 10kft" : "cum"}
           series={wellsWithData}
           accessor={(s) => s.cum}
-          selectedApi14s={selectedApi14s}
-          hoveredApi14={hoveredApi14}
+          selectedApi10s={selectedApi10s}
+          hoveredApi10={hoveredApi10}
           onHover={onHover}
         />
       </div>
@@ -225,8 +225,8 @@ function OverlayChart({
   yLabel,
   series,
   accessor,
-  selectedApi14s,
-  hoveredApi14 = null,
+  selectedApi10s,
+  hoveredApi10 = null,
   onHover,
   width = 430,
   height = 240,
@@ -235,9 +235,9 @@ function OverlayChart({
   yLabel: string;
   series: WellSeries[];
   accessor: (s: WellSeries) => Array<number | null>;
-  selectedApi14s?: Set<string>;
-  hoveredApi14?: string | null;
-  onHover?: (api14: string | null) => void;
+  selectedApi10s?: Set<string>;
+  hoveredApi10?: string | null;
+  onHover?: (api10: string | null) => void;
   width?: number;
   height?: number;
 }) {
@@ -351,8 +351,8 @@ function OverlayChart({
       {[...series]
         .sort(
           (a, b) =>
-            (a.api14 === hoveredApi14 ? 1 : 0) -
-            (b.api14 === hoveredApi14 ? 1 : 0),
+            (a.api10 === hoveredApi10 ? 1 : 0) -
+            (b.api10 === hoveredApi10 ? 1 : 0),
         )
         .map((s) => {
           const color = colorForFormation(s.formation);
@@ -370,9 +370,9 @@ function OverlayChart({
           }
           if (current.length > 0) segments.push(current);
 
-          const isSelected = selectedApi14s?.has(s.api14) ?? true;
-          const isHovered = hoveredApi14 === s.api14;
-          const anyHover = hoveredApi14 != null;
+          const isSelected = selectedApi10s?.has(s.api10) ?? true;
+          const isHovered = hoveredApi10 === s.api10;
+          const anyHover = hoveredApi10 != null;
           // Deselected wells stay ghosted regardless of hover so the
           // user can still see them but they don't compete with the
           // signal. Selected wells dim slightly when *another* well
@@ -385,14 +385,14 @@ function OverlayChart({
           const strokeWidth = isSelected && isHovered ? 2.5 : 1.25;
           return (
             <g
-              key={s.api14}
+              key={s.api10}
               style={{ cursor: "pointer" }}
-              onMouseEnter={() => onHover?.(s.api14)}
+              onMouseEnter={() => onHover?.(s.api10)}
               onMouseLeave={() => onHover?.(null)}
             >
               {segments.map((seg, idx) => (
                 <polyline
-                  key={`${s.api14}-${idx}`}
+                  key={`${s.api10}-${idx}`}
                   fill="none"
                   stroke={color}
                   strokeWidth={strokeWidth}

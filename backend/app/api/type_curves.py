@@ -52,7 +52,7 @@ log = get_logger("api.type_curves")
 
 
 class ComputeRequest(BaseModel):
-    api14s: list[str] = Field(min_length=1, max_length=500)
+    api10s: list[str] = Field(min_length=1, max_length=500)
     normalization_basis: str = "per_lateral_ft"
     # Default is first-prod-month — includes ramp-up months, which the
     # economics team needs for cash-flow modeling. peak_month is still
@@ -83,7 +83,7 @@ class SaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     notes: str | None = None
     filter_spec: dict[str, Any] = Field(default_factory=dict)
-    included_api14s: list[str] = Field(min_length=1, max_length=500)
+    included_api10s: list[str] = Field(min_length=1, max_length=500)
     normalization_basis: str = "per_lateral_ft"
     alignment_method: str = "first_prod_month"
     n_months: int | None = Field(default=None, ge=1, le=240)
@@ -121,7 +121,7 @@ class TypeCurveRow(BaseModel):
     name: str
     notes: str | None
     filter_spec: dict[str, Any]
-    included_api14s: list[str]
+    included_api10s: list[str]
     normalization_basis: NormalizationBasis
     alignment_method: AlignmentMethod
     series: dict[str, Any]
@@ -140,7 +140,7 @@ class TypeCurveRow(BaseModel):
             name=tc.name,
             notes=tc.notes,
             filter_spec=tc.filter_spec or {},
-            included_api14s=tc.included_api14s or [],
+            included_api10s=tc.included_api10s or [],
             normalization_basis=tc.normalization_basis,
             alignment_method=tc.alignment_method,
             series=tc.series or {},
@@ -174,7 +174,7 @@ class TypeCurveWellStat(BaseModel):
     returned null when either is missing or lateral_ft <= 0.
     """
 
-    api14: str
+    api10: str
     name: str | None
     lateral_ft: float | None
     oil_eur: float | None
@@ -201,7 +201,7 @@ class WorkspaceStream(BaseModel):
 class WorkspaceWell(BaseModel):
     """One row in the TC workspace's well list."""
 
-    api14: str
+    api10: str
     well_name: str | None
     well_operator: str | None
     well_formation: str | None
@@ -214,7 +214,7 @@ class WorkspaceWell(BaseModel):
 
 
 class OverrideWriteRequest(BaseModel):
-    """Body for PUT /type-curves/{id}/overrides/{api14}/{stream}.
+    """Body for PUT /type-curves/{id}/overrides/{api10}/{stream}.
 
     Minimal surface: the user supplies the four Arps params (mirrors
     the per-well ``patch_forecast`` body). Server fills in the rest
@@ -232,7 +232,7 @@ class MembershipPatch(BaseModel):
     """Body for PATCH /type-curves/{id}/membership.
 
     ``add`` and ``remove`` are processed in that order (remove wins on
-    the same api14 — pathological but cheap to define explicitly).
+    the same api10 — pathological but cheap to define explicitly).
     Empty lists are valid no-ops.
     """
 
@@ -344,7 +344,7 @@ def _apply_fit_overrides(
 
 def _compute(
     session: Session,
-    api14s: list[str],
+    api10s: list[str],
     *,
     basis: str,
     alignment: str,
@@ -378,7 +378,7 @@ def _compute(
     forecast_wells = load_wells_with_forecast(
         session,
         tc if tc is not None else _empty_tc_for_resolver(),
-        api14s,
+        api10s,
         alignment=validated_alignment,
         n_months=_FORECAST_N_MONTHS,
     )
@@ -430,7 +430,7 @@ def _compute(
 
     # --- empirical observed-only aggregation ---
     observed_wells = load_well_series(
-        session, api14s, alignment=validated_alignment
+        session, api10s, alignment=validated_alignment
     )
     if observed_wells:
         observed_agg = aggregate(
@@ -493,7 +493,7 @@ def compute_type_curve(
     req: ComputeRequest, session: Session = Depends(get_session)
 ) -> ComputeResponse:
     payload = _compute(
-        session, req.api14s,
+        session, req.api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
@@ -542,7 +542,7 @@ def _persist(
         name=req.name,
         notes=req.notes,
         filter_spec=req.filter_spec,
-        included_api14s=req.included_api14s,
+        included_api10s=req.included_api10s,
         normalization_basis=NormalizationBasis(req.normalization_basis),
         alignment_method=AlignmentMethod(req.alignment_method),
         series=payload,
@@ -559,7 +559,7 @@ def save_type_curve(
     req: SaveRequest, session: Session = Depends(get_session)
 ) -> TypeCurveRow:
     payload = _compute(
-        session, req.included_api14s,
+        session, req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
@@ -569,7 +569,7 @@ def save_type_curve(
     log.info(
         "type_curve_saved",
         id=str(row.id),
-        n_wells=len(req.included_api14s),
+        n_wells=len(req.included_api10s),
         overridden_streams=list(req.fit_overrides.keys()) if req.fit_overrides else [],
     )
     return TypeCurveRow.from_orm_row(row)
@@ -585,7 +585,7 @@ def save_as_new_version(
     if parent is None:
         raise HTTPException(status_code=404, detail="parent type curve not found")
     payload = _compute(
-        session, req.included_api14s,
+        session, req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
@@ -594,7 +594,7 @@ def save_as_new_version(
     row = _persist(session, payload=payload, req=req, version_of=parent.id)
     log.info(
         "type_curve_versioned", id=str(row.id), parent=str(parent.id),
-        n_wells=len(req.included_api14s),
+        n_wells=len(req.included_api10s),
     )
     return TypeCurveRow.from_orm_row(row)
 
@@ -614,7 +614,7 @@ def list_type_curves(
             id=r.id, name=r.name, notes=r.notes,
             normalization_basis=r.normalization_basis,
             alignment_method=r.alignment_method,
-            n_wells=len(r.included_api14s or []),
+            n_wells=len(r.included_api10s or []),
             created_at=r.created_at,
             version_of=r.version_of,
             deal_id=r.deal_id,
@@ -939,7 +939,7 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
     writer.writerow(["alignment_method", tc.alignment_method.value])
     writer.writerow(["created_at", tc.created_at.isoformat()])
     writer.writerow(["version_of", str(tc.version_of) if tc.version_of else ""])
-    writer.writerow(["n_wells", len(tc.included_api14s or [])])
+    writer.writerow(["n_wells", len(tc.included_api10s or [])])
     writer.writerow([])
     writer.writerow(["filter_spec_key", "filter_spec_value"])
     for k, v in (tc.filter_spec or {}).items():
@@ -991,8 +991,8 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
         ])
     writer.writerow([])
 
-    writer.writerow(["included_api14s"])
-    for a in tc.included_api14s or []:
+    writer.writerow(["included_api10s"])
+    for a in tc.included_api10s or []:
         writer.writerow([a])
     return buf.getvalue().encode()
 
@@ -1004,10 +1004,10 @@ def get_type_curve_well_stats(
     """Per-well oil EUR + lateral_ft for the wells in this curve.
 
     Drives the slide-export probit chart. Single join: wells ⨝ forecasts
-    (oil stream) filtered by api14 ∈ included_api14s. Wells missing an
+    (oil stream) filtered by api10 ∈ included_api10s. Wells missing an
     oil forecast or a lateral_ft are still returned, with nulls for the
     fields they can't supply, so the frontend can report a well count
-    that matches included_api14s exactly.
+    that matches included_api10s exactly.
 
     EUR is recomputed on the fly from the RESOLVED oil forecast
     (TC override → global → none) using the same monthly trapezoid
@@ -1032,28 +1032,28 @@ def get_type_curve_well_stats(
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
-    api14s = list(tc.included_api14s or [])
-    if not api14s:
+    api10s = list(tc.included_api10s or [])
+    if not api10s:
         return []
 
     well_rows = session.execute(
-        select(Well.api14, Well.name, Well.lateral_ft).where(
-            Well.api14.in_(api14s)
+        select(Well.api10, Well.name, Well.lateral_ft).where(
+            Well.api10.in_(api10s)
         )
     ).all()
-    well_by_api14 = {r.api14: r for r in well_rows}
+    well_by_api10 = {r.api10: r for r in well_rows}
 
     # Pull only oil forecasts — probit is oil-only today.
     forecast_rows = session.execute(
         select(Forecast)
-        .where(Forecast.api14.in_(api14s))
+        .where(Forecast.api10.in_(api10s))
         .where(Forecast.stream == Stream.OIL)
     ).scalars().all()
-    forecast_by_api14 = {f.api14: f for f in forecast_rows}
+    forecast_by_api10 = {f.api10: f for f in forecast_rows}
 
     out: list[TypeCurveWellStat] = []
-    for api14 in api14s:
-        wrow = well_by_api14.get(api14)
+    for api10 in api10s:
+        wrow = well_by_api10.get(api10)
         lat = (
             float(wrow.lateral_ft)
             if wrow and wrow.lateral_ft is not None
@@ -1062,7 +1062,7 @@ def get_type_curve_well_stats(
         name = wrow.name if wrow else None
 
         resolved = resolve_forecast(
-            tc, api14, Stream.OIL, forecast_by_api14.get(api14)
+            tc, api10, Stream.OIL, forecast_by_api10.get(api10)
         )
         payload = resolved.payload
         eur: float | None = None
@@ -1117,7 +1117,7 @@ def get_type_curve_well_stats(
         per_ft = eur / lat if (eur is not None and lat and lat > 0) else None
         out.append(
             TypeCurveWellStat(
-                api14=api14,
+                api10=api10,
                 name=name,
                 lateral_ft=lat,
                 oil_eur=eur,
@@ -1133,12 +1133,12 @@ def get_type_curve_workspace_wells(
 ) -> list[WorkspaceWell]:
     """Per-well resolved forecasts for the TC workspace (Phase 1, read-only).
 
-    Returns one row per ``included_api14`` with each well's joined
+    Returns one row per ``included_api10`` with each well's joined
     attributes and a resolved forecast per stream:
 
       * ``oil`` / ``gas`` / ``water`` → {source, payload}
       * source = "override" when ``tc.forecast_overrides`` has an entry
-        for (api14, stream), "global" when it falls through to the
+        for (api10, stream), "global" when it falls through to the
         forecasts table, "missing" when no forecast exists at all.
 
     All resolution goes through ``resolve_forecast`` so Phase 2 (which
@@ -1151,8 +1151,8 @@ def get_type_curve_workspace_wells(
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
-    api14s = list(tc.included_api14s or [])
-    if not api14s:
+    api10s = list(tc.included_api10s or [])
+    if not api10s:
         return []
 
     # One round-trip: wells joined to their forecasts (any stream). We
@@ -1161,36 +1161,36 @@ def get_type_curve_workspace_wells(
     # snappy on the workspace page load.
     well_rows = session.execute(
         select(
-            Well.api14,
+            Well.api10,
             Well.name,
             Well.operator,
             Well.formation,
             Well.lateral_ft,
             Well.first_prod_date,
             Well.county,
-        ).where(Well.api14.in_(api14s))
+        ).where(Well.api10.in_(api10s))
     ).all()
-    wells_by_api14 = {r.api14: r for r in well_rows}
+    wells_by_api10 = {r.api10: r for r in well_rows}
 
     forecast_rows = session.execute(
-        select(Forecast).where(Forecast.api14.in_(api14s))
+        select(Forecast).where(Forecast.api10.in_(api10s))
     ).scalars().all()
     forecasts_by_well: dict[str, dict[Stream, Forecast]] = {}
     for f in forecast_rows:
-        forecasts_by_well.setdefault(f.api14, {})[f.stream] = f
+        forecasts_by_well.setdefault(f.api10, {})[f.stream] = f
 
     out: list[WorkspaceWell] = []
-    for api14 in api14s:
-        well = wells_by_api14.get(api14)
-        well_forecasts = forecasts_by_well.get(api14, {})
+    for api10 in api10s:
+        well = wells_by_api10.get(api10)
+        well_forecasts = forecasts_by_well.get(api10, {})
 
         def _stream(s: Stream) -> WorkspaceStream:
-            resolved = resolve_forecast(tc, api14, s, well_forecasts.get(s))
+            resolved = resolve_forecast(tc, api10, s, well_forecasts.get(s))
             return WorkspaceStream(source=resolved.source, payload=resolved.payload)
 
         out.append(
             WorkspaceWell(
-                api14=api14,
+                api10=api10,
                 well_name=well.name if well else None,
                 well_operator=well.operator if well else None,
                 well_formation=well.formation if well else None,
@@ -1276,12 +1276,12 @@ def _override_payload_from_params(
 
 
 @router.put(
-    "/{type_curve_id}/overrides/{api14}/{stream}",
+    "/{type_curve_id}/overrides/{api10}/{stream}",
     response_model=WorkspaceStream,
 )
 def put_forecast_override(
     type_curve_id: uuid.UUID,
-    api14: str,
+    api10: str,
     stream: str,
     body: OverrideWriteRequest,
     session: Session = Depends(get_session),
@@ -1296,19 +1296,19 @@ def put_forecast_override(
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
     stream_enum = _resolve_stream(stream)
-    if api14 not in (tc.included_api14s or []):
+    if api10 not in (tc.included_api10s or []):
         raise HTTPException(
             status_code=400,
-            detail=f"api14 {api14} is not a member of this type curve",
+            detail=f"api10 {api10} is not a member of this type curve",
         )
 
     payload = _override_payload_from_params(
         qi=body.qi, Di=body.Di, b=body.b, Df=body.Df
     )
     overrides = dict(tc.forecast_overrides or {})
-    well_block = dict(overrides.get(api14) or {})
+    well_block = dict(overrides.get(api10) or {})
     well_block[stream_enum.value] = payload
-    overrides[api14] = well_block
+    overrides[api10] = well_block
     tc.forecast_overrides = overrides
     tc.is_stale = True  # forecast-aggregation: overrides DO change the bands
     flag_modified(tc, "forecast_overrides")
@@ -1316,19 +1316,19 @@ def put_forecast_override(
     log.info(
         "override_written",
         type_curve_id=str(type_curve_id),
-        api14=api14,
+        api10=api10,
         stream=stream_enum.value,
     )
     return WorkspaceStream(source="override", payload=payload)
 
 
 @router.delete(
-    "/{type_curve_id}/overrides/{api14}/{stream}",
+    "/{type_curve_id}/overrides/{api10}/{stream}",
     response_model=WorkspaceStream,
 )
 def delete_forecast_override(
     type_curve_id: uuid.UUID,
-    api14: str,
+    api10: str,
     stream: str,
     session: Session = Depends(get_session),
 ) -> WorkspaceStream:
@@ -1346,13 +1346,13 @@ def delete_forecast_override(
     stream_enum = _resolve_stream(stream)
 
     overrides = dict(tc.forecast_overrides or {})
-    well_block = dict(overrides.get(api14) or {})
+    well_block = dict(overrides.get(api10) or {})
     if stream_enum.value in well_block:
         del well_block[stream_enum.value]
         if well_block:
-            overrides[api14] = well_block
+            overrides[api10] = well_block
         else:
-            overrides.pop(api14, None)
+            overrides.pop(api10, None)
         tc.forecast_overrides = overrides
         tc.is_stale = True  # reverting an override changes the bands too
         flag_modified(tc, "forecast_overrides")
@@ -1360,7 +1360,7 @@ def delete_forecast_override(
         log.info(
             "override_deleted",
             type_curve_id=str(type_curve_id),
-            api14=api14,
+            api10=api10,
             stream=stream_enum.value,
         )
 
@@ -1368,10 +1368,10 @@ def delete_forecast_override(
     # modal / workspace row to global without a second round-trip.
     global_f = session.execute(
         select(Forecast)
-        .where(Forecast.api14 == api14)
+        .where(Forecast.api10 == api10)
         .where(Forecast.stream == stream_enum)
     ).scalar_one_or_none()
-    resolved = resolve_forecast(tc, api14, stream_enum, global_f)
+    resolved = resolve_forecast(tc, api10, stream_enum, global_f)
     return WorkspaceStream(source=resolved.source, payload=resolved.payload)
 
 
@@ -1383,12 +1383,12 @@ def patch_type_curve_membership(
     body: MembershipPatch,
     session: Session = Depends(get_session),
 ) -> TypeCurveRow:
-    """Mutate ``included_api14s`` (add / remove) and mark the curve stale.
+    """Mutate ``included_api10s`` (add / remove) and mark the curve stale.
 
-    Validates that every api14 in ``add`` exists in the wells table —
-    silently dropping unknown api14s here would create a curve whose
+    Validates that every api10 in ``add`` exists in the wells table —
+    silently dropping unknown api10s here would create a curve whose
     workspace renders empty rows for ghost members. ``remove`` is
-    forgiving of unknown api14s (just a set difference). Overrides
+    forgiving of unknown api10s (just a set difference). Overrides
     for removed wells are cleaned up to keep the JSONB tidy.
     """
     tc = session.get(TypeCurve, type_curve_id)
@@ -1398,16 +1398,16 @@ def patch_type_curve_membership(
     if body.add:
         known = set(
             session.execute(
-                select(Well.api14).where(Well.api14.in_(body.add))
+                select(Well.api10).where(Well.api10.in_(body.add))
             ).scalars()
         )
         unknown = [a for a in body.add if a not in known]
         if unknown:
             raise HTTPException(
-                status_code=400, detail=f"unknown api14s: {unknown}"
+                status_code=400, detail=f"unknown api10s: {unknown}"
             )
 
-    members = list(tc.included_api14s or [])
+    members = list(tc.included_api10s or [])
     if body.add:
         for a in body.add:
             if a not in members:
@@ -1425,10 +1425,10 @@ def patch_type_curve_membership(
                 tc.forecast_overrides = overrides
                 flag_modified(tc, "forecast_overrides")
 
-    if members != (tc.included_api14s or []):
-        tc.included_api14s = members
+    if members != (tc.included_api10s or []):
+        tc.included_api10s = members
         tc.is_stale = True
-        flag_modified(tc, "included_api14s")
+        flag_modified(tc, "included_api10s")
 
     session.commit()
     session.refresh(tc)
@@ -1448,7 +1448,7 @@ def patch_type_curve_membership(
 def reaggregate_type_curve(
     type_curve_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> TypeCurveRow:
-    """Re-run aggregation + P50 fitter with current ``included_api14s``.
+    """Re-run aggregation + P50 fitter with current ``included_api10s``.
 
     Overwrites ``series`` in place; clears ``is_stale``. Honors the
     saved curve's normalization basis + alignment method + n_months
@@ -1461,8 +1461,8 @@ def reaggregate_type_curve(
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
-    api14s = list(tc.included_api14s or [])
-    if not api14s:
+    api10s = list(tc.included_api10s or [])
+    if not api10s:
         raise HTTPException(
             status_code=400,
             detail="cannot re-aggregate: type curve has no included wells",
@@ -1478,7 +1478,7 @@ def reaggregate_type_curve(
 
     payload = _compute(
         session,
-        api14s,
+        api10s,
         basis=tc.normalization_basis.value,
         alignment=tc.alignment_method.value,
         n_months=n_months,
@@ -1492,7 +1492,7 @@ def reaggregate_type_curve(
     log.info(
         "type_curve_reaggregated",
         type_curve_id=str(type_curve_id),
-        n_wells=len(api14s),
+        n_wells=len(api10s),
     )
     return TypeCurveRow.from_orm_row(tc)
 
@@ -1630,7 +1630,7 @@ async def export_type_curve_pptx(
         "type_curve_exported_pptx",
         id=str(type_curve_id),
         compare_with=str(compare_with) if compare_with else None,
-        n_wells=len(tc.included_api14s or []),
+        n_wells=len(tc.included_api10s or []),
         bytes=len(content),
     )
     return Response(

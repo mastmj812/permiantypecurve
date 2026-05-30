@@ -12,11 +12,11 @@ from app.wells_api.summary import (
 )
 
 
-def _row(api14: str, *, formation: str | None = "Wolfcamp A",
+def _row(api10: str, *, formation: str | None = "Wolfcamp A",
          operator: str | None = "Op A", year: int | None = 2022,
          lat_ft: float | None = 10000.0) -> WellSummaryRow:
     return WellSummaryRow(
-        api14=api14, formation=formation, operator=operator,
+        api10=api10, formation=formation, operator=operator,
         first_prod_year=year, lateral_ft=lat_ft,
     )
 

@@ -25,6 +25,13 @@ interface Props {
   xLabel?: string;
   width?: number;
   height?: number;
+  // Caps the x-axis at this value (months since peak) regardless of
+  // where the forecast extends. Used by the linear-rate chart so the
+  // default view zooms to the observed history window instead of
+  // showing the full 50-year forecast tail, which compresses 10 years
+  // of actuals into the leftmost ~20 pixels. Undefined = auto from
+  // max(history + forecast), original behavior.
+  xMaxOverride?: number;
 }
 
 const PAD = { top: 16, right: 16, bottom: 36, left: 56 };
@@ -37,17 +44,38 @@ export function DeclineChart({
   xLabel = "Months since peak",
   width = 520,
   height = 280,
+  xMaxOverride,
 }: Props) {
   const { xScale, yScale, xTicks, yTicks, plotArea } = useMemo(
-    () => computeAxes({ history, forecast, yAxisType, width, height }),
-    [history, forecast, yAxisType, width, height],
+    () => computeAxes({ history, forecast, yAxisType, width, height, xMaxOverride }),
+    [history, forecast, yAxisType, width, height, xMaxOverride],
   );
 
   const historyPath = pointsToPath(history, xScale, yScale, yAxisType);
   const forecastPath = pointsToPath(forecast, xScale, yScale, yAxisType);
 
+  // A unique clipPath id per render — multiple charts on the same page
+  // would otherwise reuse the same id and clip each other.
+  const clipId = useMemo(
+    () => `decline-clip-${Math.random().toString(36).slice(2, 10)}`,
+    [],
+  );
+
   return (
     <svg width={width} height={height} className="decline-chart">
+      {/* Clip everything inside the plot area so the forecast tail
+          doesn't extend past the right edge when xMaxOverride is in
+          use. */}
+      <defs>
+        <clipPath id={clipId}>
+          <rect
+            x={plotArea.x}
+            y={plotArea.y}
+            width={plotArea.w}
+            height={plotArea.h}
+          />
+        </clipPath>
+      </defs>
       {/* Plot area background */}
       <rect
         x={plotArea.x}
@@ -103,32 +131,36 @@ export function DeclineChart({
         </g>
       ))}
 
-      {/* Forecast (drawn first so history sits on top) */}
-      {forecast.length > 1 && (
-        <path
-          d={forecastPath}
-          fill="none"
-          stroke="#dc2626"
-          strokeWidth={1.5}
-          strokeDasharray="4 3"
-        />
-      )}
-
-      {/* History points + connecting line */}
-      {history.length > 1 && (
-        <path d={historyPath} fill="none" stroke="#1f2937" strokeWidth={1.25} />
-      )}
-      {history.map((p) =>
-        validForAxis(p.y, yAxisType) ? (
-          <circle
-            key={`h${p.t}`}
-            cx={xScale(p.t)}
-            cy={yScale(p.y)}
-            r={2}
-            fill="#1f2937"
+      {/* Series live inside a clipped group so anything past xMax is
+          hidden — needed when xMaxOverride compresses the axis. */}
+      <g clipPath={`url(#${clipId})`}>
+        {/* Forecast (drawn first so history sits on top) */}
+        {forecast.length > 1 && (
+          <path
+            d={forecastPath}
+            fill="none"
+            stroke="#dc2626"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
           />
-        ) : null,
-      )}
+        )}
+
+        {/* History points + connecting line */}
+        {history.length > 1 && (
+          <path d={historyPath} fill="none" stroke="#1f2937" strokeWidth={1.25} />
+        )}
+        {history.map((p) =>
+          validForAxis(p.y, yAxisType) ? (
+            <circle
+              key={`h${p.t}`}
+              cx={xScale(p.t)}
+              cy={yScale(p.y)}
+              r={2}
+              fill="#1f2937"
+            />
+          ) : null,
+        )}
+      </g>
 
       {/* Axis labels */}
       <text
@@ -161,6 +193,7 @@ interface AxesProps {
   yAxisType: AxisType;
   width: number;
   height: number;
+  xMaxOverride?: number;
 }
 
 interface AxesOut {
@@ -190,11 +223,25 @@ function computeAxes(p: AxesProps): AxesOut {
     };
   }
   const xMin = 0;
-  const xMax = Math.max(...allPoints.map((pp) => pp.t));
+  const dataXMax = Math.max(...allPoints.map((pp) => pp.t));
+  // If the caller clamped the axis, use it — but never go SMALLER than
+  // the history points we'd otherwise hide. (Forecast points past
+  // xMax just stop being drawn, which is the point.)
+  const historyXMax = p.history.length
+    ? Math.max(...p.history.map((pp) => pp.t))
+    : 0;
+  const xMax =
+    p.xMaxOverride != null
+      ? Math.max(p.xMaxOverride, historyXMax)
+      : dataXMax;
   const xRange = xMax - xMin || 1;
   const xScale = (x: number) => plotArea.x + ((x - xMin) / xRange) * plotArea.w;
 
-  const yValues = allPoints
+  // For y-axis scaling, only consider points whose t will actually be
+  // drawn — otherwise a forecast tail at t=600 with tiny rates pulls
+  // the y-min down on a log axis or compresses the linear range.
+  const visibleYPoints = allPoints.filter((pp) => pp.t <= xMax);
+  const yValues = visibleYPoints
     .map((pp) => pp.y)
     .filter((v) => Number.isFinite(v) && (p.yAxisType !== "log" || v > 0));
   if (yValues.length === 0) {

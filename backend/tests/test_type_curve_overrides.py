@@ -36,7 +36,7 @@ def _curve(forecast_overrides: dict[str, Any] | None = None) -> TypeCurve:
     tc.name = "test_curve"
     tc.notes = None
     tc.filter_spec = {}
-    tc.included_api14s = ["42100000000001"]
+    tc.included_api10s = ["42100000000001"]
     tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
     tc.alignment_method = AlignmentMethod.FIRST_PROD_MONTH
     tc.series = {}
@@ -48,10 +48,10 @@ def _curve(forecast_overrides: dict[str, Any] | None = None) -> TypeCurve:
     return tc
 
 
-def _global_forecast(api14: str, stream: Stream, qi: float = 500.0) -> Forecast:
+def _global_forecast(api10: str, stream: Stream, qi: float = 500.0) -> Forecast:
     f = Forecast()
     f.id = uuid.uuid4()
-    f.api14 = api14
+    f.api10 = api10
     f.stream = stream
     f.model_type = ModelType.MODIFIED_HYPERBOLIC
     f.params = {"qi": qi, "Di": 1.5, "b": 1.0, "Df": 0.08}
@@ -73,10 +73,10 @@ def _global_forecast(api14: str, stream: Stream, qi: float = 500.0) -> Forecast:
 
 def test_resolves_to_global_when_no_overrides() -> None:
     tc = _curve(forecast_overrides={})
-    api14 = "42100000000001"
-    global_f = _global_forecast(api14, Stream.OIL, qi=500.0)
+    api10 = "42100000000001"
+    global_f = _global_forecast(api10, Stream.OIL, qi=500.0)
 
-    resolved = resolve_forecast(tc, api14, Stream.OIL, global_f)
+    resolved = resolve_forecast(tc, api10, Stream.OIL, global_f)
 
     assert resolved.source == "global"
     assert resolved.payload is not None
@@ -87,7 +87,7 @@ def test_resolves_to_global_when_no_overrides() -> None:
 
 
 def test_override_wins_over_global() -> None:
-    api14 = "42100000000001"
+    api10 = "42100000000001"
     # Override pins qi to a sentinel that doesn't match the global —
     # if the resolver mistakenly returns global, this would be 500.
     override_payload = {
@@ -96,10 +96,10 @@ def test_override_wins_over_global() -> None:
         "model_type": "modified_hyperbolic",
         "manual_override": True,
     }
-    tc = _curve(forecast_overrides={api14: {"oil": override_payload}})
-    global_f = _global_forecast(api14, Stream.OIL, qi=500.0)
+    tc = _curve(forecast_overrides={api10: {"oil": override_payload}})
+    global_f = _global_forecast(api10, Stream.OIL, qi=500.0)
 
-    resolved = resolve_forecast(tc, api14, Stream.OIL, global_f)
+    resolved = resolve_forecast(tc, api10, Stream.OIL, global_f)
 
     assert resolved.source == "override"
     assert resolved.payload is not None
@@ -109,9 +109,9 @@ def test_override_wins_over_global() -> None:
 
 def test_missing_when_no_override_and_no_global() -> None:
     tc = _curve(forecast_overrides={})
-    api14 = "42100000000001"
+    api10 = "42100000000001"
 
-    resolved = resolve_forecast(tc, api14, Stream.GAS, None)
+    resolved = resolve_forecast(tc, api10, Stream.GAS, None)
 
     assert resolved.source == "missing"
     assert resolved.payload is None
@@ -121,15 +121,15 @@ def test_override_is_scoped_per_stream() -> None:
     """An override on oil must NOT mask gas — gas should still fall
     back to its global. Catches a regression where the resolver
     accidentally treated the whole well as overridden."""
-    api14 = "42100000000001"
+    api10 = "42100000000001"
     tc = _curve(
         forecast_overrides={
-            api14: {"oil": {"qi": 777.0, "model_type": "modified_hyperbolic"}},
+            api10: {"oil": {"qi": 777.0, "model_type": "modified_hyperbolic"}},
         }
     )
-    global_gas = _global_forecast(api14, Stream.GAS, qi=2500.0)
+    global_gas = _global_forecast(api10, Stream.GAS, qi=2500.0)
 
-    resolved = resolve_forecast(tc, api14, Stream.GAS, global_gas)
+    resolved = resolve_forecast(tc, api10, Stream.GAS, global_gas)
 
     assert resolved.source == "global"
     assert resolved.payload is not None
@@ -163,27 +163,27 @@ def test_override_payload_carries_eur_and_derived_fields() -> None:
 
 
 def test_write_then_resolve_round_trip() -> None:
-    """Mimic the PUT endpoint's mutation (set tc.forecast_overrides[api14]
+    """Mimic the PUT endpoint's mutation (set tc.forecast_overrides[api10]
     [stream]) and confirm resolve_forecast picks it up. Guards against
     drift between the write path and the read path — both share the
     same JSONB layout, but the endpoint and resolver live in
     different modules."""
     from app.api.type_curves import _override_payload_from_params
 
-    api14 = "42100000000001"
+    api10 = "42100000000001"
     tc = _curve()  # empty overrides
     payload = _override_payload_from_params(qi=999.0, Di=2.5, b=0.8, Df=0.08)
 
     # Write path (what the PUT endpoint does inline).
     overrides = dict(tc.forecast_overrides or {})
-    well_block = dict(overrides.get(api14) or {})
+    well_block = dict(overrides.get(api10) or {})
     well_block[Stream.OIL.value] = payload
-    overrides[api14] = well_block
+    overrides[api10] = well_block
     tc.forecast_overrides = overrides
 
     # Read path with a global forecast present — override should win.
-    global_oil = _global_forecast(api14, Stream.OIL, qi=500.0)
-    resolved = resolve_forecast(tc, api14, Stream.OIL, global_oil)
+    global_oil = _global_forecast(api10, Stream.OIL, qi=500.0)
+    resolved = resolve_forecast(tc, api10, Stream.OIL, global_oil)
     assert resolved.source == "override"
     assert resolved.payload is not None
     assert resolved.payload["qi"] == 999.0
@@ -193,25 +193,25 @@ def test_write_then_resolve_round_trip() -> None:
 def test_delete_then_resolve_falls_back_to_global() -> None:
     """Mimic the DELETE endpoint and confirm the resolver re-falls to
     the global row. Catches the case where the DELETE handler leaves
-    an empty {api14: {}} dict around, which the read path should
+    an empty {api10: {}} dict around, which the read path should
     ignore."""
-    api14 = "42100000000001"
+    api10 = "42100000000001"
     payload = _payload_stub(qi=777.0)
-    tc = _curve(forecast_overrides={api14: {Stream.OIL.value: payload}})
+    tc = _curve(forecast_overrides={api10: {Stream.OIL.value: payload}})
 
     # Delete path — mirror the endpoint's logic exactly so the test
     # catches its specific behavior (empty-block cleanup).
     overrides = dict(tc.forecast_overrides or {})
-    well_block = dict(overrides.get(api14) or {})
+    well_block = dict(overrides.get(api10) or {})
     well_block.pop(Stream.OIL.value, None)
     if well_block:
-        overrides[api14] = well_block
+        overrides[api10] = well_block
     else:
-        overrides.pop(api14, None)
+        overrides.pop(api10, None)
     tc.forecast_overrides = overrides
 
-    global_oil = _global_forecast(api14, Stream.OIL, qi=500.0)
-    resolved = resolve_forecast(tc, api14, Stream.OIL, global_oil)
+    global_oil = _global_forecast(api10, Stream.OIL, qi=500.0)
+    resolved = resolve_forecast(tc, api10, Stream.OIL, global_oil)
     assert resolved.source == "global"
     assert resolved.payload is not None
     assert resolved.payload["qi"] == 500.0

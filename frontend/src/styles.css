@@ -120,6 +120,74 @@ body {
 }
 .badge-warn { background: #fef3c7; color: #92400e; }
 .badge-err { background: #fee2e2; color: #991b1b; }
+.badge-info { background: #dbeafe; color: #1e40af; }
+.forecast-transfer-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 8px 16px;
+  background: #eff6ff;
+  border-bottom: 1px solid #bfdbfe;
+  font-size: 12px;
+  color: #1e3a8a;
+}
+.forecast-transfer-error {
+  padding: 8px 16px;
+  background: #fef2f2;
+  border-bottom: 1px solid #fecaca;
+  font-size: 12px;
+  color: #991b1b;
+}
+.tb-btn-primary {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.tb-btn-primary:hover { background: #1d4ed8; }
+.tb-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- review-page autoforecast block ---- */
+.forecast-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.forecast-transfer-summary {
+  font-size: 11px;
+  line-height: 1.4;
+  margin-bottom: 8px;
+}
+
+/* ---- summary-drawer cutoff input ---- */
+.cutoff-control {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.cutoff-label {
+  font-weight: 600;
+  color: #374151;
+}
+.cutoff-input-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cutoff-input-row input {
+  width: 56px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.cutoff-hint {
+  font-size: 11px;
+  line-height: 1.4;
+}
 .status-pill {
   font-size: 11px;
   padding: 1px 10px;
@@ -178,6 +246,11 @@ body {
   border-radius: 4px;
   padding: 12px;
   background: #fafafa;
+  /* Don't stretch to match the cum chart's height when sharing a
+     grid row with it — keeps the editor block compact at the top of
+     the cell instead of letting its background fill the empty space
+     below the buttons. */
+  align-self: start;
 }
 .param-editor h3 {
   margin: 0 0 8px;
@@ -201,11 +274,13 @@ body {
 }
 .param-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 8px;
 }
 .param-stats {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
   margin-top: 12px;
   padding-top: 12px;
@@ -268,6 +343,13 @@ body {
 .row-outlier td { background: #fef3c7; }
 .row-excluded td { background: #f3f4f6; opacity: 0.6; }
 .row-outlier.row-excluded td { background: #fde68a; }
+/* Stale fit from a previous run; will be overwritten when the user
+   clicks Apply cohort params. Subtle blue tint groups them visually
+   without competing with the outlier-yellow / excluded-grey tints
+   when those flags overlap. */
+.row-pending-transfer td { background: #eff6ff; }
+.row-pending-transfer.row-outlier td { background: #fef3c7; }
+.row-pending-transfer.row-excluded td { background: #f3f4f6; opacity: 0.6; }
 
 /* ---------- type curve page ---------- */
 .type-curve-main {

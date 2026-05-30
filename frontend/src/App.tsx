@@ -11,7 +11,6 @@ import {
 import { fetchTypeCurve } from "./api/typeCurves";
 import type { FilterSpec, WellStatus } from "./api/types";
 import { HealthBadge } from "./components/HealthBadge";
-import { ForecastPage } from "./pages/ForecastPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MapPage } from "./pages/MapPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -84,9 +83,8 @@ function navigateHash(newHash: string): void {
   window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
-const TABS: Array<{ id: "map" | "forecast" | "review" | "type_curve"; label: string }> = [
+const TABS: Array<{ id: "map" | "review" | "type_curve"; label: string }> = [
   { id: "map", label: "Map" },
-  { id: "forecast", label: "Forecast" },
   { id: "review", label: "Review" },
   { id: "type_curve", label: "Type curve" },
 ];
@@ -101,7 +99,7 @@ export function App() {
   const setStatuses = useMapStore((s) => s.setStatuses);
   const setVintageRange = useMapStore((s) => s.setVintageRange);
   const setLateralRange = useMapStore((s) => s.setLateralRange);
-  const setApi14sFilter = useMapStore((s) => s.setApi14s);
+  const setApi10sFilter = useMapStore((s) => s.setApi10s);
 
   const [user, setUser] = useState<AuthUser | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
@@ -153,15 +151,15 @@ export function App() {
         setStatuses((f.statuses ?? []) as WellStatus[]);
         setVintageRange(f.first_prod_start ?? null, f.first_prod_end ?? null);
         setLateralRange(f.lateral_min_ft ?? null, f.lateral_max_ft ?? null);
-        // api14s allow-list on the filter would force-include EXACTLY
+        // api10s allow-list on the filter would force-include EXACTLY
         // those wells — that's the opposite of what we want when
         // adding NEW wells. Clear it so the user can browse the
         // broader cohort population.
-        setApi14sFilter([]);
+        setApi10sFilter([]);
         setTcAddWellsMode({
           tcId: tc.id,
           tcName: tc.name,
-          existingApi14s: new Set(tc.included_api14s ?? []),
+          existingApi10s: new Set(tc.included_api10s ?? []),
         });
       } catch (e) {
         console.error("failed to enter add-wells mode", e);
@@ -175,7 +173,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [addWellsRoute, setTcAddWellsMode, setFormations, setOperators, setStatuses, setVintageRange, setLateralRange, setApi14sFilter]);
+  }, [addWellsRoute, setTcAddWellsMode, setFormations, setOperators, setStatuses, setVintageRange, setLateralRange, setApi10sFilter]);
 
   // On mount, if a token exists, verify it via /me. Otherwise stay logged out.
   useEffect(() => {
@@ -362,7 +360,6 @@ export function App() {
       </header>
       <main className="app-main">
         {activePage === "map" && <MapPage />}
-        {activePage === "forecast" && <ForecastPage />}
         {activePage === "review" && <ReviewPage />}
         {activePage === "type_curve" && (
           <TypeCurvePage initialCurveId={tcDetailRoute?.typeCurveId ?? null} />

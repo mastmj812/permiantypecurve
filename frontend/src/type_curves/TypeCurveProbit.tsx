@@ -25,7 +25,7 @@ import {
 import { eurFromForecastParams } from "../forecasts/arps";
 
 interface Props {
-  api14s: string[];
+  api10s: string[];
   // BBL/MCF per 1,000 lateral ft for the displayed fit's 50-yr EUR.
   // Null when no fit is available (e.g. the cohort failed to fit).
   tcEurPerUnit: number | null;
@@ -100,7 +100,7 @@ function probit(p: number): number {
 }
 
 export function TypeCurveProbit({
-  api14s,
+  api10s,
   tcEurPerUnit,
   prevEurPerUnit = null,
   prevLabel = null,
@@ -115,12 +115,12 @@ export function TypeCurveProbit({
   const [forecasts, setForecasts] = useState<ForecastRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Re-fetch when the cohort changes. Key on the joined api14s string so
+  // Re-fetch when the cohort changes. Key on the joined api10s string so
   // React can compare cheaply (the array reference changes every parent
   // render even when the contents are the same).
-  const api14sKey = api14s.join(",");
+  const api10sKey = api10s.join(",");
   useEffect(() => {
-    if (api14s.length === 0) {
+    if (api10s.length === 0) {
       setWsWells([]);
       setForecasts([]);
       return;
@@ -141,7 +141,7 @@ export function TypeCurveProbit({
       // Live preview: fall back to global forecasts (no overrides
       // exist yet — the TC isn't saved).
       setWsWells(null);
-      listForecasts(api14s)
+      listForecasts(api10s)
         .then((rows) => {
           if (!cancelled) setForecasts(rows);
         })
@@ -153,7 +153,7 @@ export function TypeCurveProbit({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [api14sKey, typeCurveId]);
+  }, [api10sKey, typeCurveId]);
 
   // Per-well EUR/ft for the current stream, computed via the monthly
   // trapezoid sum (same as the Review tab + the slide's well-stats).

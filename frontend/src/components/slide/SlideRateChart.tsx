@@ -21,7 +21,7 @@ interface Props {
   current: TypeCurveRow;
   previous: TypeCurveRow | null;
   wellCurves: WellCurvesResponse[];
-  lateralByApi14: Map<string, number | null>;
+  lateralByApi10: Map<string, number | null>;
   stream?: Stream;
   width?: number;
   height?: number;
@@ -69,7 +69,7 @@ export function SlideRateChart({
   current,
   previous,
   wellCurves,
-  lateralByApi14,
+  lateralByApi10,
   stream = "oil",
   // 5.42" × 2.16" at 96 px/in — the user-specified PowerPoint chart
   // dimensions. The export places each chart as a SEPARATE picture
@@ -89,7 +89,7 @@ export function SlideRateChart({
 
   const histories = buildAlignedWellHistories(
     wellCurves,
-    lateralByApi14,
+    lateralByApi10,
     "history_rate",
     stream,
   );

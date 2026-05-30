@@ -61,8 +61,8 @@ interface TypeCurvePageProps {
 }
 
 export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}) {
-  const forecastApi14s = useMapStore((s) => s.forecastApi14s);
-  const excluded = useMapStore((s) => s.excludedApi14s);
+  const forecastApi10s = useMapStore((s) => s.forecastApi10s);
+  const excluded = useMapStore((s) => s.excludedApi10s);
   // Cohort-handoff prefill: when the user reached this page via the
   // cohort bar's Forecast button, these are populated. The save form
   // pre-fills its name input, and onSave auto-assigns the saved curve
@@ -71,15 +71,38 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const activeCohortDealId = useMapStore((s) => s.activeCohortDealId);
 
   const included = useMemo(
-    () => forecastApi14s.filter((a) => !excluded.has(a)),
-    [forecastApi14s, excluded],
+    () => forecastApi10s.filter((a) => !excluded.has(a)),
+    [forecastApi10s, excluded],
   );
 
-  const [agg, setAgg] = useState<AggregatePayload | null>(null);
+  // Trigger-gated compute, mirroring the Forecast/Review pattern. The
+  // persisted agg from the store is the initial value so nav-return
+  // shows the previous build instead of going blank. setTypeCurveAgg
+  // is called everywhere setAgg is, keeping the store in sync.
+  const persistedAgg = useMapStore((s) => s.typeCurveAgg);
+  const setPersistedAgg = useMapStore((s) => s.setTypeCurveAgg);
+  const tcTriggerPending = useMapStore((s) => s.typeCurveTriggerPending);
+  const setTcTriggerPending = useMapStore((s) => s.setTypeCurveTriggerPending);
+
+  const [agg, setAggLocal] = useState<AggregatePayload | null>(persistedAgg);
+  // Wrapper that keeps local + store in lockstep. Use everywhere
+  // instead of the bare setAggLocal.
+  const setAgg = useCallback(
+    (next: AggregatePayload | null) => {
+      setAggLocal(next);
+      setPersistedAgg(next);
+    },
+    [setPersistedAgg],
+  );
   const [selectedSaved, setSelectedSaved] = useState<TypeCurveRow | null>(null);
   const [computing, setComputing] = useState(false);
   const [stream, setStream] = useState<Stream>("oil");
-  const [alignment, setAlignment] = useState<AlignmentMethod>("first_prod_month");
+  // Initial alignment matches the persisted agg so the "skip if
+  // alignment unchanged" guard below doesn't spuriously fire on
+  // first mount when there's a persisted result.
+  const [alignment, setAlignment] = useState<AlignmentMethod>(
+    persistedAgg?.alignment_method ?? "first_prod_month",
+  );
   const [saveName, setSaveName] = useState("");
   const [saveNotes, setSaveNotes] = useState("");
   const [versionOf, setVersionOf] = useState<string | null>(null);
@@ -188,10 +211,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // mount, after a successful save) and there's an active cohort name —
   // gives v2/v3/... of the same cohort the same pre-fill behavior as v1.
   useEffect(() => {
-    if (activeCohortName && !saveName && forecastApi14s.length > 0) {
+    if (activeCohortName && !saveName && forecastApi10s.length > 0) {
       setSaveName(activeCohortName);
     }
-  }, [activeCohortName, saveName, forecastApi14s.length]);
+  }, [activeCohortName, saveName, forecastApi10s.length]);
 
   // Lazily load the comparison curve when the user picks one.
   useEffect(() => {
@@ -208,25 +231,56 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     };
   }, [compareWithId]);
 
-  // Auto-compute when arriving with an included selection, or when the
-  // alignment changes. Each compute is cheap (a few hundred wells × a few
-  // dozen months) so we just re-fire on every change.
+  // Compute fires on TWO triggers:
+  //   1. User clicked "Aggregate XX into type curve" on Review.
+  //      The button sets typeCurveTriggerPending — we consume it and
+  //      compute with the current (api10s, alignment). Plain tab nav
+  //      back to the TC tab does NOT set the flag, so coming back to
+  //      this page does NOT recompute. The persisted agg from the
+  //      store renders instead.
+  //   2. User changed the alignment dropdown ON the TC page itself.
+  //      That's an on-page interaction, not a nav event — recompute.
+  //      Guarded by "alignment differs from what the persisted agg
+  //      was built with" so the initial-render effect-fire doesn't
+  //      spuriously recompute when the persisted result already
+  //      matches the current alignment.
   useEffect(() => {
     if (included.length === 0) {
       setAgg(null);
       return;
     }
+    const triggered = tcTriggerPending;
+    if (!triggered) {
+      const current = useMapStore.getState().typeCurveAgg;
+      // No prior compute AND no trigger → don't auto-fire. The user
+      // either nav'd here without clicking Aggregate, or the store
+      // was reset. They click Aggregate on Review to populate this.
+      if (!current) return;
+      // Prior result matches the current alignment → nothing changed
+      // that needs a recompute. (Initial mount path when the
+      // persisted agg's alignment_method matches the local state's
+      // initial value falls here too — guards against spurious
+      // mount-time refire.)
+      if (current.alignment_method === alignment) return;
+      // else: alignment changed on this page since the last compute →
+      // recompute. Falls through.
+    } else {
+      setTcTriggerPending(false);
+    }
     setComputing(true);
     setSelectedSaved(null);
     clearTweakState();
-    computeTypeCurve({ api14s: included, alignment_method: alignment })
+    computeTypeCurve({ api10s: included, alignment_method: alignment })
       .then(setAgg)
       .catch((e) => {
         console.error("compute failed", e);
         setAgg(null);
       })
       .finally(() => setComputing(false));
-  }, [included.join(","), alignment]);
+    // included is deliberately omitted: changing the selection on
+    // Review without re-clicking Aggregate shouldn't auto-fire here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tcTriggerPending, alignment]);
 
   function clearTweakState() {
     setEditValues({ oil: null, gas: null, water: null });
@@ -257,7 +311,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       const saved = await saveTypeCurve({
         name: saveName.trim(),
         notes: saveNotes.trim() || null,
-        included_api14s: included,
+        included_api10s: included,
         alignment_method: alignment,
         version_of: versionOf,
         fit_overrides: collectOverrides(),
@@ -786,9 +840,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 // still reflects whatever the user last lassoed on
                 // the map. Falls back to `included` in live-preview
                 // mode (no saved curve selected).
-                api14s={
+                api10s={
                   selectedSaved
-                    ? selectedSaved.included_api14s ?? []
+                    ? selectedSaved.included_api10s ?? []
                     : included
                 }
                 // Drives the probit's data path: saved-TC mode pulls
@@ -992,7 +1046,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             </label>
             <Stat
               label="Wells"
-              value={selectedSaved.included_api14s.length.toString()}
+              value={selectedSaved.included_api10s.length.toString()}
             />
             <Stat
               label="Normalization"

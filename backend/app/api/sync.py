@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -105,6 +105,34 @@ async def run_sync(
         basin=req.basin,
         counties=list(counties),
         note="poll GET /api/sync/status for progress",
+    )
+
+
+@router.get("/jobs/{job_id}", response_model=JobInfo)
+async def get_sync_job(
+    job_id: uuid.UUID, session: Session = Depends(get_session)
+) -> JobInfo:
+    """Fetch a single sync job by id.
+
+    The polling path on the frontend uses this rather than scanning
+    ``/sync/status``, which is capped at 20 most-recent rows — a busy
+    session can push an in-flight job off that window and leave the
+    poller spinning forever. Direct id lookup avoids that race.
+    """
+    job = session.get(SyncJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="not found")
+    return JobInfo(
+        id=job.id,
+        entity=job.entity,
+        scope_key=job.scope_key,
+        status=job.status,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+        items_seen=job.items_seen,
+        items_upserted=job.items_upserted,
+        items_failed=job.items_failed,
+        error=job.error,
     )
 
 

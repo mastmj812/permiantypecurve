@@ -12,7 +12,7 @@ from app.type_curves.aggregate import (
 
 
 def _well(
-    api14: str,
+    api10: str,
     *,
     lateral_ft: float | None = 10_000.0,
     oil_rates: list[float | None] | None = None,
@@ -28,7 +28,7 @@ def _well(
     if water_rates is None:
         water_rates = [None] * n
     return WellSeries(
-        api14=api14, lateral_ft=lateral_ft, proppant_lbs=None,
+        api10=api10, lateral_ft=lateral_ft, proppant_lbs=None,
         oil_rates=oil_rates, gas_rates=gas_rates, water_rates=water_rates,
     )
 
