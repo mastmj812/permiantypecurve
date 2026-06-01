@@ -21,6 +21,7 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../../api/auth";
+import { fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
 import { DEFAULT_FILTER_SPEC } from "../../api/types";
 import { type WellDetailLite, tileUrlTemplate } from "../../api/wells";
 import { cohortLineFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
@@ -36,6 +37,17 @@ const SLIDE_FILTER_SPEC = {
 interface Props {
   api10s: string[];
   wellDetails: WellDetailLite[];
+  // When set, the slide map overlays only this deal's acreage
+  // polygons (filtered out of /api/deals/polygons.geojson). The
+  // PowerPoint export's map PNG is captured AFTER the polygon
+  // layer paints, so the deal's outline goes along into the deck.
+  dealId?: string | null;
+  // Per-toggle overlay control. Default both true to preserve the
+  // existing slide appearance; the parent (TypeCurveSlidePage)
+  // wires checkboxes that flip these and remounts the component
+  // via React key so the captured snapshot reflects the choice.
+  showBlocks?: boolean;
+  showSections?: boolean;
   width?: number;
   height?: number;
 }
@@ -47,21 +59,24 @@ const LAYER_SOLID = "slide-wells-lines-solid";
 // but always-on for the slide. The fetch URLs and min-zoom thresholds
 // match the main map so the slide reads the same datasets the user
 // already has seeded.
+// No minzoom on slide overlays. The cohort fits to wildly different
+// zoom levels depending on geographic spread, and the user wants the
+// grid context visible at all of them. Labels would clutter at very
+// low zoom in theory, but the slide is fit-bound at maxZoom=13 so in
+// practice the clutter ceiling never hits.
 const BLOCKS_SOURCE_ID = "slide-blocks";
 const BLOCKS_FILL_LAYER = "slide-blocks-fill";
 const BLOCKS_LINE_LAYER = "slide-blocks-line";
 const BLOCKS_LABEL_LAYER = "slide-blocks-label";
-// Lower than the main MapView (which uses 8 / 11) so blocks and
-// sections always render on the slide map at typical cohort fit-
-// bound zooms. A deal slide needs section context regardless of
-// the cohort's geographic spread.
-const BLOCKS_MIN_ZOOM = 6;
 
 const SECTIONS_SOURCE_ID = "slide-sections";
 const SECTIONS_FILL_LAYER = "slide-sections-fill";
 const SECTIONS_LINE_LAYER = "slide-sections-line";
 const SECTIONS_LABEL_LAYER = "slide-sections-label";
-const SECTIONS_MIN_ZOOM = 9;
+
+const DEALS_SOURCE_ID = "slide-deal-polygons";
+const DEALS_FILL_LAYER = "slide-deal-polygons-fill";
+const DEALS_LINE_LAYER = "slide-deal-polygons-line";
 
 const BLOCK_LABEL_EXPR = [
   "coalesce",
@@ -97,41 +112,82 @@ async function loadBlocks(map: MlMap): Promise<void> {
     id: BLOCKS_FILL_LAYER,
     type: "fill",
     source: BLOCKS_SOURCE_ID,
-    minzoom: BLOCKS_MIN_ZOOM,
-    paint: { "fill-color": "#1e293b", "fill-opacity": 0.04 },
+    paint: { "fill-color": "#000000", "fill-opacity": 0.03 },
   });
   map.addLayer({
     id: BLOCKS_LINE_LAYER,
     type: "line",
     source: BLOCKS_SOURCE_ID,
-    minzoom: BLOCKS_MIN_ZOOM,
     paint: {
-      "line-color": "#1e293b",
-      "line-width": 0.9,
-      "line-opacity": 0.55,
+      // Dominant block boundary — pure black, thicker than the
+      // section line, high opacity so it reads as the primary
+      // grid on a projected slide.
+      "line-color": "#000000",
+      "line-width": 1.5,
+      "line-opacity": 0.9,
     },
   });
   map.addLayer({
     id: BLOCKS_LABEL_LAYER,
     type: "symbol",
     source: BLOCKS_SOURCE_ID,
-    minzoom: BLOCKS_MIN_ZOOM,
     layout: {
       "text-field": BLOCK_LABEL_EXPR,
-      // Larger than the main MapView's 12pt — slide is read at
-      // print/projector scale, not interactive zoom.
       "text-size": 16,
+      // protomaps' font CDN only ships Regular + Italic — requesting
+      // "Noto Sans Bold" 404s on glyph fetch and silently kills the
+      // entire block layer's render. We lean on the 2x size
+      // differential vs sections (8pt) and a thicker halo for
+      // emphasis instead.
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
     },
     paint: {
-      "text-color": "#0f172a",
-      "text-halo-color": "rgba(255,255,255,0.95)",
-      "text-halo-width": 2,
+      "text-color": "#000000",
+      "text-halo-color": "rgba(255,255,255,1.0)",
+      "text-halo-width": 2.5,
     },
   });
 }
+
+async function loadDealPolygons(map: MlMap, dealId: string): Promise<void> {
+  if (map.getSource(DEALS_SOURCE_ID)) return;
+  try {
+    const fc = await fetchDealPolygonGeoJSON();
+    const filtered = {
+      type: "FeatureCollection",
+      features: fc.features.filter((f) => f.properties.deal_id === dealId),
+    } as GeoJSON.FeatureCollection;
+    if (filtered.features.length === 0) return;
+    map.addSource(DEALS_SOURCE_ID, { type: "geojson", data: filtered });
+    // Translucent fill + crisp outline so the wells and section grid
+    // remain readable underneath. Color comes from the feature
+    // property — same palette the Map tab uses.
+    map.addLayer({
+      id: DEALS_FILL_LAYER,
+      type: "fill",
+      source: DEALS_SOURCE_ID,
+      paint: {
+        "fill-color": ["get", "color"],
+        "fill-opacity": 0.14,
+      },
+    });
+    map.addLayer({
+      id: DEALS_LINE_LAYER,
+      type: "line",
+      source: DEALS_SOURCE_ID,
+      paint: {
+        "line-color": ["get", "color"],
+        "line-width": 2.2,
+        "line-opacity": 0.95,
+      },
+    });
+  } catch (e) {
+    console.warn("slide deal polygons load failed", e);
+  }
+}
+
 
 async function loadSections(map: MlMap): Promise<void> {
   if (map.getSource(SECTIONS_SOURCE_ID)) return;
@@ -143,38 +199,35 @@ async function loadSections(map: MlMap): Promise<void> {
     id: SECTIONS_FILL_LAYER,
     type: "fill",
     source: SECTIONS_SOURCE_ID,
-    minzoom: SECTIONS_MIN_ZOOM,
-    paint: { "fill-color": "#475569", "fill-opacity": 0.03 },
+    paint: { "fill-color": "#9ca3af", "fill-opacity": 0.02 },
   });
   map.addLayer({
     id: SECTIONS_LINE_LAYER,
     type: "line",
     source: SECTIONS_SOURCE_ID,
-    minzoom: SECTIONS_MIN_ZOOM,
     paint: {
-      "line-color": "#475569",
+      // Lighter / greyer than the block line so the block boundary
+      // dominates visually; thinner too.
+      "line-color": "#9ca3af",
       "line-width": 0.6,
-      "line-opacity": 0.5,
+      "line-opacity": 0.7,
     },
   });
   map.addLayer({
     id: SECTIONS_LABEL_LAYER,
     type: "symbol",
     source: SECTIONS_SOURCE_ID,
-    minzoom: SECTIONS_MIN_ZOOM,
     layout: {
       "text-field": SECTION_LABEL_EXPR,
-      // Bumped from 10pt to 12pt so section numbers read clearly
-      // on a printed/projected deal slide.
-      "text-size": 12,
+      "text-size": 8,
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
     },
     paint: {
-      "text-color": "#1f2937",
-      "text-halo-color": "rgba(255,255,255,0.95)",
-      "text-halo-width": 1.75,
+      "text-color": "#4b5563",
+      "text-halo-color": "rgba(255,255,255,0.9)",
+      "text-halo-width": 1.5,
     },
   });
 }
@@ -241,7 +294,15 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
 
 // Default ~6.93" × 4.34" at 96 px/in to match the export's
 // slide-level map placement (right side, full chart-stack height).
-export function SlideMap({ api10s, wellDetails, width = 665, height = 418 }: Props) {
+export function SlideMap({
+  api10s,
+  wellDetails,
+  dealId = null,
+  showBlocks = true,
+  showSections = true,
+  width = 665,
+  height = 418,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);
@@ -318,7 +379,33 @@ export function SlideMap({ api10s, wellDetails, width = 665, height = 418 }: Pro
       // resolve — that guarantees the blocks/sections paint into the
       // capture even though they arrive asynchronously well after the
       // basemap is otherwise idle.
-      Promise.allSettled([loadBlocks(map), loadSections(map)]).then(() => {
+      const overlayPromises: Array<Promise<unknown>> = [];
+      if (showBlocks) overlayPromises.push(loadBlocks(map));
+      if (showSections) overlayPromises.push(loadSections(map));
+      if (dealId) {
+        overlayPromises.push(loadDealPolygons(map, dealId));
+      }
+      // Idle-listener fires even when no overlays loaded — the wells
+      // still need to paint before we snapshot.
+      if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
+      Promise.allSettled(overlayPromises).then(() => {
+        // Enforce a deterministic z-order regardless of which fetch
+        // resolved first. moveLayer(id) with no second arg moves the
+        // layer to the TOP of the stack. We move sections-then-blocks
+        // so blocks end up on top, then deal polygons on top of those
+        // so the highlighted acreage outline reads above everything.
+        const moveToTop = (id: string) => {
+          if (map.getLayer(id)) map.moveLayer(id);
+        };
+        for (const id of [SECTIONS_FILL_LAYER, SECTIONS_LINE_LAYER, SECTIONS_LABEL_LAYER]) {
+          moveToTop(id);
+        }
+        for (const id of [BLOCKS_FILL_LAYER, BLOCKS_LINE_LAYER, BLOCKS_LABEL_LAYER]) {
+          moveToTop(id);
+        }
+        for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
+          moveToTop(id);
+        }
         map.once("idle", () => {
           try {
             const url = map.getCanvas().toDataURL("image/png");

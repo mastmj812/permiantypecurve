@@ -31,6 +31,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
@@ -60,6 +61,7 @@ from app.forecasting.eur import compute_eur
 from app.forecasting.fit import (
     STREAM_RATE_COLUMN,
     STREAM_VOLUME_COLUMN,
+    _flag_downtime,
     detect_at_bound,
 )
 from app.forecasting.metrics import effective_decline_first_year
@@ -243,6 +245,14 @@ class StreamCurves(BaseModel):
     months: list[date]                  # prod_date per history month
     history_rate: list[float | None]    # rate_calday_*
     history_cum: list[float | None]
+    # Downtime-filtered variants for slide spaghetti — same shape as
+    # history_rate / history_cum but with post-peak months flagged by
+    # _flag_downtime nulled out, and the cum re-integrated by linear
+    # interpolation across those nulls. Used by SlideRateChart so the
+    # observed spaghetti is comparable apples-to-apples with the
+    # TC forecast (which was fit without downtime contribution).
+    history_rate_filtered: list[float | None]
+    history_cum_filtered: list[float | None]
     forecast_months: list[date]         # extended into the future
     forecast_rate: list[float]
     forecast_cum: list[float]
@@ -411,6 +421,68 @@ _STREAM_ECON_LIMIT_FIELD: dict[str, str] = {
     "gas": "economic_limit_mcfd",
     "water": "economic_limit_bwpd",
 }
+
+# Per-stream absolute downtime floor for the /curves endpoint's
+# filtered history series. Matches the orchestrator's defaults
+# (see ForecastConfig.downtime_floor_*). Hardcoded here because the
+# /curves endpoint isn't config-aware; the slide just needs a
+# defensible filter for the spaghetti, not user-tunable knobs.
+_STREAM_DOWNTIME_FLOOR_FOR_CURVES: dict[str, float] = {
+    "oil": 5.0,
+    "gas": 30.0,
+    "water": 10.0,
+}
+
+
+def _filtered_rate_and_cum(
+    history_rate: list[float | None],
+    history_cum: list[float | None],
+    *,
+    peak_idx: int | None,
+    absolute_floor: float,
+) -> tuple[list[float | None], list[float | None]]:
+    """Return (rate_filtered, cum_filtered) where downtime months from
+    peak forward are nulled in the rate series and the cum is re-
+    integrated via trapezoid on the non-null rates only — same as
+    drawing a continuous line through the filtered samples.
+
+    Pre-peak months are passed through unchanged (ramp months don't
+    get the downtime treatment because they're naturally low). When
+    peak_idx is None or out of range, every month is passed through.
+    """
+    n = len(history_rate)
+    if peak_idx is None or peak_idx >= n:
+        return list(history_rate), list(history_cum)
+
+    rate_filtered: list[float | None] = list(history_rate)
+    # Apply the filter only post-peak (inclusive of the peak month).
+    post_peak = pd.Series(
+        [float(v) if v is not None else 0.0 for v in history_rate[peak_idx:]],
+        dtype=float,
+    )
+    mask = _flag_downtime(post_peak, absolute_floor=absolute_floor)
+    for j, is_downtime in enumerate(mask):
+        if bool(is_downtime):
+            rate_filtered[peak_idx + j] = None
+
+    # Re-integrate cum from the filtered rates using a trapezoid step
+    # between consecutive non-null samples. ~30.4375 days per month
+    # matches the convention everywhere else in this file.
+    cum_filtered: list[float | None] = [None] * n
+    running = 0.0
+    last_idx: int | None = None
+    last_rate: float | None = None
+    for i in range(n):
+        ri = rate_filtered[i]
+        if ri is None:
+            cum_filtered[i] = None
+            continue
+        if last_idx is not None and last_rate is not None:
+            running += 0.5 * (last_rate + ri) * 30.4375 * (i - last_idx)
+        cum_filtered[i] = running
+        last_idx = i
+        last_rate = ri
+    return rate_filtered, cum_filtered
 
 
 @router.post("/transfer-cohort-params", response_model=TransferResponse)
@@ -856,11 +928,30 @@ def well_curves(
                 mo = ((anchor_date.month - 1 + i) % 12) + 1
                 forecast_months.append(date(yr, mo, 1))
 
+        history_rate_floats = [
+            float(v) if v is not None else None for v in history_rate
+        ]
+        history_cum_floats = [float(v) for v in history_cum]
+        # Downtime-filter the post-peak portion of the observed series
+        # so the slide spaghetti reflects only producing months — the
+        # forecast was fit with the same filter, so comparing them
+        # apples-to-apples is what the analyst needs to QC the TC.
+        peak_idx_in_history: int | None = None
+        if fc and fc.peak_month_date is not None and fc.peak_month_date in months:
+            peak_idx_in_history = months.index(fc.peak_month_date)
+        history_rate_filtered, history_cum_filtered = _filtered_rate_and_cum(
+            history_rate_floats,
+            history_cum_floats,
+            peak_idx=peak_idx_in_history,
+            absolute_floor=_STREAM_DOWNTIME_FLOOR_FOR_CURVES[stream_name],
+        )
         streams.append(StreamCurves(
             stream=st,
             months=months,
-            history_rate=[float(v) if v is not None else None for v in history_rate],
-            history_cum=[float(v) for v in history_cum],
+            history_rate=history_rate_floats,
+            history_cum=history_cum_floats,
+            history_rate_filtered=history_rate_filtered,
+            history_cum_filtered=history_cum_filtered,
             forecast_months=forecast_months,
             forecast_rate=forecast_rate,
             forecast_cum=forecast_cum,

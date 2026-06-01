@@ -12,6 +12,7 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
+import { fetchDealPolygonGeoJSON } from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
@@ -53,6 +54,10 @@ const BLOCKS_FILL_LAYER = "blocks-fill";
 const BLOCKS_LINE_LAYER = "blocks-line";
 const BLOCKS_LABEL_LAYER = "blocks-label";
 const BLOCKS_MIN_ZOOM = 8;
+
+const DEALS_SOURCE_ID = "deal-polygons";
+const DEALS_FILL_LAYER = "deal-polygons-fill";
+const DEALS_LINE_LAYER = "deal-polygons-line";
 
 const SECTIONS_SOURCE_ID = "sections";
 const SECTIONS_FILL_LAYER = "sections-fill";
@@ -148,6 +153,8 @@ export function MapView() {
   const showBlocks = useMapStore((s) => s.showBlocks);
   const showSections = useMapStore((s) => s.showSections);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
+  const dealPolygons = useMapStore((s) => s.dealPolygons);
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
   const selectedApi10s = useMapStore((s) => s.selectedApi10s);
   const setSelection = useMapStore((s) => s.setSelection);
   const toggleApi10 = useMapStore((s) => s.toggleApi10);
@@ -516,6 +523,101 @@ export function MapView() {
       }
     }
   }, [showSections, styleLoaded]);
+
+  // -------------- Deal-acreage polygons --------------
+  // One-shot fetch into the store if not already loaded. The admin
+  // modal's refresh-after-mutation flow goes through the store too,
+  // so MapView just observes.
+  useEffect(() => {
+    if (dealPolygons !== null) return;
+    let cancelled = false;
+    fetchDealPolygonGeoJSON()
+      .then((fc) => {
+        if (cancelled) return;
+        useMapStore.getState().setDealPolygons(fc);
+        // Default visibility: all deals ON. Only initialize keys we
+        // haven't seen yet so user toggles aren't clobbered on a
+        // post-upload refetch.
+        const cur = useMapStore.getState().dealVisibility;
+        const next = { ...cur };
+        for (const f of fc.features) {
+          const k = f.properties.visibility_key;
+          if (next[k] === undefined) next[k] = true;
+        }
+        // setState in one shot rather than per-key to avoid N renders.
+        useMapStore.setState({ dealVisibility: next });
+      })
+      .catch((e) => {
+        console.warn("deal polygons fetch failed", e);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [dealPolygons]);
+
+  // Source + layers. Update the source's data on every dealPolygons
+  // change so a post-upload refetch re-renders without remounting the
+  // map.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (!dealPolygons) return;
+    const existing = map.getSource(DEALS_SOURCE_ID) as
+      | maplibregl.GeoJSONSource
+      | undefined;
+    if (existing) {
+      existing.setData(dealPolygons as unknown as GeoJSON.FeatureCollection);
+    } else {
+      map.addSource(DEALS_SOURCE_ID, {
+        type: "geojson",
+        data: dealPolygons as unknown as GeoJSON.FeatureCollection,
+      });
+      map.addLayer({
+        id: DEALS_FILL_LAYER,
+        type: "fill",
+        source: DEALS_SOURCE_ID,
+        paint: {
+          "fill-color": ["get", "color"],
+          "fill-opacity": 0.18,
+        },
+      });
+      map.addLayer({
+        id: DEALS_LINE_LAYER,
+        type: "line",
+        source: DEALS_SOURCE_ID,
+        paint: {
+          "line-color": ["get", "color"],
+          "line-width": 1.6,
+          "line-opacity": 0.95,
+        },
+      });
+    }
+  }, [dealPolygons, styleLoaded]);
+
+  // Visibility filter — read the visibility_key off each feature and
+  // include only those whose store flag is true (default true if the
+  // key isn't in the map yet, e.g. the initial pre-fetch render).
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (!map.getLayer(DEALS_FILL_LAYER)) return;
+    const hidden = Object.entries(dealVisibility)
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    // ["!", ["in", ["get", "visibility_key"], ["literal", [hidden...]]]]
+    // — show every feature except those whose key is in the hidden set.
+    const filter: maplibregl.FilterSpecification =
+      hidden.length === 0
+        ? (["literal", true] as unknown as maplibregl.FilterSpecification)
+        : ([
+            "!",
+            ["in", ["get", "visibility_key"], ["literal", hidden]],
+          ] as unknown as maplibregl.FilterSpecification);
+    map.setFilter(DEALS_FILL_LAYER, filter);
+    map.setFilter(DEALS_LINE_LAYER, filter);
+  }, [dealVisibility, dealPolygons, styleLoaded]);
 
   return (
     <div className="map-root">

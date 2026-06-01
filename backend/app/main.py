@@ -5,7 +5,16 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import auth, basemap, deals, forecasts, health, sync, type_curves
+from app.api import (
+    auth,
+    basemap,
+    deal_polygons,
+    deals,
+    forecasts,
+    health,
+    sync,
+    type_curves,
+)
 from app.api.auth import get_current_user
 from app.config import settings
 from app.core.logging import configure_logging, get_logger
@@ -61,4 +70,10 @@ app.include_router(wells_detail.router, prefix="/api", dependencies=protected)
 app.include_router(wells_selection.router, prefix="/api", dependencies=protected)
 app.include_router(forecasts.router, prefix="/api", dependencies=protected)
 app.include_router(type_curves.router, prefix="/api", dependencies=protected)
+# deal_polygons MUST register BEFORE deals — FastAPI matches in
+# registration order, and the deals router's catch-all
+# `GET /deals/{deal_id}` would otherwise swallow
+# `/deals/polygons` and `/deals/polygons.geojson` (treating
+# "polygons" / "polygons.geojson" as a UUID and 422'ing).
+app.include_router(deal_polygons.router, prefix="/api", dependencies=protected)
 app.include_router(deals.router, prefix="/api", dependencies=protected)

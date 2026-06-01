@@ -13,7 +13,11 @@
 
 import type { Stream, WellCurvesResponse } from "../../api/forecasts";
 
-type CurvesField = "history_rate" | "history_cum";
+type CurvesField =
+  | "history_rate"
+  | "history_cum"
+  | "history_rate_filtered"
+  | "history_cum_filtered";
 
 // All three stream slides share t=0 = the well's oil-rate peak — that's
 // the cohort's convention for first-prod / peak-month alignment. The
@@ -51,13 +55,20 @@ export function buildAlignedWellHistories(
     // into the "month-0 starts at zero" convention of the slide chart.
     // Subtract the cum value at the peak so the well's cum trace starts
     // at 0 at peak month and grows from there.
-    const baseline =
-      field === "history_cum"
-        ? (() => {
-            const v = source[peakIdx];
-            return v != null && Number.isFinite(v) ? (v as number) : 0;
-          })()
-        : 0;
+    const isCumField =
+      field === "history_cum" || field === "history_cum_filtered";
+    const baseline = isCumField
+      ? (() => {
+          // Walk forward from peakIdx to find the first non-null cum
+          // value — the filtered cum nulls out downtime months, so
+          // source[peakIdx] itself could be null.
+          for (let k = peakIdx; k < source.length; k++) {
+            const v = source[k];
+            if (v != null && Number.isFinite(v)) return v as number;
+          }
+          return 0;
+        })()
+      : 0;
 
     const lat = lateralByApi10.get(wc.api10) ?? null;
     // 10k-ft normalization. When lateral is missing, don't scale — the

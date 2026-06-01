@@ -2,6 +2,7 @@
 ``Base.metadata`` — Alembic's env.py imports from here for autogenerate.
 """
 
+from app.db.models.deal_polygons import DealPolygon
 from app.db.models.deals import Deal
 from app.db.models.forecasts import FitMethod, Forecast, ModelType, Stream
 from app.db.models.production_monthly import ProductionMonthly
@@ -13,6 +14,7 @@ from app.db.models.wells import Well, WellStatus
 __all__ = [
     "AlignmentMethod",
     "Deal",
+    "DealPolygon",
     "FitMethod",
     "Forecast",
     "ModelType",

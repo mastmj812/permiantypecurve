@@ -161,6 +161,36 @@ body {
   margin-bottom: 8px;
 }
 
+/* ---- slide preview controls (not captured in PPTX) ---- */
+.slide-preview-controls {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 6px 16px;
+  background: #f3f4f6;
+  border-bottom: 1px solid #e5e7eb;
+  font-size: 12px;
+}
+
+/* ---- deal polygons admin modal ---- */
+.deal-polygon-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.deal-polygon-table th,
+.deal-polygon-table td {
+  padding: 4px 8px;
+  border-bottom: 1px solid #f3f4f6;
+  text-align: left;
+  vertical-align: top;
+}
+.deal-polygon-table th {
+  background: #fafafa;
+  font-weight: 600;
+  color: #374151;
+}
+
 /* ---- summary-drawer cutoff input ---- */
 .cutoff-control {
   display: flex;
@@ -218,6 +248,27 @@ body {
   max-height: calc(100vh - 48px);
   overflow-y: auto;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
+}
+/* Floating (non-modal) variant of the detail panel. No backdrop —
+   wrap is fixed-position centered but pointer-events: none so clicks
+   pass through to the page (Review table, map, etc.). The panel
+   itself re-enables pointer-events. Drag-handle cursor lives on the
+   header; mousedown there starts a drag tracked in component state. */
+.modal-floating-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  pointer-events: none;
+}
+.modal-floating {
+  pointer-events: auto;
+}
+.modal-drag-handle {
+  cursor: move;
+  user-select: none;
 }
 .modal-header {
   display: flex;

@@ -79,6 +79,18 @@ _RIGHT_COL_LEFT_IN = _CHART_LEFT_IN + _CHART_WIDTH_IN + 0.08
 _BIG_MAP_WIDTH_IN = 6.93
 _BIG_MAP_HEIGHT_IN = _CHART_HEIGHT_IN * 2 + _CHART_GAP_IN
 
+# Footnote (downtime-filter disclosure) sits below the cum chart,
+# left-aligned with the chart's y-axis. The slide chart uses
+# TypeCurveChart with compactLayout=true → PAD.left = 50 px on a
+# 520 px-wide SVG, so the y-axis sits at 50/520 of the chart's
+# 5.42" width = ~0.52" from the chart panel's left edge.
+_FOOTNOTE_TOP_IN = _CHART_TOP_IN + 2 * _CHART_HEIGHT_IN + _CHART_GAP_IN
+_FOOTNOTE_LEFT_IN = _CHART_LEFT_IN + 50.0 / 520.0 * _CHART_WIDTH_IN
+_FOOTNOTE_WIDTH_IN = _CHART_WIDTH_IN  # generous; PowerPoint won't wrap unless overflowing
+_FOOTNOTE_HEIGHT_IN = 0.18
+_FOOTNOTE_FONT_PT = 7
+_FOOTNOTE_TEXT = "Actual production filtered to non-downtime months."
+
 
 _STREAM_TITLE: dict[str, str] = {
     "oil": "Oil",
@@ -410,6 +422,29 @@ def _format_well_cell(col_idx: int, val: Any) -> str:
 # ============================ pictures ============================
 
 
+def _add_downtime_footnote(slide: Slide) -> None:
+    """Place the small downtime-disclosure footnote below the cum
+    chart, left-aligned with the chart y-axis. 7pt text, single line.
+    Doesn't reflow or resize any existing shape — additive only.
+    """
+    tb = slide.shapes.add_textbox(
+        Inches(_FOOTNOTE_LEFT_IN),
+        Inches(_FOOTNOTE_TOP_IN),
+        Inches(_FOOTNOTE_WIDTH_IN),
+        Inches(_FOOTNOTE_HEIGHT_IN),
+    )
+    tf = tb.text_frame
+    tf.margin_left = 0
+    tf.margin_right = 0
+    tf.margin_top = 0
+    tf.margin_bottom = 0
+    tf.word_wrap = False
+    p = tf.paragraphs[0]
+    run = p.add_run()
+    run.text = _FOOTNOTE_TEXT
+    run.font.size = Pt(_FOOTNOTE_FONT_PT)
+
+
 def _place_chart_images(
     slide: Slide,
     rate_png: bytes,
@@ -448,6 +483,7 @@ def _place_chart_images(
         io.BytesIO(cum_png), chart_left, cum_top,
         width=chart_width, height=chart_height,
     )
+    _add_downtime_footnote(slide)
 
     right_col_left = Inches(_RIGHT_COL_LEFT_IN)
 

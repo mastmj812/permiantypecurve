@@ -44,6 +44,13 @@ export function TypeCurveSlidePage({
 }: Props) {
   const [data, setData] = useState<SlideData | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Per-overlay toggles for the slide preview. Both default ON to
+  // preserve the prior slide appearance. The SlideMap is keyed off
+  // these so a flip re-mounts the component and re-runs the
+  // canvas snapshot — the PPTX export captures whatever's currently
+  // visible in the preview.
+  const [showBlocks, setShowBlocks] = useState(true);
+  const [showSections, setShowSections] = useState(true);
 
   useEffect(() => {
     // Remove the app's default body margin / background so the slide
@@ -165,9 +172,16 @@ export function TypeCurveSlidePage({
       </div>
       {withMap && (
         <div className="slide-panel slide-panel-map" data-slide-panel-map>
+          {/* Remount on toggle change so the canvas snapshot re-fires
+              with the new overlay set — captureSlideComposite reads
+              the rendered IMG, which is what the PPTX picks up. */}
           <SlideMap
+            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}`}
             api10s={api10s}
             wellDetails={data.wellDetails}
+            dealId={data.curve.deal_id ?? null}
+            showBlocks={showBlocks}
+            showSections={showSections}
             width={mapWidth}
             height={mapHeight}
           />
@@ -206,6 +220,29 @@ export function TypeCurveSlidePage({
 
   return (
     <div className="slide-page">
+      {/* Preview-only controls. Lives OUTSIDE the slide content so
+          it never gets captured into the PPTX. Toggling re-mounts
+          the SlideMap (via key) so the captured snapshot reflects
+          the choice. */}
+      <div className="slide-preview-controls">
+        <span className="muted" style={{ fontSize: 11 }}>Map overlays:</span>
+        <label className="chk-inline">
+          <input
+            type="checkbox"
+            checked={showBlocks}
+            onChange={(e) => setShowBlocks(e.target.checked)}
+          />
+          Blocks
+        </label>
+        <label className="chk-inline">
+          <input
+            type="checkbox"
+            checked={showSections}
+            onChange={(e) => setShowSections(e.target.checked)}
+          />
+          Sections
+        </label>
+      </div>
       {/* Visible (oil) section. The PPTX export captures rate/cum
           (+ optional probit) from this section AND from the off-
           screen gas/water sections below. The map is captured once

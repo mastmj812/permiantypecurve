@@ -22,6 +22,14 @@ dependencies = [
     "openpyxl>=3.1",
     "python-pptx>=1.0",
     "python-multipart>=0.0.20",
+    # Pure-Python shapefile reader (.shp + .dbf). No GDAL system deps.
+    # Used by the deal-polygons upload endpoint to parse the user's
+    # acreage shapefiles into PostGIS rows.
+    "pyshp>=2.3",
+    # CRS identification from the .prj sidecar. PostGIS does the
+    # actual reprojection via ST_Transform; pyproj just tells us
+    # which source EPSG to transform from.
+    "pyproj>=3.6",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     # bcrypt 4.1+ broke API compat with passlib 1.7.4: even short passwords

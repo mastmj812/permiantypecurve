@@ -115,10 +115,14 @@ export function SlideCumChart({
     ? cumulateAndScale(previousStream, PER_10K_FACTOR)
     : null;
 
+  // Slide spaghetti uses the downtime-filtered cum (re-integrated
+  // from the filtered rates) so the grey observed lines are apples-
+  // to-apples with the forecast cum (which has no downtime gap).
+  // See app/api/forecasts.py:_filtered_rate_and_cum for the math.
   const histories = buildAlignedWellHistories(
     wellCurves,
     lateralByApi10,
-    "history_cum",
+    "history_cum_filtered",
     stream,
   );
 

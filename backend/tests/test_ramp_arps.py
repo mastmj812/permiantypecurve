@@ -152,8 +152,12 @@ def test_build_ramp_arps_rate_monthly_grid_matches_evaluator() -> None:
 
 
 def test_compute_ramp_eur_trapezoid() -> None:
-    # Qo=100, qi=900, 6 months → average 500 BOPD for 6 * 30.4375 days.
-    days_per_month = 365.25 / 12.0
+    # Qo=100, qi=900, 6 months → average 500 BOPD for 6 months.
+    # Match the production constant from app.forecasting.eur — 365.0
+    # days/year, not 365.25 — so the test pins the actual math
+    # instead of a "should be" approximation.
+    from app.forecasting.eur import DAYS_PER_YEAR
+    days_per_month = DAYS_PER_YEAR / 12.0
     expected = 500.0 * 6 * days_per_month
     actual = compute_ramp_eur(qo=100.0, qi=900.0, peak_index=6)
     assert actual == pytest.approx(expected, rel=1e-9)

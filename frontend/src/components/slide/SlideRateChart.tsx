@@ -87,10 +87,15 @@ export function SlideRateChart({
     ? scaleSeries(previousStream, PER_10K_FACTOR)
     : null;
 
+  // Slide spaghetti uses the downtime-filtered history so the grey
+  // observed lines are apples-to-apples with the forecast (the fit
+  // ignored those months too). The per-well modal still renders the
+  // raw history for QC; only the slide opts in. See well_curves in
+  // backend app/api/forecasts.py for the filter logic.
   const histories = buildAlignedWellHistories(
     wellCurves,
     lateralByApi10,
-    "history_rate",
+    "history_rate_filtered",
     stream,
   );
 

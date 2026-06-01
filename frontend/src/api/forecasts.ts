@@ -193,6 +193,13 @@ export interface StreamCurves {
   months: string[];
   history_rate: Array<number | null>;
   history_cum: Array<number | null>;
+  // Downtime-filtered variants for slide spaghetti — post-peak
+  // months flagged by the same _flag_downtime the fitter used get
+  // nulled in the rate, and the cum is re-integrated by linear
+  // interpolation across those nulls. The per-well modal still uses
+  // the unfiltered series; only the slide opts in.
+  history_rate_filtered: Array<number | null>;
+  history_cum_filtered: Array<number | null>;
   forecast_months: string[];
   forecast_rate: number[];
   forecast_cum: number[];

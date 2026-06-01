@@ -2,7 +2,7 @@
 // live re-render against /api/forecasts/preview, manual-override lock,
 // stream switcher (oil / gas / water).
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   type ForecastRow,
@@ -216,6 +216,56 @@ export function ForecastDetailModal({
   const displayedForecastCum =
     previewCumPoints.length > 0 ? previewCumPoints : forecastCum;
 
+  // Drag state. The modal is rendered as a free-floating panel (no
+  // dark backdrop) so the user can keep it open while clicking
+  // around the Review table behind it. Position is relative to the
+  // panel's initial centered render — initial 0,0 means "wherever
+  // the layout put me" and the user can drag from there.
+  const [dragPos, setDragPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragOriginRef = useRef<{
+    mouseX: number;
+    mouseY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  const onDragHandleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLElement>) => {
+      // Ignore drag on buttons / inputs inside the header (prev/next,
+      // close) — only the header background area starts a drag.
+      const target = e.target as HTMLElement;
+      if (target.closest("button") || target.closest("input")) return;
+      dragOriginRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        startX: dragPos.x,
+        startY: dragPos.y,
+      };
+      e.preventDefault();
+    },
+    [dragPos.x, dragPos.y],
+  );
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const o = dragOriginRef.current;
+      if (!o) return;
+      setDragPos({
+        x: o.startX + (e.clientX - o.mouseX),
+        y: o.startY + (e.clientY - o.mouseY),
+      });
+    }
+    function onUp() {
+      dragOriginRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
   // Linear-rate chart x-axis cap. Defaults to history + 24 months so
   // the actuals dominate the view; when the user clicks "show full"
   // we fall back to undefined (the chart's auto-derived xMax over
@@ -362,9 +412,15 @@ export function ForecastDetailModal({
   const units = STREAM_UNITS[stream];
 
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <header className="modal-header">
+    <div className="modal-floating-wrap">
+      <div
+        className="modal modal-floating"
+        style={{ transform: `translate(${dragPos.x}px, ${dragPos.y}px)` }}
+      >
+        <header
+          className="modal-header modal-drag-handle"
+          onMouseDown={onDragHandleMouseDown}
+        >
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <button
               type="button"
