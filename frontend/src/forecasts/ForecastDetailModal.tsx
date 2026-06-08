@@ -128,11 +128,11 @@ export function ForecastDetailModal({
     // they're the columns the backfill + fit-time persistence write
     // to; the JSONB copies are denormalization for the evaluator.
     setEditQo(
-      forecastForStream.qo ?? (forecastForStream.params.qo as number | undefined) ?? null,
+      forecastForStream.qo ?? (forecastForStream.params.qo) ?? null,
     );
     setEditPeakIndexMonths(
       forecastForStream.peak_index_months ??
-        (forecastForStream.params.peak_index_months as number | undefined) ??
+        (forecastForStream.params.peak_index_months) ??
         null,
     );
     setPreviewPoints([]);
@@ -208,6 +208,25 @@ export function ForecastDetailModal({
     const { idx } = forecastOffset;
     return curves.forecast_rate.map((y, i) => ({ t: idx + i, y }));
   }, [curves, forecastOffset]);
+
+  // Novi's forecast, mapped onto the same integer-month x-axis as
+  // history/forecast (t = month index from curves.months[0]). Novi's
+  // prod_dates are absolute, so we place each by month-delta from the
+  // first history month. Empty when the well has no synced Novi series.
+  const noviForecast = useMemo<SeriesPoint[]>(() => {
+    if (!curves || curves.months.length === 0) return [];
+    const base = curves.months[0];
+    if (!base) return [];
+    const monthDelta = (from: string, to: string) =>
+      (new Date(to).getUTCFullYear() - new Date(from).getUTCFullYear()) * 12 +
+      (new Date(to).getUTCMonth() - new Date(from).getUTCMonth());
+    return curves.novi_months
+      .map((m, i) => {
+        const y = curves.novi_rate[i];
+        return y == null ? null : { t: monthDelta(base, m), y };
+      })
+      .filter((p): p is SeriesPoint => p !== null);
+  }, [curves]);
 
   const historyCum = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
@@ -560,10 +579,37 @@ export function ForecastDetailModal({
 
           {loading && <p className="muted">loading curves…</p>}
 
+          <div className="chart-legend">
+            <span className="chart-legend-item">
+              <span
+                className="chart-legend-swatch"
+                style={{ background: "#1f2937" }}
+              />
+              Actual
+            </span>
+            <span className="chart-legend-item">
+              <span
+                className="chart-legend-swatch"
+                style={{ background: "#dc2626" }}
+              />
+              App forecast
+            </span>
+            {noviForecast.length > 0 && (
+              <span className="chart-legend-item">
+                <span
+                  className="chart-legend-swatch"
+                  style={{ background: "#38bdf8" }}
+                />
+                Novi forecast
+              </span>
+            )}
+          </div>
+
           <div className="chart-row">
             <DeclineChart
               history={history}
               forecast={displayedForecast}
+              novi={noviForecast}
               yAxisType="linear"
               yLabel={units.rate}
               xLabel="Months from first production"
@@ -572,6 +618,7 @@ export function ForecastDetailModal({
             <DeclineChart
               history={history}
               forecast={displayedForecast}
+              novi={noviForecast}
               yAxisType="log"
               yLabel={units.rate}
               xLabel="Months from first production"

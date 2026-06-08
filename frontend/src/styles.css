@@ -292,6 +292,25 @@ body {
 }
 .decline-chart { background: #fff; border: 1px solid #e5e7eb; border-radius: 4px; }
 
+/* Modal chart legend — Actual / App forecast / Novi forecast swatches.
+   Color identifies the line (dark = actual, red = app, blue = Novi); the
+   chart itself renders the dashed style. Swatch color is set inline. */
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #374151;
+}
+.chart-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend-swatch {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 1px;
+}
+
 .param-editor {
   border: 1px solid #e5e7eb;
   border-radius: 4px;
@@ -401,6 +420,14 @@ body {
 .row-pending-transfer td { background: #eff6ff; }
 .row-pending-transfer.row-outlier td { background: #fef3c7; }
 .row-pending-transfer.row-excluded td { background: #f3f4f6; opacity: 0.6; }
+
+/* Tiered highlight on the oil EUR cell when our autoforecast EUR
+   diverges from Novi's. Cell-level (not row-level) so it flags the
+   specific number; `td.` prefix keeps it at the same specificity as the
+   row-tint rules above and, being later in source order, wins on
+   outlier rows. mild = amber (matches outlier yellow), strong = red. */
+td.eur-diverge-mild { background: #fef3c7; }
+td.eur-diverge-strong { background: #fecaca; }
 
 /* ---------- type curve page ---------- */
 .type-curve-main {

@@ -404,7 +404,7 @@ export function ReviewPage() {
     return [...filtered].sort((a, b) => {
       const av = get(a), bv = get(b);
       if (typeof av === "string") return sign * av.localeCompare(bv as string);
-      return sign * ((av as number) - (bv as number));
+      return sign * ((av) - (bv as number));
     });
   }, [filtered, sortKey, sortDir, fitsByWellStream]);
 
@@ -541,6 +541,28 @@ export function ReviewPage() {
                   r.eur != null && r.well_lateral_ft
                     ? r.eur / r.well_lateral_ft
                     : null;
+                // Tiered highlight on the oil EUR cell when our value
+                // diverges from Novi's 50-yr oil EUR. Both are full
+                // model EURs, so the comparison is apples-to-apples.
+                const eurDivPct =
+                  r.eur != null &&
+                  r.well_novi_oil_eur != null &&
+                  r.well_novi_oil_eur !== 0
+                    ? Math.abs(r.eur - r.well_novi_oil_eur) /
+                      Math.abs(r.well_novi_oil_eur)
+                    : null;
+                const eurDivClass =
+                  eurDivPct == null
+                    ? ""
+                    : eurDivPct > 0.3
+                      ? "eur-diverge-strong"
+                      : eurDivPct > 0.15
+                        ? "eur-diverge-mild"
+                        : "";
+                const eurDivTitle =
+                  eurDivPct == null
+                    ? undefined
+                    : `App vs Novi oil EUR: ${(eurDivPct * 100).toFixed(0)}% gap`;
                 return (
                   <tr
                     key={r.api10}
@@ -572,7 +594,9 @@ export function ReviewPage() {
                     <td>{r.well_operator ?? "—"}</td>
                     <td>{r.well_first_prod_date ?? "—"}</td>
                     <td>{fmtInt(r.well_lateral_ft)}</td>
-                    <td>{fmtVol(r.eur)}</td>
+                    <td className={eurDivClass} title={eurDivTitle}>
+                      {fmtVol(r.eur)}
+                    </td>
                     <td>{fmtVol(r.well_novi_oil_eur)}</td>
                     <td>{eurPerFt != null ? eurPerFt.toFixed(1) : "—"}</td>
                     <td>{r.fit_r2 != null ? r.fit_r2.toFixed(3) : "—"}</td>

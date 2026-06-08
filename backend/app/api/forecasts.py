@@ -43,6 +43,7 @@ from app.db.models import (
     FitMethod,
     Forecast,
     ModelType,
+    NoviForecastMonthly,
     ProductionMonthly,
     Stream,
     SyncEntity,
@@ -277,6 +278,13 @@ class StreamCurves(BaseModel):
     forecast_months: list[date]         # extended into the future
     forecast_rate: list[float]
     forecast_cum: list[float]
+    # Novi's forecasted (PDP) series for this stream, from the synced
+    # novi_forecast_monthly table. Rendered as a light-blue benchmark
+    # overlay in the detail modal. Empty when the well has no Novi
+    # forecast on file. novi_cum is carried for the optional cum overlay.
+    novi_months: list[date]
+    novi_rate: list[float | None]
+    novi_cum: list[float | None]
 
 
 class WellCurvesResponse(BaseModel):
@@ -455,6 +463,14 @@ _STREAM_ECON_LIMIT_FIELD: dict[str, str] = {
     "oil": "economic_limit_bopd",
     "gas": "economic_limit_mcfd",
     "water": "economic_limit_bwpd",
+}
+
+# Per-stream cumulative column on novi_forecast_monthly (the rate column
+# is the shared STREAM_RATE_COLUMN). Used by the /curves Novi overlay.
+_STREAM_NOVI_CUM_COL: dict[str, str] = {
+    "oil": "cumulative_oil_bbl",
+    "gas": "cumulative_gas_mcf",
+    "water": "cumulative_water_bbl",
 }
 
 # Per-stream absolute downtime floor for the /curves endpoint's
@@ -1045,6 +1061,15 @@ def well_curves(
     ).scalars().all()
     fc_by_stream = {f.stream: f for f in forecasts}
 
+    # Novi's forecast series for this well — queried once, sliced per
+    # stream below. Empty list when the well has no synced Novi forecast.
+    novi_rows = session.execute(
+        select(NoviForecastMonthly)
+        .where(NoviForecastMonthly.api10 == api10)
+        .order_by(NoviForecastMonthly.prod_date)
+    ).scalars().all()
+    novi_months_all = [r.prod_date for r in novi_rows]
+
     # Optional TC-context override: when present, the forecast portion
     # for any stream with an override switches to those params,
     # leaving the saved global row untouched. Imported locally to
@@ -1145,6 +1170,19 @@ def well_curves(
             peak_idx=peak_idx_in_history,
             absolute_floor=_STREAM_DOWNTIME_FLOOR_FOR_CURVES[stream_name],
         )
+        # Novi overlay for this stream. The rate column is the shared
+        # rate_calday_*; the cum column is per-stream. novi_months is the
+        # same for all three streams (one query), repeated here so each
+        # stream's series is self-contained for the frontend.
+        novi_cum_col = _STREAM_NOVI_CUM_COL[stream_name]
+        novi_rate = [
+            float(v) if (v := getattr(r, rate_col)) is not None else None
+            for r in novi_rows
+        ]
+        novi_cum = [
+            float(v) if (v := getattr(r, novi_cum_col)) is not None else None
+            for r in novi_rows
+        ]
         streams.append(StreamCurves(
             stream=st,
             months=months,
@@ -1155,6 +1193,9 @@ def well_curves(
             forecast_months=forecast_months,
             forecast_rate=forecast_rate,
             forecast_cum=forecast_cum,
+            novi_months=list(novi_months_all),
+            novi_rate=novi_rate,
+            novi_cum=novi_cum,
         ))
 
     return WellCurvesResponse(api10=api10, streams=streams)

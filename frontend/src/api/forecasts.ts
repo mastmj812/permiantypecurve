@@ -212,6 +212,12 @@ export interface StreamCurves {
   forecast_months: string[];
   forecast_rate: number[];
   forecast_cum: number[];
+  // Novi's forecasted (PDP) series for this stream — the light-blue
+  // benchmark overlay. Empty when the well has no synced Novi forecast.
+  // novi_cum is carried for the optional cumulative overlay.
+  novi_months: string[];
+  novi_rate: Array<number | null>;
+  novi_cum: Array<number | null>;
 }
 
 export interface WellCurvesResponse {

@@ -20,6 +20,9 @@ export interface SeriesPoint {
 interface Props {
   history: SeriesPoint[];
   forecast: SeriesPoint[];
+  // Optional Novi benchmark forecast (light-blue dashed). Same "model,
+  // not measured" dash as the red app forecast so they read alike.
+  novi?: SeriesPoint[];
   yAxisType: AxisType;
   yLabel: string;
   xLabel?: string;
@@ -39,6 +42,7 @@ const PAD = { top: 16, right: 16, bottom: 36, left: 56 };
 export function DeclineChart({
   history,
   forecast,
+  novi,
   yAxisType,
   yLabel,
   xLabel = "Months since peak",
@@ -47,12 +51,13 @@ export function DeclineChart({
   xMaxOverride,
 }: Props) {
   const { xScale, yScale, xTicks, yTicks, plotArea } = useMemo(
-    () => computeAxes({ history, forecast, yAxisType, width, height, xMaxOverride }),
-    [history, forecast, yAxisType, width, height, xMaxOverride],
+    () => computeAxes({ history, forecast, novi, yAxisType, width, height, xMaxOverride }),
+    [history, forecast, novi, yAxisType, width, height, xMaxOverride],
   );
 
   const historyPath = pointsToPath(history, xScale, yScale, yAxisType);
   const forecastPath = pointsToPath(forecast, xScale, yScale, yAxisType);
+  const noviPath = novi ? pointsToPath(novi, xScale, yScale, yAxisType) : "";
 
   // A unique clipPath id per render — multiple charts on the same page
   // would otherwise reuse the same id and clip each other.
@@ -145,6 +150,17 @@ export function DeclineChart({
           />
         )}
 
+        {/* Novi benchmark forecast — light-blue dashed, under history */}
+        {novi && novi.length > 1 && (
+          <path
+            d={noviPath}
+            fill="none"
+            stroke="#38bdf8"
+            strokeWidth={1.5}
+            strokeDasharray="4 3"
+          />
+        )}
+
         {/* History points + connecting line */}
         {history.length > 1 && (
           <path d={historyPath} fill="none" stroke="#1f2937" strokeWidth={1.25} />
@@ -190,6 +206,7 @@ export function DeclineChart({
 interface AxesProps {
   history: SeriesPoint[];
   forecast: SeriesPoint[];
+  novi?: SeriesPoint[];
   yAxisType: AxisType;
   width: number;
   height: number;
@@ -212,7 +229,7 @@ function computeAxes(p: AxesProps): AxesOut {
     h: p.height - PAD.top - PAD.bottom,
   };
 
-  const allPoints = [...p.history, ...p.forecast];
+  const allPoints = [...p.history, ...p.forecast, ...(p.novi ?? [])];
   if (allPoints.length === 0) {
     return {
       xScale: () => plotArea.x,

@@ -5,6 +5,7 @@
 from app.db.models.deal_polygons import DealPolygon
 from app.db.models.deals import Deal
 from app.db.models.forecasts import FitMethod, Forecast, ModelType, Stream
+from app.db.models.novi_forecast_monthly import NoviForecastMonthly
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.models.sync_state import SyncEntity, SyncJob, SyncJobStatus, SyncWatermark
 from app.db.models.type_curves import AlignmentMethod, NormalizationBasis, TypeCurve
@@ -19,6 +20,7 @@ __all__ = [
     "Forecast",
     "ModelType",
     "NormalizationBasis",
+    "NoviForecastMonthly",
     "ProductionMonthly",
     "Stream",
     "SyncEntity",

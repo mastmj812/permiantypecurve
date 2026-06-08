@@ -101,3 +101,23 @@ class ProductionRecord:
     rate_calday_bopd: float | None = None
     rate_calday_mcfd: float | None = None
     rate_calday_bwpd: float | None = None
+
+
+@dataclass(frozen=True)
+class NoviForecastRecord:
+    """One row from ``curated.production_forecast``, api10-keyed.
+
+    Novi's forecasted (PDP) monthly series. Mirrors ``ProductionRecord``'s
+    ``rate_calday_*`` naming so the local table and the curves overlay can
+    treat forecast and actual identically. ``cumulative_*`` are Novi's
+    running totals, carried for the optional cumulative overlay.
+    """
+
+    api10: str
+    prod_date: date
+    rate_calday_bopd: float | None = None
+    rate_calday_mcfd: float | None = None
+    rate_calday_bwpd: float | None = None
+    cumulative_oil_bbl: float | None = None
+    cumulative_gas_mcf: float | None = None
+    cumulative_water_bbl: float | None = None
