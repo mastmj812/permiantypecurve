@@ -22,7 +22,6 @@ import {
   type Stream,
 } from "../api/forecasts";
 import { fetchWellDetails, type WellDetailLite } from "../api/wells";
-import { eurFromForecastParams } from "../forecasts/arps";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { computeOutliers } from "../forecasts/outliers";
 import {
@@ -302,21 +301,18 @@ export function ReviewPage() {
     }
   }, [api10s, shortApi10s, partition, setPartition, refreshForecasts]);
 
-  // Override each forecast's stored `eur` with a client-side recompute
-  // from the persisted Arps params. The stored value was written at fit
-  // time with the old 5-BOPD econ-limit cutoff baked in, which clipped
-  // ~20% of the late-time tail. The Type Curve tab moved to the raw
-  // 50-yr integral (no cutoff) — this brings every EUR shown on the
-  // Review tab (table, EUR/ft sort, outlier stats, map-color ramp, the
-  // per-well modal's stat row) onto the same convention without forcing
-  // a re-fit of every saved forecast. Falls back to the stored value
-  // when params are missing/non-finite.
+  // Use the backend-computed Method-1 EUR (actual cum to date +
+  // model's projection from end-of-history to year 50) as the
+  // canonical `eur` for every Review-tab surface: the table cell,
+  // EUR/ft sort, outlier stats, map color ramp. Falls back to the
+  // raw stored model EUR if the Method-1 field is missing (e.g. a
+  // stub row synthesized for an un-fit well).
   const allForecastsCorrected = useMemo(
     () =>
-      allForecasts.map((f) => {
-        const recomputed = eurFromForecastParams(f.params);
-        return recomputed != null ? { ...f, eur: recomputed } : f;
-      }),
+      allForecasts.map((f) => ({
+        ...f,
+        eur: f.eur_displayed ?? f.eur,
+      })),
     [allForecasts],
   );
 
@@ -815,6 +811,8 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     di_effective: null,
     b: null,
     df_terminal: null,
+    qo: null,
+    peak_index_months: null,
     eur: null,
     peak_month_date: null,
     peak_rate: null,
@@ -836,5 +834,8 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     well_first_prod_date: w.first_prod_date,
     well_county: w.county,
     well_novi_oil_eur: w.novi_oil_eur,
+    actual_cum: null,
+    eur_remaining: null,
+    eur_displayed: null,
   };
 }

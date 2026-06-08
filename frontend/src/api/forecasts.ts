@@ -110,6 +110,15 @@ export interface ForecastRow {
   // curated.wells_enriched.eur_50yr_oil_bbl. Null when Novi hasn't
   // forecasted the well.
   well_novi_oil_eur: number | null;
+  // Method-1 EUR triple, derived per request by the backend from
+  // production aggregates. ``eur_displayed`` is the value to show in
+  // user-facing surfaces: actual production to date + model's
+  // projection from end-of-history to year 50. ``eur_remaining`` is
+  // just the future portion. ``actual_cum`` is the raw past-to-date
+  // volume (BBL for oil/water, MCF for gas).
+  actual_cum: number | null;
+  eur_remaining: number | null;
+  eur_displayed: number | null;
 }
 
 // Client-side conversion mirroring app/forecasting/metrics.py.
@@ -215,6 +224,13 @@ export interface PreviewResponse {
   rate: number[];
   cum: number[];
   eur: number;
+  // Method-1 metrics: populated by the backend when the preview
+  // request carries an api10 + stream so it can look up the well's
+  // actual cum and last-observed month. Null when the caller didn't
+  // ask for Method-1 (e.g. TC-level previews).
+  eur_displayed: number | null;
+  eur_remaining: number | null;
+  actual_cum: number | null;
 }
 
 export async function batchForecast(
@@ -288,8 +304,16 @@ export async function fetchSyncJob(id: string): Promise<SyncJob | null> {
 export async function fetchWellCurves(
   api10: string,
   horizonYears = 50,
+  // Optional TC context: when provided, any saved per-stream
+  // override on that type curve takes precedence over the global
+  // forecast row in the returned forecast portion. The modal sends
+  // this when open in TC context so "Save TC override" reflects in
+  // the chart on refetch.
+  tcId?: string | null,
 ): Promise<WellCurvesResponse> {
-  const r = await apiFetch(`/api/forecasts/${api10}/curves?horizon_years=${horizonYears}`);
+  const params = new URLSearchParams({ horizon_years: String(horizonYears) });
+  if (tcId) params.set("tc_id", tcId);
+  const r = await apiFetch(`/api/forecasts/${api10}/curves?${params.toString()}`);
   if (!r.ok) throw new Error(`well curves failed: ${r.status}`);
   return (await r.json()) as WellCurvesResponse;
 }
@@ -300,6 +324,11 @@ export async function previewForecast(args: {
   economic_limit?: number;
   horizon_years?: number;
   n_points?: number;
+  // Pass both to opt into the Method-1 displayed-EUR computation in
+  // the response. Omit for TC-level previews where there's no single
+  // well's actual cum to layer in.
+  api10?: string;
+  stream?: Stream;
 }): Promise<PreviewResponse> {
   const r = await apiFetch("/api/forecasts/preview", {
     method: "POST",

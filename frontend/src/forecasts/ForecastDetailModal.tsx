@@ -110,6 +110,13 @@ export function ForecastDetailModal({
   const [previewPoints, setPreviewPoints] = useState<SeriesPoint[]>([]);
   const [previewCumPoints, setPreviewCumPoints] = useState<SeriesPoint[]>([]);
   const [previewEur, setPreviewEur] = useState<number | null>(null);
+  // Method-1 displayed EUR + remaining for the preview-mode stat row.
+  // Backend computes both server-side using the previewed params and
+  // the well's actual cum / last-observed month. Falls back to the
+  // saved forecast's eur_displayed / eur_remaining when no preview
+  // is active.
+  const [previewEurDisplayed, setPreviewEurDisplayed] = useState<number | null>(null);
+  const [previewEurRemaining, setPreviewEurRemaining] = useState<number | null>(null);
 
   useEffect(() => {
     if (!forecastForStream) return;
@@ -131,6 +138,8 @@ export function ForecastDetailModal({
     setPreviewPoints([]);
     setPreviewCumPoints([]);
     setPreviewEur(null);
+    setPreviewEurDisplayed(null);
+    setPreviewEurRemaining(null);
   }, [forecastForStream?.id]);
 
   // Keyboard nav while the modal is open. Skip when focus is in an
@@ -158,13 +167,17 @@ export function ForecastDetailModal({
 
   useEffect(() => {
     setLoading(true);
-    fetchWellCurves(api10)
+    // Pass tc_id when in TC context so any saved per-(api10,stream)
+    // override on the type curve drives the forecast portion of the
+    // chart. Without this the modal would draw the global fit and
+    // "Save TC override" would appear to revert on the next refetch.
+    fetchWellCurves(api10, 50, tcContext?.id ?? null)
       .then((r) => {
         const found = r.streams.find((s) => s.stream === stream) ?? null;
         setCurves(found);
       })
       .finally(() => setLoading(false));
-  }, [api10, stream]);
+  }, [api10, stream, tcContext?.id]);
 
   const history = useMemo<SeriesPoint[]>(() => {
     if (!curves) return [];
@@ -309,6 +322,10 @@ export function ForecastDetailModal({
         n_points: 600,
         // economic_limit omitted intentionally — this tool integrates
         // the full 50-yr horizon (technical EUR, no econ cutoff).
+        // Pass api10 + stream so the backend can return Method-1
+        // displayed EUR + remaining for the previewed params.
+        api10,
+        stream,
       });
       // Preview t_years is now measured from the row's anchor (first
       // prod when ramp params are present; peak otherwise). Use the
@@ -326,6 +343,8 @@ export function ForecastDetailModal({
       setPreviewPoints(points);
       setPreviewCumPoints(cumPoints);
       setPreviewEur(p.eur);
+      setPreviewEurDisplayed(p.eur_displayed);
+      setPreviewEurRemaining(p.eur_remaining);
     } catch (e) {
       console.error("preview failed", e);
     }
@@ -345,9 +364,12 @@ export function ForecastDetailModal({
 
     if (tcContext) {
       // TC-context save: write a per-TC override. The global forecast
-      // row stays untouched so other type curves containing this well
-      // still see their previous fit. Skip the well-curves refetch
-      // because the global curve didn't change — preview just clears.
+      // row stays untouched so other type curves containing this
+      // well still see their previous fit. We DO refetch curves with
+      // tc_id afterwards so the modal's chart reflects the override
+      // (otherwise the red line snaps back to the global on the next
+      // render — preview just clears, fitForecast falls back to the
+      // unchanged /curves payload).
       const resolved = await putForecastOverride(
         tcContext.id,
         api10,
@@ -357,6 +379,12 @@ export function ForecastDetailModal({
           Di: params.Di ?? editDi ?? 0,
           b: params.b ?? editB ?? 0,
           Df: params.Df ?? editDf ?? 0.08,
+          // Pass the ramp prefix when present so the override
+          // preserves it. The backend stores it on the override
+          // payload and /curves uses it when the modal refetches.
+          qo: params.qo ?? editQo ?? null,
+          peak_index_months:
+            params.peak_index_months ?? editPeakIndexMonths ?? null,
         },
       );
       tcContext.onOverrideChanged(
@@ -368,6 +396,15 @@ export function ForecastDetailModal({
       setPreviewPoints([]);
       setPreviewCumPoints([]);
       setPreviewEur(null);
+      setPreviewEurDisplayed(null);
+      setPreviewEurRemaining(null);
+      try {
+        const r = await fetchWellCurves(api10, 50, tcContext.id);
+        const found = r.streams.find((s) => s.stream === stream) ?? null;
+        setCurves(found);
+      } catch (e) {
+        console.error("refetch curves after TC override failed", e);
+      }
       return;
     }
 
@@ -379,6 +416,8 @@ export function ForecastDetailModal({
     setPreviewPoints([]);
     setPreviewCumPoints([]);
     setPreviewEur(null);
+    setPreviewEurDisplayed(null);
+    setPreviewEurRemaining(null);
     // Refetch curves so fitForecast reflects the saved override. Without
     // this, clearing the preview overlay snaps the chart back to the
     // original auto-fit curve (cached in `curves` from the modal-open
@@ -399,6 +438,17 @@ export function ForecastDetailModal({
     setPreviewPoints([]);
     setPreviewCumPoints([]);
     setPreviewEur(null);
+    setPreviewEurDisplayed(null);
+    setPreviewEurRemaining(null);
+    // Refetch with tc_id so the chart returns to the global fit (or
+    // "missing" state) now that the override is gone.
+    try {
+      const r = await fetchWellCurves(api10, 50, tcContext.id);
+      const found = r.streams.find((s) => s.stream === stream) ?? null;
+      setCurves(found);
+    } catch (e) {
+      console.error("refetch curves after revert failed", e);
+    }
   }
 
   async function toggleLock() {
@@ -642,7 +692,28 @@ export function ForecastDetailModal({
                 </div>
               )}
               <div className="param-stats">
-                <Stat label="EUR" value={fmtEur(previewEur ?? forecastForStream.eur, units.cum)} />
+                {/* EUR shown is Method-1: actual cum to date + model's
+                    projection from end-of-history to year 50. During
+                    a live preview it uses the previewed-params
+                    Method-1 EUR returned by the backend; otherwise
+                    the saved row's eur_displayed. */}
+                <Stat
+                  label="EUR"
+                  value={fmtEur(
+                    previewEurDisplayed ??
+                      forecastForStream.eur_displayed ??
+                      previewEur ??
+                      forecastForStream.eur,
+                    units.cum,
+                  )}
+                />
+                <Stat
+                  label="Remaining"
+                  value={fmtEur(
+                    previewEurRemaining ?? forecastForStream.eur_remaining,
+                    units.cum,
+                  )}
+                />
                 <Stat
                   label="Fit R²"
                   value={

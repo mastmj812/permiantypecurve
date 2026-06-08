@@ -107,6 +107,8 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
       di_effective: di == null ? null : effectiveDecline(di, b),
       b,
       df_terminal: numFromPayload(p, "df_terminal"),
+      qo: numFromPayload(p, "qo"),
+      peak_index_months: numFromPayload(p, "peak_index_months"),
       eur: numFromPayload(p, "eur"),
       peak_month_date: (p.peak_month_date as string | null) ?? null,
       peak_rate: numFromPayload(p, "peak_rate"),
@@ -116,6 +118,7 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
       fit_at_bound: false,
       bound_note: null,
       downtime_ratio: numFromPayload(p, "downtime_ratio"),
+      diagnostics: null,
       manual_override: (p.manual_override as boolean) ?? false,
       locked: (p.locked as boolean) ?? false,
       updated_at: new Date().toISOString(),
@@ -126,6 +129,10 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
       well_vintage_year: null,
       well_first_prod_date: row.well_first_prod_date,
       well_county: row.well_county,
+      well_novi_oil_eur: null,
+      actual_cum: null,
+      eur_remaining: null,
+      eur_displayed: numFromPayload(p, "eur"),
     });
   }
   return out;

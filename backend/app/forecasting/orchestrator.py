@@ -1,9 +1,14 @@
 """Run forecasts for one or many wells across oil/gas/water streams.
 
 Glue between the math (`fit.py`) and the DB (`forecasts` table). Key
-domain rule: gas/water inherit oil's peak month — we don't detect a
-separate peak per stream, because the streams need to share a common t=0
-for forecasts and type-curve aggregation to be coherent (per the brief).
+domain rule: oil and gas share oil's peak month (gas inherits it), while
+WATER is anchored on its own peak — Permian flowback water peaks hard in
+month 0-1 and declines immediately, months before oil ramps to peak, so
+inheriting the oil peak under-reads water qi and the early decline. Each
+stream's per-well forecast is expressed in years-since-first-prod (the
+peak is an internal ramp anchor), so per-stream peaks stay coherent —
+all three streams still map back to one first-prod calendar. See
+``detect_stream_peaks``.
 """
 
 from __future__ import annotations
@@ -26,13 +31,57 @@ from app.forecasting.fit import (
     fit_rate_time,
     fit_with_fallback,
 )
-from app.forecasting.peak_detection import PeakResult, detect_oil_peak
+from app.forecasting.peak_detection import (
+    PeakResult,
+    detect_oil_peak,
+    detect_peak,
+)
 from app.forecasting.ramp_arps import compute_total_eur
 from app.forecasting.types import ForecastConfig, ForecastResult
 
 log = get_logger("forecasting.orchestrator")
 
 STREAMS: tuple[str, ...] = ("oil", "gas", "water")
+
+# Stream whose peak each stream anchors on. Oil and gas share oil's peak
+# (gas tracks oil closely enough that one t=0 stays coherent); water gets
+# its own — Permian flowback water peaks hard in month 0-1 and declines
+# immediately, months before oil ramps to peak. See detect_stream_peaks.
+_PEAK_RATE_COLUMN: dict[str, str] = {
+    "oil": "rate_calday_bopd",
+    "gas": "rate_calday_bopd",  # inherits oil's peak month
+    "water": "rate_calday_bwpd",
+}
+
+
+def detect_stream_peaks(
+    monthly: pd.DataFrame,
+) -> dict[str, PeakResult | None]:
+    """Per-stream peak month for one well.
+
+    Oil and gas share the oil peak (gas inherits it by convention).
+    Water is detected independently on its own rate column: anchoring
+    water on the oil peak reads a low qi (the hard early water peak has
+    already decayed by the oil peak) and a shallow Di (the steep early
+    water decline sits upstream of the post-peak fit slice). When a well
+    has no detectable water peak (no water production / all-null), water
+    falls back to the oil peak so it still gets a forecast anchored
+    somewhere sensible rather than being dropped.
+
+    Pure function (takes a frame, no DB) so the per-stream rule is unit
+    testable the same way ``cohort.classify_history`` is.
+    """
+    oil_peak = detect_oil_peak(monthly)
+    water_peak = detect_peak(monthly, rate_column=_PEAK_RATE_COLUMN["water"])
+    # A zero-rate "peak" (all-zero water column — zeros aren't null, so
+    # detect_peak still returns index 0) isn't a real peak. Treat it as
+    # "no water" and fall back to the oil anchor.
+    has_water = water_peak is not None and water_peak.peak_rate > 0
+    return {
+        "oil": oil_peak,
+        "gas": oil_peak,
+        "water": water_peak if has_water else oil_peak,
+    }
 
 
 def _load_monthly(session: Session, api10: str) -> pd.DataFrame:
@@ -122,11 +171,12 @@ def forecast_well(
     config: ForecastConfig | None = None,
     persist: bool = True,
 ) -> dict[str, ForecastResult | None]:
-    """Fit all three streams for a single well; gas/water inherit oil peak.
+    """Fit all three streams for a single well.
 
-    Returns a dict {stream: ForecastResult or None on fit failure}. When
-    `persist=True` (default), each successful result is written to the
-    forecasts table via upsert.
+    Oil and gas anchor on the oil peak; water anchors on its own peak
+    (see ``detect_stream_peaks``). Returns a dict {stream: ForecastResult
+    or None on fit failure}. When `persist=True` (default), each
+    successful result is written to the forecasts table via upsert.
     """
     cfg = config or ForecastConfig()
     monthly = _load_monthly(session, api10)
@@ -135,7 +185,10 @@ def forecast_well(
         log.warning("no_production", api10=api10)
         return out
 
-    oil_peak = detect_oil_peak(monthly)
+    # Per-stream peak: oil and gas share the oil peak; water gets its own
+    # (flowback peaks months before oil — see detect_stream_peaks).
+    peaks = detect_stream_peaks(monthly)
+    oil_peak = peaks["oil"]
     if oil_peak is None:
         log.warning("no_oil_peak", api10=api10)
         return out
@@ -151,19 +204,17 @@ def forecast_well(
     else:
         fit_fn = fit_with_fallback
 
-    # Linear-ramp prefix shared across streams: peak_index_months is
-    # measured against the OIL peak (gas/water inherit it by
-    # convention). Per-stream qo comes from each stream's first-prod
-    # observation. See app.forecasting.ramp_arps.
-    peak_index_months = int(oil_peak.peak_index)
-
     for stream in STREAMS:
-        # Use oil's peak for ALL streams — they share t=0 by construction.
+        # Each stream is fit and ramp-anchored against ITS OWN peak.
+        # peak_index_months (the ramp length) is therefore per-stream:
+        # oil/gas measure from the oil peak, water from the water peak.
+        peak = peaks[stream] or oil_peak
+        peak_index_months = int(peak.peak_index)
         try:
             result = fit_fn(
                 monthly,
                 model_type=cfg.model_type,
-                peak=oil_peak,
+                peak=peak,
                 stream=stream,
                 config=cfg,
             )
@@ -171,12 +222,16 @@ def forecast_well(
             log.exception("fit_failed", api10=api10, stream=stream, err=str(e))
             continue
 
-        # Gas/water shouldn't inherit oil's peak RATE — that'd be wrong;
-        # rewrite the result's peak_rate to the stream-specific rate at the
-        # peak month so the detail modal shows the right anchor value.
-        if stream != "oil":
-            stream_peak_rate = stream_rate_at_peak(monthly, oil_peak, stream)
-            result = replace(result, peak_rate=stream_peak_rate)
+        # Gas inherits oil's peak MONTH but not oil's peak RATE — rewrite
+        # to the gas rate at that month so the detail modal shows the
+        # right anchor value. Oil and water already carry the correct
+        # per-stream peak_rate from their own detected peak (the fit set
+        # result.peak_rate = peak.peak_rate, which is in the stream's
+        # own units).
+        if stream == "gas":
+            result = replace(
+                result, peak_rate=stream_rate_at_peak(monthly, peak, stream)
+            )
 
         # Stamp the ramp params. params dict also carries them so the
         # evaluator can pick them up without the row-level fields.
@@ -218,19 +273,20 @@ _STREAM_RATE_COL: dict[str, str] = {
 
 
 def stream_rate_at_peak(
-    monthly: pd.DataFrame, oil_peak: PeakResult, stream: str
+    monthly: pd.DataFrame, peak: PeakResult, stream: str
 ) -> float:
-    """Return the stream's calday rate at the oil-peak month.
+    """Return the stream's calday rate at ``peak``'s month.
 
     Public helper — the cohort-transfer endpoint anchors short-history
     wells' qi with this same value, so the semantic needs to match the
-    per-stream qi the autoforecast picks. 0.0 when the row is missing
-    or the rate is null.
+    per-stream qi the autoforecast picks. Pass the peak the stream is
+    anchored on (oil peak for oil/gas, water peak for water). 0.0 when
+    the row is missing or the rate is null.
     """
     df = monthly.sort_values("prod_date").reset_index(drop=True)
-    if oil_peak.peak_index >= len(df):
+    if peak.peak_index >= len(df):
         return 0.0
-    val = df.iloc[oil_peak.peak_index][_STREAM_RATE_COL[stream]]
+    val = df.iloc[peak.peak_index][_STREAM_RATE_COL[stream]]
     return float(val) if val is not None and not pd.isna(val) else 0.0
 
 

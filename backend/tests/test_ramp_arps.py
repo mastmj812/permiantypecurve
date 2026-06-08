@@ -20,6 +20,7 @@ from app.forecasting.ramp_arps import (
     compute_ramp_eur,
     compute_total_eur,
     evaluate_well_rate,
+    model_cum_at_t,
 )
 
 
@@ -168,13 +169,25 @@ def test_compute_ramp_eur_zero_when_peak_index_nonpositive() -> None:
 
 
 def test_compute_total_eur_adds_ramp_when_present() -> None:
-    params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": 3}
+    # Total horizon stays 50 years end-to-end: the ramp consumes
+    # peak_t years up front, and the Arps tail covers (horizon -
+    # peak_t) years after that. compute_total_eur must reflect this
+    # piecewise split — otherwise ``remaining = total -
+    # model_cum_at_t(horizon)`` is non-zero at t == horizon, which
+    # makes Method-1 EUR drift in the modal's stat row.
+    peak_index_months = 3
+    params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": peak_index_months}
+    horizon = 50.0
     total = compute_total_eur(
-        model_type="modified_hyperbolic", params=params
+        model_type="modified_hyperbolic", params=params, horizon_years=horizon,
     )
-    arps = compute_eur("modified_hyperbolic", params)
-    ramp = compute_ramp_eur(qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=3)
-    assert total == pytest.approx(arps + ramp, rel=1e-9)
+    arps_post_peak = compute_eur(
+        "modified_hyperbolic", params, horizon_years=horizon - peak_index_months / 12.0
+    )
+    ramp = compute_ramp_eur(
+        qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months
+    )
+    assert total == pytest.approx(arps_post_peak + ramp, rel=1e-9)
 
 
 def test_compute_total_eur_falls_back_to_arps_when_missing() -> None:
@@ -185,3 +198,71 @@ def test_compute_total_eur_falls_back_to_arps_when_missing() -> None:
     )
     arps = compute_eur("modified_hyperbolic", _BASE_PARAMS)
     assert total == pytest.approx(arps, rel=1e-9)
+
+
+# -------------------- model_cum_at_t (Method-1 EUR helper) --------------------
+
+
+def test_model_cum_at_t_zero() -> None:
+    cum = model_cum_at_t(
+        qo=200.0, peak_index_months=3,
+        **_BASE_PARAMS, t_years=0.0,
+    )
+    assert cum == 0.0
+
+
+def test_model_cum_at_t_at_peak_equals_ramp_eur() -> None:
+    peak_index_months = 3
+    peak_t = peak_index_months / 12.0
+    cum = model_cum_at_t(
+        qo=200.0, peak_index_months=peak_index_months,
+        **_BASE_PARAMS, t_years=peak_t,
+    )
+    ramp = compute_ramp_eur(
+        qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months
+    )
+    assert cum == pytest.approx(ramp, rel=1e-9)
+
+
+def test_model_cum_at_t_partial_ramp_trapezoid() -> None:
+    # Mid-ramp: t = peak_t/2. Rate ramps qo→qi linearly; integral of
+    # the partial ramp over [0, peak_t/2] is the average of qo and
+    # (qo+qi)/2 times peak_t/2 (the trapezoid rule applied to the
+    # closed-form ramp).
+    peak_index_months = 6
+    peak_t = peak_index_months / 12.0
+    qo, qi = 100.0, 800.0
+    rate_mid = qo + (qi - qo) * 0.5
+    expected = ((qo + rate_mid) / 2.0) * (peak_t / 2.0) * 365.0
+    cum = model_cum_at_t(
+        qo=qo, peak_index_months=peak_index_months,
+        qi=qi, Di=1.2, b=1.0, Df=0.08, t_years=peak_t / 2.0,
+    )
+    assert cum == pytest.approx(expected, rel=1e-9)
+
+
+def test_model_cum_at_t_at_horizon_equals_total_eur() -> None:
+    # Method-1 sanity: integrating the model to the 50-yr horizon
+    # must return compute_total_eur exactly. Otherwise eur_remaining
+    # (= total - model_cum_at_endofhistory) would be biased.
+    params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": 3}
+    cum = model_cum_at_t(
+        qo=200.0, peak_index_months=3,
+        **_BASE_PARAMS, t_years=50.0,
+    )
+    total = compute_total_eur(
+        model_type="modified_hyperbolic", params=params, horizon_years=50.0,
+    )
+    assert cum == pytest.approx(total, rel=1e-9)
+
+
+def test_model_cum_at_t_pure_arps_when_ramp_missing() -> None:
+    # With ramp params absent, model_cum_at_t reduces to compute_eur
+    # at the same horizon.
+    t = 2.0
+    cum = model_cum_at_t(
+        qo=None, peak_index_months=None,
+        **_BASE_PARAMS, t_years=t,
+    )
+    expected = compute_eur("modified_hyperbolic", _BASE_PARAMS, horizon_years=t)
+    assert cum == pytest.approx(expected, rel=1e-9)

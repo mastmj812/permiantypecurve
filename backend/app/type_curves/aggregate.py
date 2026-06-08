@@ -10,10 +10,13 @@ Normalization basis is per-1000-lateral-ft for v1; the function is
 structured so per-proppant-lb or per-well can drop in via a different
 `normalize_by` value without changing the aggregation math.
 
-Alignment is peak-month: each well's t=0 is its own oil peak. Gas and
-water inherit oil's peak (same rule as forecasting — streams need a
-shared t=0 for coherent aggregation). Callers pass the peak_index per
-well.
+Alignment is peak-month: each well's t=0 is its own peak. Oil and gas
+share the oil peak; water aligns on its own (earlier) peak — same
+per-stream rule as forecasting (see orchestrator.detect_stream_peaks).
+Because water is sliced from an earlier month it can run longer than
+oil, so the per-stream arrays may differ in length; the panel is sized
+to the longest stream and shorter streams are NaN-padded in the tail.
+The loader (loader.load_well_series) prepares the per-stream slices.
 """
 
 from __future__ import annotations
@@ -215,7 +218,16 @@ def aggregate(
         )
 
     if n_months is None:
-        n_months = max(len(w.oil_rates) for w in usable_wells)
+        # Size to the longest stream across all wells. Equal to
+        # len(oil_rates) when the three streams are the same length (the
+        # forecast loader and first_prod-aligned observed loader), but
+        # under peak_month alignment water is sliced from its own earlier
+        # peak and runs longer than oil — capping at oil's length would
+        # truncate the water tail.
+        n_months = max(
+            max(len(w.oil_rates), len(w.gas_rates), len(w.water_rates))
+            for w in usable_wells
+        )
 
     streams = {
         "oil": _stream_panel([w.oil_rates for w in usable_wells], denoms, n_months),

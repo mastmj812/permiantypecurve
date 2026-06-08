@@ -39,6 +39,15 @@ DEFAULT_DOWNTIME_FLOOR_BOPD: float = 5.0
 DEFAULT_DOWNTIME_FLOOR_MCFD: float = 30.0
 DEFAULT_DOWNTIME_FLOOR_BWPD: float = 10.0
 
+# Water-specific nominal-Di upper bound. Permian flowback water craters in
+# the first months far faster than oil declines, so the oil-tuned cap
+# (fit.DI_NOMINAL_HI_PER_YEAR = 4.0) is too low for water and forces the
+# rate-time water fit to pin short of the true decline. 12.0/yr nominal is
+# ~92% effective in year 1 at b=1 — covers steep Permian water without
+# letting a degenerate short-history fit run away. Tunable; oil and gas
+# keep the 4.0 cap. See fit.fit_with_fallback's qi-underfit path.
+DEFAULT_WATER_DI_NOMINAL_HI_PER_YEAR: float = 12.0
+
 
 @dataclass(frozen=True)
 class ForecastConfig:
@@ -63,6 +72,9 @@ class ForecastConfig:
     downtime_floor_bopd: float = DEFAULT_DOWNTIME_FLOOR_BOPD
     downtime_floor_mcfd: float = DEFAULT_DOWNTIME_FLOOR_MCFD
     downtime_floor_bwpd: float = DEFAULT_DOWNTIME_FLOOR_BWPD
+    # Nominal-Di upper bound for the water fit (oil/gas use the oil-tuned
+    # fit.DI_NOMINAL_HI_PER_YEAR). Water craters faster early; see above.
+    water_di_nominal_hi_per_year: float = DEFAULT_WATER_DI_NOMINAL_HI_PER_YEAR
     # >= 6 months post-peak required for the default fit (brief).
     min_post_peak_months: int = 6
     # Wells with fewer than this many post-peak months are excluded from

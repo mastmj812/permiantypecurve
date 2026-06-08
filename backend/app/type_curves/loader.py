@@ -41,17 +41,63 @@ from app.type_curves.aggregate import AlignmentMethod, WellSeries
 
 
 def _peak_month_by_api10(
-    session: Session, api10s: list[str]
+    session: Session, api10s: list[str], stream: Stream = Stream.OIL
 ) -> dict[str, date]:
-    """Oil-stream peak_month_date per api10, from the forecasts table."""
+    """`peak_month_date` per api10 for the given stream, from forecasts.
+
+    Defaults to oil (the gate stream — a well needs an oil forecast to be
+    aggregatable). Water is fetched separately so the observed overlay
+    can re-align to the water peak under peak_month alignment; water
+    peaks months before oil, so sharing the oil anchor smears the water
+    band. See ``_stream_slice_starts``.
+    """
     if not api10s:
         return {}
     rows = session.execute(
         select(Forecast.api10, Forecast.peak_month_date)
         .where(Forecast.api10.in_(api10s))
-        .where(Forecast.stream == Stream.OIL)
+        .where(Forecast.stream == stream)
     ).all()
     return {r.api10: r.peak_month_date for r in rows if r.peak_month_date is not None}
+
+
+def _stream_slice_starts(
+    *,
+    alignment: AlignmentMethod,
+    first_prod_date: date | None,
+    oil_peak_date: date | None,
+    water_peak_date: date | None,
+) -> dict[str, date | None]:
+    """Per-stream t=0 date for the observed overlay.
+
+    Under ``first_prod_month`` every stream starts at first prod (the
+    well's single calendar t=0). Under ``peak_month`` oil and gas start
+    at the oil peak while water starts at its own peak — falling back to
+    the oil peak when the well has no water peak on file (e.g. not yet
+    re-fit). Pure function so the per-stream rule is unit testable.
+    """
+    if alignment == "first_prod_month":
+        return {s: first_prod_date for s in ("oil", "gas", "water")}
+    return {
+        "oil": oil_peak_date,
+        "gas": oil_peak_date,
+        "water": water_peak_date if water_peak_date is not None else oil_peak_date,
+    }
+
+
+def _first_index_on_or_after(prod_dates: list[date], target: date | None) -> int:
+    """Index of the first row on/after ``target`` (0 when target is None).
+
+    Rows are chronological. Used to convert a per-stream start date into
+    an offset into a production list fetched from the earliest start, so
+    each stream's array begins at its own t=0 even when streams are
+    sliced from different months."""
+    if target is None:
+        return 0
+    for i, d in enumerate(prod_dates):
+        if d >= target:
+            return i
+    return len(prod_dates)
 
 
 def _well_attrs_by_api10(
@@ -69,11 +115,13 @@ def _well_attrs_by_api10(
 
 def _production_from(
     session: Session, api10: str, start: date
-) -> list[tuple[float | None, float | None, float | None]]:
-    """Return (oil_rate, gas_rate, water_rate) calday tuples from `start`
-    forward, in chronological order."""
+) -> list[tuple[date, float | None, float | None, float | None]]:
+    """Return (prod_date, oil_rate, gas_rate, water_rate) calday tuples
+    from `start` forward, in chronological order. The date rides along so
+    callers can offset each stream to its own peak (see load_well_series)."""
     rows = session.execute(
         select(
+            ProductionMonthly.prod_date,
             ProductionMonthly.rate_calday_bopd,
             ProductionMonthly.rate_calday_mcfd,
             ProductionMonthly.rate_calday_bwpd,
@@ -84,6 +132,7 @@ def _production_from(
     ).all()
     return [
         (
+            r.prod_date,
             float(r.rate_calday_bopd) if r.rate_calday_bopd is not None else None,
             float(r.rate_calday_mcfd) if r.rate_calday_mcfd is not None else None,
             float(r.rate_calday_bwpd) if r.rate_calday_bwpd is not None else None,
@@ -104,37 +153,55 @@ def load_well_series(
     regardless of alignment — you can't include a well in a type curve
     before forecasting it. For `first_prod_month` alignment, wells also
     need a non-null `first_prod_date` in the wells table.
+
+    Under `peak_month` alignment each stream is sliced from its OWN peak
+    (oil/gas from the oil peak, water from the water peak), so the
+    observed overlay lines up with the forecast bands, which are already
+    per-stream-peak-anchored. This makes the per-stream arrays ragged in
+    length; the aggregator sizes its panel to the longest stream.
     """
     api10_list = list(api10s)
-    peaks = _peak_month_by_api10(session, api10_list)
+    oil_peaks = _peak_month_by_api10(session, api10_list, Stream.OIL)
+    water_peaks = _peak_month_by_api10(session, api10_list, Stream.WATER)
     attrs = _well_attrs_by_api10(session, api10_list)
 
     out: list[WellSeries] = []
     for api10 in api10_list:
-        # Forecast must exist regardless of alignment.
-        if api10 not in peaks:
+        # Oil forecast must exist regardless of alignment (the gate).
+        if api10 not in oil_peaks:
             continue
         lateral_ft, proppant_lbs, first_prod_date = attrs.get(
             api10, (None, None, None)
         )
+        if alignment == "first_prod_month" and first_prod_date is None:
+            continue
 
-        if alignment == "first_prod_month":
-            if first_prod_date is None:
-                continue
-            slice_from = first_prod_date
-        else:  # "peak_month"
-            slice_from = peaks[api10]
-
-        prod = _production_from(session, api10, slice_from)
+        starts = _stream_slice_starts(
+            alignment=alignment,
+            first_prod_date=first_prod_date,
+            oil_peak_date=oil_peaks[api10],
+            water_peak_date=water_peaks.get(api10),
+        )
+        start_dates = [d for d in starts.values() if d is not None]
+        if not start_dates:
+            continue
+        # Fetch once from the earliest per-stream start, then offset each
+        # stream to its own t=0. Under first_prod alignment all three
+        # starts are equal, so every offset is 0 (behavior unchanged).
+        prod = _production_from(session, api10, min(start_dates))
         if not prod:
             continue
+        prod_dates = [r[0] for r in prod]
+        oil_off = _first_index_on_or_after(prod_dates, starts["oil"])
+        gas_off = _first_index_on_or_after(prod_dates, starts["gas"])
+        wat_off = _first_index_on_or_after(prod_dates, starts["water"])
         out.append(WellSeries(
             api10=api10,
             lateral_ft=lateral_ft,
             proppant_lbs=proppant_lbs,
-            oil_rates=[r[0] for r in prod],
-            gas_rates=[r[1] for r in prod],
-            water_rates=[r[2] for r in prod],
+            oil_rates=[r[1] for r in prod[oil_off:]],
+            gas_rates=[r[2] for r in prod[gas_off:]],
+            water_rates=[r[3] for r in prod[wat_off:]],
         ))
     return out
 

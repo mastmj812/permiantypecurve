@@ -140,6 +140,53 @@ def compute_ramp_eur(*, qo: float, qi: float, peak_index: int) -> float:
     return ((qo + qi) / 2.0) * peak_index * _DAYS_PER_MONTH
 
 
+def model_cum_at_t(
+    *,
+    qo: float | None,
+    peak_index_months: int | None,
+    qi: float,
+    Di: float,
+    b: float,
+    Df: float,
+    t_years: float,
+) -> float:
+    """Cumulative production at time ``t_years`` since first prod.
+
+    Piecewise:
+
+      * ``t <= peak_t`` — trapezoid under the partial ramp from 0 to t.
+        Rate at t is ``qo + (qi - qo) * (t / peak_t)``; the area is the
+        average of that and qo times t, scaled by DAYS_PER_YEAR.
+      * ``t >  peak_t`` — full ramp area + Arps integral over the
+        post-peak horizon ``t - peak_t``.
+
+    Back-compat: with ``qo`` / ``peak_index_months`` missing (or
+    ``peak_index_months == 0``), this degenerates to ``compute_eur``
+    on the Arps params with horizon == t_years — matches the pure-
+    Arps anchor convention.
+
+    Used to split the model EUR at end-of-history when computing
+    ``remaining_per_model`` (= full_eur - model_cum_at_endofhistory)
+    and the Method-1 displayed EUR (= actual_cum_to_date + remaining).
+    """
+    if t_years <= 0:
+        return 0.0
+    arps_params: dict[str, float] = {"qi": qi, "Di": Di, "b": b, "Df": Df}
+    if qo is None or peak_index_months is None or peak_index_months <= 0:
+        return compute_eur(
+            "modified_hyperbolic", arps_params, horizon_years=t_years
+        )
+    peak_t = peak_index_months / 12.0
+    if t_years <= peak_t:
+        rate_at_t = qo + (qi - qo) * (t_years / peak_t)
+        return ((qo + rate_at_t) / 2.0) * t_years * DAYS_PER_YEAR
+    ramp_eur = compute_ramp_eur(qo=qo, qi=qi, peak_index=peak_index_months)
+    arps_cum = compute_eur(
+        "modified_hyperbolic", arps_params, horizon_years=t_years - peak_t
+    )
+    return ramp_eur + arps_cum
+
+
 def compute_total_eur(
     *,
     model_type: str,
@@ -147,21 +194,34 @@ def compute_total_eur(
     horizon_years: float = 50.0,
     economic_limit: float = 0.0,
 ) -> float:
-    """ramp_eur + arps_eur. Drops to plain ``compute_eur`` when qo or
-    peak_index_months is missing from ``params`` (forecasts persisted
-    before the ramp columns existed and not yet re-fit). The Arps EUR
-    is over the post-peak horizon — total horizon stays 50 years
-    regardless of ramp length."""
-    arps_eur = compute_eur(
-        model_type, params, horizon_years=horizon_years, economic_limit=economic_limit
-    )
+    """ramp_eur + arps_eur over the well's total ``horizon_years`` of
+    producing life. The ramp consumes ``peak_index_months / 12`` years
+    up front; the Arps tail is then integrated over the REMAINING
+    ``horizon_years - peak_t`` years so the two pieces sum to exactly
+    the desired horizon. Without this subtraction the Arps integral
+    overlaps the ramp window and the total exceeds ``horizon_years`` of
+    real producing time by ``peak_t`` years — a ~0.02% bias on a
+    typical 3-month ramp with a 50-yr horizon, harmless in absolute
+    terms but it desynchronizes ``remaining = total - model_cum_at_t``
+    at t == horizon (the remaining should be zero, not a few hundred
+    BBL of phantom tail).
+
+    Drops to plain ``compute_eur`` when qo or peak_index_months is
+    missing from ``params`` (forecasts persisted before the ramp
+    columns existed and not yet re-fit).
+    """
     qo = params.get("qo")
     peak_index_months = params.get("peak_index_months")
-    if qo is None or peak_index_months is None:
-        return arps_eur
     qi = params.get("qi")
-    if qi is None:
-        return arps_eur
+    if qo is None or peak_index_months is None or qi is None or peak_index_months <= 0:
+        return compute_eur(
+            model_type, params, horizon_years=horizon_years, economic_limit=economic_limit
+        )
+    peak_t = int(peak_index_months) / 12.0
+    arps_horizon = max(0.0, horizon_years - peak_t)
+    arps_eur = compute_eur(
+        model_type, params, horizon_years=arps_horizon, economic_limit=economic_limit
+    )
     return (
         compute_ramp_eur(qo=float(qo), qi=float(qi), peak_index=int(peak_index_months))
         + arps_eur

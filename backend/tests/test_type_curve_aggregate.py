@@ -33,6 +33,29 @@ def _well(
     )
 
 
+def test_ragged_stream_lengths_size_panel_to_longest_stream() -> None:
+    # Under peak_month alignment water is sliced from its own earlier
+    # peak, so its array runs longer than oil. The panel must size to the
+    # longest stream (water=10) rather than capping at oil's length (6),
+    # which would silently drop the water tail.
+    w = _well(
+        "1",
+        lateral_ft=10_000,
+        oil_rates=[500.0] * 6,
+        water_rates=[300.0] * 10,
+        n=10,  # gas defaults to this length; water is the longest stream
+    )
+    agg = aggregate([w])
+    assert agg.n_months == 10
+    # Oil is NaN-padded in the tail (well drops out after month 6).
+    assert agg.streams["oil"].p50[:6] == [50.0] * 6
+    assert agg.streams["oil"].p50[6:] == [None] * 4
+    assert agg.streams["oil"].well_count == [1] * 6 + [0] * 4
+    # Water carries its full length with no truncation.
+    assert agg.streams["water"].p50 == [30.0] * 10
+    assert agg.streams["water"].well_count == [1] * 10
+
+
 def test_empty_input_returns_empty_aggregate() -> None:
     agg = aggregate([])
     assert agg.n_wells == 0

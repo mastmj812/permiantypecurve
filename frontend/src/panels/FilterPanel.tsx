@@ -3,7 +3,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
 import type { FacetCount, WellStatus } from "../api/types";
-import { type FormationGroup, colorForFormation } from "../map/formations";
+import { FORMATIONS, type FormationGroup, colorForFormation } from "../map/formations";
 import { useMapStore } from "../store/mapStore";
 
 const ALL_STATUSES: WellStatus[] = ["PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN"];
@@ -268,18 +268,29 @@ function FormationSection({
   );
 }
 
-// Classify a formation name into a UI group by leading token. Case-
-// insensitive to absorb Enverus inconsistency. Order matters: a name
-// like "BONE SPRING,WOLFCAMP" mentions both intervals, but we group it
-// under Bone Spring (the shallower one) since that's typically the
-// primary producer in a dual-interval completion.
+// Classify a formation into a UI group. Prefer an exact match in
+// the canonical FORMATIONS list (kept in lockstep with the actual
+// `wells.formation` strings Novi emits), and fall back to substring
+// matching for any unmapped values so a fresh formation that's not
+// yet in the list still lands in a reasonable bucket. Order
+// matters in the fallback: a name like "BONE SPRING,WOLFCAMP"
+// mentions both intervals, but we group it under Bone Spring (the
+// shallower one) since that's typically the primary producer in a
+// dual-interval completion.
+const _GROUP_BY_UPPER: Map<string, FormationGroup> = new Map(
+  FORMATIONS.map((f) => [f.name.toUpperCase(), f.group]),
+);
+
 function groupForName(name: string): FormationGroup {
   const u = name.toUpperCase();
-  if (u.includes("BONE SPRING") || u.includes("AVALON")) return "Bone Spring";
-  // "WLFCMP" catches the abbreviated form Enverus occasionally uses
-  // (e.g. "WLFCMP\\PENN CONS"). Without this, those rows fall through
-  // to Other even though the operator clearly meant Wolfcamp.
-  if (u.includes("WOLFCAMP") || u.includes("WLFCMP")) return "Wolfcamp";
+  const mapped = _GROUP_BY_UPPER.get(u);
+  if (mapped) return mapped;
+  if (u.includes("BONE SPRING") || u.includes("AVALON") || u.includes("LEONARD")) {
+    return "Bone Spring";
+  }
+  if (u.includes("WOLFCAMP") || u.includes("WLFCMP") || u.includes("CLINE")) {
+    return "Wolfcamp";
+  }
   if (
     u.includes("SPRABERRY") ||
     u.includes("JO MILL") ||

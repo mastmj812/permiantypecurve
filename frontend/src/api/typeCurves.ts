@@ -279,7 +279,19 @@ export async function putForecastOverride(
   id: string,
   api10: string,
   stream: "oil" | "gas" | "water",
-  params: { qi: number; Di: number; b: number; Df: number },
+  params: {
+    qi: number;
+    Di: number;
+    b: number;
+    Df: number;
+    // Optional linear-ramp prefix. When the underlying global fit
+    // had ramp params (the post-cutover default), passing them here
+    // preserves the ramp on the override too — without them the
+    // override silently degenerates to pure Arps and the chart's
+    // shape changes after save.
+    qo?: number | null;
+    peak_index_months?: number | null;
+  },
 ): Promise<WorkspaceStreamForecast> {
   const r = await apiFetch(
     `/api/type-curves/${id}/overrides/${api10}/${stream}`,

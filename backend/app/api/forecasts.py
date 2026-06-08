@@ -34,7 +34,7 @@ import numpy as np
 import pandas as pd
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -62,6 +62,7 @@ from app.forecasting.fit import (
     STREAM_RATE_COLUMN,
     STREAM_VOLUME_COLUMN,
     _flag_downtime,
+    _stream_di_hi,
     detect_at_bound,
 )
 from app.forecasting.metrics import effective_decline_first_year
@@ -73,12 +74,16 @@ from app.forecasting.models import (
 )
 from app.forecasting.orchestrator import (
     STREAMS,
+    detect_stream_peaks,
     forecast_wells,
     stream_rate_at_first_prod,
     stream_rate_at_peak,
 )
-from app.forecasting.peak_detection import detect_oil_peak
-from app.forecasting.ramp_arps import compute_total_eur, evaluate_well_rate
+from app.forecasting.ramp_arps import (
+    compute_total_eur,
+    evaluate_well_rate,
+    model_cum_at_t,
+)
 from app.forecasting.types import (
     DEFAULT_ECONOMIC_LIMIT_BOPD,
     DEFAULT_FORECAST_HORIZON_YEARS,
@@ -203,6 +208,17 @@ class ForecastRow(BaseModel):
     # autoforecast EUR in the Review table. Sourced from
     # curated.wells_enriched.eur_50yr_oil_bbl during well sync.
     well_novi_oil_eur: float | None = None
+    # Method-1 EUR triple — derived per request from production
+    # aggregates so we don't store stale snapshots. See
+    # _compute_method_one_metrics for the math.
+    #   actual_cum     — total per-stream volume produced to date
+    #   eur_remaining  — model EUR minus model cum at end-of-history
+    #                    (the model's projection from now → year 50)
+    #   eur_displayed  — actual_cum + eur_remaining (the EUR reported
+    #                    everywhere user-facing: past is real, future is model)
+    actual_cum: float | None = None
+    eur_remaining: float | None = None
+    eur_displayed: float | None = None
 
     @classmethod
     def from_orm_row(cls, f: Forecast) -> "ForecastRow":
@@ -213,8 +229,13 @@ class ForecastRow(BaseModel):
         )
         at_bound, bound_note = (False, None)
         if f.qi is not None and f.di_initial is not None and f.peak_rate is not None:
+            # Per-stream Di cap so steep water (cap 12.0) isn't flagged
+            # against the oil-tuned 4.0. Uses default config bounds — the
+            # fit-time config isn't persisted, but the badge is a QC hint
+            # and the defaults are what the autoforecast uses.
             at_bound, bound_note = detect_at_bound(
-                qi=f.qi, di=f.di_initial, b=f.b, peak_rate=f.peak_rate
+                qi=f.qi, di=f.di_initial, b=f.b, peak_rate=f.peak_rate,
+                di_hi=_stream_di_hi(f.stream.value, ForecastConfig()),
             )
         return cls(
             id=f.id, api10=f.api10, stream=f.stream, model_type=f.model_type,
@@ -274,6 +295,14 @@ class PreviewRequest(BaseModel):
     economic_limit: float = DEFAULT_ECONOMIC_LIMIT_BOPD
     horizon_years: float = DEFAULT_FORECAST_HORIZON_YEARS
     n_points: int = Field(default=120, ge=10, le=1000)
+    # Optional anchor for the Method-1 displayed EUR. When provided,
+    # the backend looks up the well's production aggregate and stream
+    # and returns eur_displayed + eur_remaining alongside the raw
+    # model integral. Without these, the response carries only the
+    # canonical model EUR (back-compat for callers that don't need
+    # Method-1 — e.g. TC-level previews).
+    api10: str | None = None
+    stream: Stream | None = None
 
 
 class PreviewResponse(BaseModel):
@@ -281,6 +310,12 @@ class PreviewResponse(BaseModel):
     rate: list[float]
     cum: list[float]
     eur: float
+    # Method-1 metrics. Populated only when the request carried api10
+    # + stream so the backend could resolve the well's actual cum and
+    # last-observed month for the previewed params.
+    eur_displayed: float | None = None
+    eur_remaining: float | None = None
+    actual_cum: float | None = None
 
 
 # ============================ batch endpoint ============================
@@ -494,8 +529,9 @@ def transfer_cohort_params(
     Reads the resolved (auto-fit or user-edited) Di / b of the
     long-history wells in the same batch, takes the per-stream median,
     and writes a forecast row per short well using its own qi (rate at
-    the oil-peak month) plus the cohort medians. Honors `locked` on
-    existing short-side rows — a locked row is preserved.
+    that stream's peak month — water on its own early peak, oil/gas on
+    the oil peak) plus the cohort medians. Honors `locked` on existing
+    short-side rows — a locked row is preserved.
 
     Returns HTTP 422 when the oil donor pool is thinner than
     `min_donor_count`; no writes occur in that case. The user widens
@@ -552,8 +588,8 @@ def transfer_cohort_params(
         if monthly.empty:
             skipped_no_peak.append(api10)
             continue
-        peak = detect_oil_peak(monthly)
-        if peak is None:
+        peaks = detect_stream_peaks(monthly)
+        if peaks["oil"] is None:
             skipped_no_peak.append(api10)
             continue
 
@@ -579,13 +615,20 @@ def transfer_cohort_params(
                 skipped_locked.append((api10, stream_enum))
                 continue
 
-            qi = stream_rate_at_peak(monthly, peak, stream_str)
+            # Anchor on THIS stream's peak (water on its own hard early
+            # peak; oil/gas on the oil peak) — same per-stream convention
+            # as the autoforecast, so transferred short-history rows
+            # match what a full fit would have anchored.
+            stream_peak = peaks[stream_str] or peaks["oil"]
+            qi = stream_rate_at_peak(monthly, stream_peak, stream_str)
             # Ramp prefix is well-specific even on a cohort transfer:
             # qo comes from the short well's own first-prod observation
             # and peak_index_months from its own detected peak. Only
             # Di/b are inherited from the long-history cohort median.
             qo = stream_rate_at_first_prod(monthly, stream_str)
-            peak_index_months = int(peak.peak_index) if peak.peak_index > 0 else None
+            peak_index_months = (
+                int(stream_peak.peak_index) if stream_peak.peak_index > 0 else None
+            )
             params: dict[str, Any] = {
                 "qi": qi,
                 "Di": cohort_di,
@@ -624,7 +667,7 @@ def transfer_cohort_params(
                 "qo": qo,
                 "peak_index_months": peak_index_months,
                 "eur": eur,
-                "peak_month_date": peak.peak_month_date,
+                "peak_month_date": stream_peak.peak_month_date,
                 # Per-stream peak rate — same convention as the
                 # orchestrator's fit-time persistence.
                 "peak_rate": qi,
@@ -674,6 +717,77 @@ def transfer_cohort_params(
 # ============================ list / detail / patch ============================
 
 
+_STREAM_VOL_ATTR = {
+    Stream.OIL: "oil_bbl",
+    Stream.GAS: "gas_mcf",
+    Stream.WATER: "water_bbl",
+}
+
+
+def _months_between(anchor: date, last: date) -> float:
+    """Whole-month delta from ``anchor`` to ``last`` (inclusive of last).
+
+    Production rows are first-of-month dates; ``last - anchor`` in
+    months is the offset of the last observation from the model's
+    t=0. Adding 1 reflects that the well *produced through* that
+    month, so the model integral should run to the END of it.
+    """
+    return float((last.year - anchor.year) * 12 + (last.month - anchor.month) + 1)
+
+
+def _apply_method_one(
+    row: "ForecastRow",
+    f: Forecast,
+    well_first_prod_date: date | None,
+    actual_cum: float | None,
+    last_prod_date: date | None,
+) -> None:
+    """Populate ``row.actual_cum``/``eur_remaining``/``eur_displayed``.
+
+    Mutates the passed-in ForecastRow rather than returning a new one
+    — matches the in-place style used for the other joined ``well_*``
+    fields. Falls back to the model EUR when production / anchor data
+    is missing so the UI always has a finite value to show.
+    """
+    row.actual_cum = float(actual_cum) if actual_cum is not None else None
+    if f.eur is None:
+        row.eur_remaining = None
+        row.eur_displayed = None
+        return
+    # Anchor: with ramp params, model t=0 is at first_prod; without,
+    # at peak_month (the historical anchor for pre-migration rows).
+    has_ramp = (
+        f.peak_index_months is not None
+        or (f.params or {}).get("peak_index_months") is not None
+    )
+    anchor = well_first_prod_date if has_ramp else f.peak_month_date
+    if anchor is None or last_prod_date is None or last_prod_date < anchor:
+        # No history under this fit → "remaining" is the full EUR;
+        # displayed equals model EUR (no actual yet to layer in).
+        row.eur_remaining = float(f.eur)
+        row.eur_displayed = float(f.eur)
+        return
+    if f.qi is None or f.di_initial is None or f.b is None or f.df_terminal is None:
+        # Fit params incomplete (shouldn't happen for fitted rows, but
+        # be defensive). Just report model EUR as displayed.
+        row.eur_remaining = float(f.eur)
+        row.eur_displayed = float(f.eur)
+        return
+    t_years = _months_between(anchor, last_prod_date) / 12.0
+    model_cum = model_cum_at_t(
+        qo=f.qo,
+        peak_index_months=f.peak_index_months,
+        qi=float(f.qi),
+        Di=float(f.di_initial),
+        b=float(f.b),
+        Df=float(f.df_terminal),
+        t_years=t_years,
+    )
+    remaining = max(0.0, float(f.eur) - model_cum)
+    row.eur_remaining = remaining
+    row.eur_displayed = float(actual_cum or 0.0) + remaining
+
+
 @router.get("", response_model=list[ForecastRow])
 def list_forecasts(
     api10: list[str] | None = Query(default=None),
@@ -683,6 +797,21 @@ def list_forecasts(
 
     Single-trip JOIN avoids the N+1 well-lookup the frontend used to do.
     """
+    # Per-well per-stream production totals + last-observed date as a
+    # single grouped subquery. LEFT JOIN-ed so wells without any
+    # production still surface their forecast rows (the helper falls
+    # back to the model EUR when actual_cum is None).
+    prod_agg = (
+        select(
+            ProductionMonthly.api10.label("api10"),
+            func.sum(ProductionMonthly.oil_bbl).label("oil_cum"),
+            func.sum(ProductionMonthly.gas_mcf).label("gas_cum"),
+            func.sum(ProductionMonthly.water_bbl).label("water_cum"),
+            func.max(ProductionMonthly.prod_date).label("last_prod_date"),
+        )
+        .group_by(ProductionMonthly.api10)
+        .subquery()
+    )
     stmt = (
         select(
             Forecast,
@@ -694,8 +823,13 @@ def list_forecasts(
             Well.first_prod_date,
             Well.county,
             Well.novi_oil_eur,
+            prod_agg.c.oil_cum,
+            prod_agg.c.gas_cum,
+            prod_agg.c.water_cum,
+            prod_agg.c.last_prod_date,
         )
         .join(Well, Well.api10 == Forecast.api10)
+        .outerjoin(prod_agg, prod_agg.c.api10 == Forecast.api10)
         .order_by(Forecast.api10, Forecast.stream)
     )
     if api10:
@@ -704,6 +838,7 @@ def list_forecasts(
     for (
         f, name, operator, formation, lateral_ft, vintage_year,
         first_prod_date, county, novi_oil_eur,
+        oil_cum, gas_cum, water_cum, last_prod_date,
     ) in session.execute(stmt).all():
         row = ForecastRow.from_orm_row(f)
         # mutate in-place — model_copy(update=) would also work but allocates.
@@ -716,6 +851,15 @@ def list_forecasts(
         row.well_county = county
         row.well_novi_oil_eur = (
             float(novi_oil_eur) if novi_oil_eur is not None else None
+        )
+        cum_by_stream = {
+            Stream.OIL: oil_cum, Stream.GAS: gas_cum, Stream.WATER: water_cum,
+        }
+        _apply_method_one(
+            row, f,
+            well_first_prod_date=first_prod_date,
+            actual_cum=cum_by_stream.get(f.stream),
+            last_prod_date=last_prod_date,
         )
         out.append(row)
     return out
@@ -748,6 +892,21 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         row.well_novi_oil_eur = (
             float(well.novi_oil_eur) if well.novi_oil_eur is not None else None
         )
+    # Per-stream production aggregate for the Method-1 EUR computation.
+    # One scalar SUM query; cheap on the indexed (api10, prod_date) PK.
+    vol_attr = _STREAM_VOL_ATTR[f.stream]
+    actual_cum_row = session.execute(
+        select(
+            func.sum(getattr(ProductionMonthly, vol_attr)),
+            func.max(ProductionMonthly.prod_date),
+        ).where(ProductionMonthly.api10 == f.api10)
+    ).one()
+    _apply_method_one(
+        row, f,
+        well_first_prod_date=well.first_prod_date if well else None,
+        actual_cum=actual_cum_row[0],
+        last_prod_date=actual_cum_row[1],
+    )
     return row
 
 
@@ -851,6 +1010,7 @@ def _evaluate_rate(model_type: str, params: dict[str, Any], t: np.ndarray) -> np
 def well_curves(
     api10: str,
     horizon_years: float = Query(default=DEFAULT_FORECAST_HORIZON_YEARS, gt=0),
+    tc_id: uuid.UUID | None = Query(default=None),
     session: Session = Depends(get_session),
 ) -> WellCurvesResponse:
     """History (months 0..N) + ramp + Arps forecast (t=0 at first prod → horizon) per stream.
@@ -866,6 +1026,12 @@ def well_curves(
     the forecast still anchors at peak_month_date with rate[0]=qi —
     preserves the older "Months since peak" semantic for those wells
     until they're re-fit.
+
+    When ``tc_id`` is supplied, any per-(api10, stream) override saved
+    on that type curve takes precedence over the global forecast row
+    for the forecast portion. The detail modal passes this when open
+    in TC context so "Save TC override" updates the chart in place
+    rather than snapping back to the global fit.
     """
     prod_rows = session.execute(
         select(ProductionMonthly).where(ProductionMonthly.api10 == api10)
@@ -878,6 +1044,19 @@ def well_curves(
         select(Forecast).where(Forecast.api10 == api10)
     ).scalars().all()
     fc_by_stream = {f.stream: f for f in forecasts}
+
+    # Optional TC-context override: when present, the forecast portion
+    # for any stream with an override switches to those params,
+    # leaving the saved global row untouched. Imported locally to
+    # keep this module free of TC imports at import time (avoid the
+    # api -> type-curves import dependency surfacing as a cycle).
+    tc_overrides_for_well: dict[str, dict[str, Any]] = {}
+    if tc_id is not None:
+        from app.db.models import TypeCurve
+
+        tc_row = session.get(TypeCurve, tc_id)
+        if tc_row is not None:
+            tc_overrides_for_well = (tc_row.forecast_overrides or {}).get(api10, {}) or {}
 
     first_prod_date: date = prod_rows[0].prod_date
 
@@ -900,18 +1079,39 @@ def well_curves(
         forecast_rate: list[float] = []
         forecast_cum: list[float] = []
         fc = fc_by_stream.get(st)
-        if fc and fc.peak_month_date is not None:
+        # Pick the param set + model_type for the forecast portion:
+        # the TC override wins when present (tc_id query supplied + a
+        # row exists for this stream), otherwise fall back to the
+        # global forecast row.
+        override_block = tc_overrides_for_well.get(stream_name) or None
+        if override_block:
+            eval_params = dict(override_block.get("params") or {})
+            eval_model_type = str(
+                override_block.get("model_type") or "modified_hyperbolic"
+            )
+        elif fc:
+            eval_params = dict(fc.params)
+            eval_model_type = fc.model_type.value
+        else:
+            eval_params = {}
+            eval_model_type = "modified_hyperbolic"
+
+        if (fc and fc.peak_month_date is not None) or override_block:
             n_pts = int(horizon_years * 12)
             t = np.arange(n_pts, dtype=float) / 12.0
             # Anchor at first_prod when the row has ramp params (the
             # post-migration / re-fit case); peak_month otherwise for
             # back-compat with rows that pre-date the ramp columns.
-            has_ramp = (
-                fc.peak_index_months is not None
-                or fc.params.get("peak_index_months") is not None
+            has_ramp = eval_params.get("peak_index_months") is not None and (
+                eval_params.get("qo") is not None
             )
-            anchor_date = first_prod_date if has_ramp else fc.peak_month_date
-            r = _evaluate_rate(fc.model_type.value, fc.params, t)
+            if has_ramp:
+                anchor_date = first_prod_date
+            else:
+                # Use the global row's peak when available; the override
+                # itself doesn't carry a peak_month_date.
+                anchor_date = fc.peak_month_date if fc else first_prod_date
+            r = _evaluate_rate(eval_model_type, eval_params, t)
             cum_running = 0.0
             for i in range(n_pts):
                 rate_i = float(r[i])
@@ -964,7 +1164,9 @@ def well_curves(
 
 
 @router.post("/preview", response_model=PreviewResponse)
-def forecast_preview(req: PreviewRequest) -> PreviewResponse:
+def forecast_preview(
+    req: PreviewRequest, session: Session = Depends(get_session)
+) -> PreviewResponse:
     # Sample from t=0 (peak boundary, rate=qi) through the horizon so
     # rate[0] sits exactly at the peak and cum[0] is 0 — same convention
     # as /api/forecasts/{api10}/curves. The previous version sampled
@@ -989,9 +1191,70 @@ def forecast_preview(req: PreviewRequest) -> PreviewResponse:
         horizon_years=req.horizon_years,
         economic_limit=req.economic_limit,
     )
+
+    # Method-1 displayed EUR for the modal's stat row. Requires both
+    # api10 and stream so we can resolve the well's first-prod anchor
+    # and the per-stream actual cum. When either is omitted (legacy
+    # callers), the response carries only ``eur`` and the modal
+    # falls back to that.
+    eur_displayed: float | None = None
+    eur_remaining: float | None = None
+    actual_cum_val: float | None = None
+    if req.api10 and req.stream:
+        well = session.get(Well, req.api10)
+        vol_attr = _STREAM_VOL_ATTR[req.stream]
+        agg = session.execute(
+            select(
+                func.sum(getattr(ProductionMonthly, vol_attr)),
+                func.max(ProductionMonthly.prod_date),
+            ).where(ProductionMonthly.api10 == req.api10)
+        ).one()
+        actual_cum_val = float(agg[0]) if agg[0] is not None else None
+        last_prod_date: date | None = agg[1]
+        # Anchor: with ramp params in the previewed param set, model
+        # t=0 is at first_prod; else at the saved forecast's peak.
+        has_ramp = req.params.get("peak_index_months") is not None and req.params.get("qo") is not None
+        anchor: date | None = None
+        if has_ramp and well is not None:
+            anchor = well.first_prod_date
+        else:
+            # Fall back to the saved forecast row's peak_month_date so
+            # legacy (no-ramp) previews stay anchored consistently
+            # with the rendered chart.
+            fc_row = session.execute(
+                select(Forecast).where(
+                    Forecast.api10 == req.api10, Forecast.stream == req.stream
+                )
+            ).scalar_one_or_none()
+            anchor = fc_row.peak_month_date if fc_row is not None else None
+        if anchor is not None and last_prod_date is not None and last_prod_date >= anchor:
+            t_years = _months_between(anchor, last_prod_date) / 12.0
+            qi = req.params.get("qi"); Di = req.params.get("Di")
+            b = req.params.get("b"); Df = req.params.get("Df")
+            if qi is not None and Di is not None and b is not None and Df is not None:
+                model_cum_endhist = model_cum_at_t(
+                    qo=req.params.get("qo"),
+                    peak_index_months=(
+                        int(req.params["peak_index_months"])
+                        if req.params.get("peak_index_months") is not None
+                        else None
+                    ),
+                    qi=float(qi), Di=float(Di), b=float(b), Df=float(Df),
+                    t_years=t_years,
+                )
+                eur_remaining = max(0.0, eur - model_cum_endhist)
+                eur_displayed = float(actual_cum_val or 0.0) + eur_remaining
+        if eur_displayed is None:
+            # Insufficient anchor / params → fall back to model EUR.
+            eur_remaining = eur
+            eur_displayed = eur
+
     return PreviewResponse(
         t_years=t.tolist(),
         rate=rates_arr.tolist(),
         cum=cum.tolist(),
         eur=eur,
+        eur_displayed=eur_displayed,
+        eur_remaining=eur_remaining,
+        actual_cum=actual_cum_val,
     )

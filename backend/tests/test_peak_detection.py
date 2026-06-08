@@ -13,7 +13,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.forecasting.peak_detection import detect_oil_peak
+from app.forecasting.peak_detection import detect_oil_peak, detect_peak
 
 
 def _make(rates: list[float], start: date = date(2023, 1, 1)) -> pd.DataFrame:
@@ -90,6 +90,46 @@ def test_ramp_up_month_zero_is_not_picked_as_peak() -> None:
     assert peak is not None
     assert peak.peak_rate == pytest.approx(789)
     assert peak.peak_index in (1, 2)  # one of the two genuinely-high months
+
+
+def test_detect_peak_on_water_column_catches_early_hard_peak() -> None:
+    """Permian flowback: water peaks hard in month 0-1 and declines fast,
+    while oil ramps to its peak around month 3-4. Detecting on the water
+    column must land the water peak early, not inherit oil's later peak.
+    """
+    months = [date(2023, i + 1, 1) for i in range(12)]
+    # Oil ramps to a month-3 peak; water spikes at month 1 then craters.
+    oil = [200, 450, 700, 900, 820, 700, 600, 520, 460, 410, 370, 340]
+    water = [1500, 4200, 2600, 1500, 1100, 900, 780, 700, 640, 600, 560, 530]
+    df = pd.DataFrame(
+        {"prod_date": months, "rate_calday_bopd": oil, "rate_calday_bwpd": water}
+    )
+
+    oil_peak = detect_peak(df, rate_column="rate_calday_bopd")
+    water_peak = detect_peak(df, rate_column="rate_calday_bwpd")
+    assert oil_peak is not None and water_peak is not None
+    # Oil peaks at index 3 (900); water at index 1 (4200) — months apart.
+    assert oil_peak.peak_index == 3
+    assert water_peak.peak_index == 1
+    assert water_peak.peak_rate == pytest.approx(4200)
+
+
+def test_detect_peak_water_peaking_at_month_zero() -> None:
+    """Water that peaks in the very first month (no ramp-up): index 0 must
+    win on the water column since it carries the highest actual rate."""
+    months = [date(2023, 1 + i, 1) for i in range(8)]
+    water = [5000, 3000, 2000, 1400, 1100, 900, 800, 720]
+    df = pd.DataFrame({"prod_date": months, "rate_calday_bwpd": water})
+    peak = detect_peak(df, rate_column="rate_calday_bwpd")
+    assert peak is not None
+    assert peak.peak_index == 0
+    assert peak.peak_rate == pytest.approx(5000)
+
+
+def test_detect_oil_peak_is_detect_peak_with_oil_default() -> None:
+    rates = [200, 600, 800, 750, 600, 500, 400, 300]
+    df = _make(rates)
+    assert detect_oil_peak(df) == detect_peak(df, rate_column="rate_calday_bopd")
 
 
 def test_unsorted_input_is_handled() -> None:

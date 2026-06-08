@@ -2,14 +2,24 @@
 
 Rule (from the brief):
 
-    Compute a 3-month centered rolling max on rate_calday_bopd. The peak
-    month is the month where that rolling max is highest, restricted to
-    the first 12 months of production. A single late-life rate spike (e.g.
-    flush production from an offset frac in month 18) must NOT win.
+    Compute a 3-month centered rolling max on the stream's calday rate.
+    The peak month is the month where that rolling max is highest,
+    restricted to the first 12 months of production. A single late-life
+    rate spike (e.g. flush production from an offset frac in month 18)
+    must NOT win.
 
-    Gas and water streams inherit oil's peak month — we don't detect a
-    separate peak per stream, because the streams need to share a common
-    t=0 for forecasts and type-curve aggregation to be coherent.
+    Gas inherits oil's peak month — we don't detect a separate gas peak,
+    because gas tracks oil closely enough that a shared t=0 keeps the
+    forecasts and TC aggregation coherent. WATER, however, gets its own
+    peak: Permian flowback water peaks hard in month 0-1 and declines
+    immediately, months before oil ramps to its peak. Anchoring water on
+    the oil peak reads a low qi (the water peak has already decayed) and
+    a shallow Di (the steep early decline is upstream of the fit slice).
+    See app.forecasting.orchestrator.detect_stream_peaks for the wiring.
+
+    ``detect_peak`` is stream-agnostic — pass the stream's rate column.
+    ``detect_oil_peak`` is the oil-defaulted wrapper kept for callers
+    that only ever look at oil (TC P50 fit, cohort history classifier).
 """
 
 from __future__ import annotations
@@ -30,7 +40,7 @@ class PeakResult:
     peak_index: int   # 0-based index into the sorted monthly series
 
 
-def detect_oil_peak(
+def detect_peak(
     monthly_df: pd.DataFrame,
     *,
     rate_column: str = "rate_calday_bopd",
@@ -38,11 +48,12 @@ def detect_oil_peak(
     window_months: int = PEAK_DETECTION_WINDOW_MONTHS,
     limit_months: int = PEAK_DETECTION_WINDOW_LIMIT_MONTHS,
 ) -> PeakResult | None:
-    """Identify the peak production month from the oil rate series.
+    """Identify the peak production month from a stream's rate series.
 
-    Returns None for empty or all-null series. Caller is responsible for
-    passing a frame whose `rate_column` is oil (per the brief — gas and
-    water inherit oil's peak).
+    Stream-agnostic: pass ``rate_column`` for the stream you want
+    (``rate_calday_bopd`` / ``_mcfd`` / ``_bwpd``). Returns None for an
+    empty frame, a missing column, or an all-null series. The returned
+    ``peak_rate`` is in the units of ``rate_column``.
     """
     if monthly_df.empty or rate_column not in monthly_df.columns:
         return None
@@ -75,4 +86,25 @@ def detect_oil_peak(
         peak_month_date=peak_date,
         peak_rate=float(series.iloc[peak_idx]),
         peak_index=peak_idx,
+    )
+
+
+def detect_oil_peak(
+    monthly_df: pd.DataFrame,
+    *,
+    rate_column: str = "rate_calday_bopd",
+    date_column: str = "prod_date",
+    window_months: int = PEAK_DETECTION_WINDOW_MONTHS,
+    limit_months: int = PEAK_DETECTION_WINDOW_LIMIT_MONTHS,
+) -> PeakResult | None:
+    """Oil-defaulted ``detect_peak``. Kept as the entry point for callers
+    that are oil-only by design (TC P50 series fit, cohort history
+    classification). The ``rate_column`` kwarg is preserved so existing
+    callers that passed a non-oil column keep working unchanged."""
+    return detect_peak(
+        monthly_df,
+        rate_column=rate_column,
+        date_column=date_column,
+        window_months=window_months,
+        limit_months=limit_months,
     )

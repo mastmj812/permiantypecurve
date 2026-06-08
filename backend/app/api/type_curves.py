@@ -216,16 +216,24 @@ class WorkspaceWell(BaseModel):
 class OverrideWriteRequest(BaseModel):
     """Body for PUT /type-curves/{id}/overrides/{api10}/{stream}.
 
-    Minimal surface: the user supplies the four Arps params (mirrors
-    the per-well ``patch_forecast`` body). Server fills in the rest
-    (eur, model_type, di_initial, etc.) so the override payload shape
-    matches what the resolver returns for a global forecast.
+    Surface: the four Arps params plus the optional ramp prefix (qo,
+    peak_index_months). Server fills in the rest (eur, model_type,
+    di_initial, etc.) so the override payload shape matches what the
+    resolver returns for a global forecast.
+
+    Ramp params are optional for back-compat with pre-ramp overrides
+    and for callers that only want to tweak Arps. When omitted, the
+    saved override is pure Arps anchored at peak — which is fine for
+    rows that never had a ramp; for ramp-aware fits, the modal sends
+    them so the override preserves the linear-ramp prefix.
     """
 
     qi: float
     Di: float
     b: float
     Df: float
+    qo: float | None = None
+    peak_index_months: int | None = None
 
 
 class MembershipPatch(BaseModel):
@@ -1239,21 +1247,38 @@ def _resolve_stream(value: str) -> Stream:
 
 
 def _override_payload_from_params(
-    *, qi: float, Di: float, b: float, Df: float
+    *,
+    qi: float,
+    Di: float,
+    b: float,
+    Df: float,
+    qo: float | None = None,
+    peak_index_months: int | None = None,
 ) -> dict[str, Any]:
-    """Project a (qi, Di, b, Df) tweak into the workspace-payload shape.
+    """Project a (qi, Di, b, Df, qo?, peak_index_months?) tweak into
+    the workspace-payload shape.
 
     Mirrors the structure ``ResolvedForecast.payload`` carries when
     sourced from a global forecast row — so override and global look
     interchangeable to the workspace renderer and to Phase 3's
-    economics export. EUR uses ``compute_eur`` with no economic-limit
-    cutoff (this tool is technical-only — see memory note).
+    economics export. EUR uses ``compute_total_eur`` (ramp + Arps over
+    50 yr) when the ramp prefix is present, falling back to plain
+    ``compute_eur`` otherwise. No economic-limit cutoff (this tool
+    is technical-only — see memory note).
     """
     from app.forecasting.eur import compute_eur
     from app.forecasting.metrics import effective_decline_first_year
+    from app.forecasting.ramp_arps import compute_total_eur
 
-    params = {"qi": qi, "Di": Di, "b": b, "Df": Df}
-    eur = compute_eur("modified_hyperbolic", params, economic_limit=0.0)
+    params: dict[str, float | int] = {"qi": qi, "Di": Di, "b": b, "Df": Df}
+    if qo is not None and peak_index_months is not None and peak_index_months > 0:
+        params["qo"] = qo
+        params["peak_index_months"] = int(peak_index_months)
+        eur = compute_total_eur(
+            model_type="modified_hyperbolic", params=params, economic_limit=0.0
+        )
+    else:
+        eur = compute_eur("modified_hyperbolic", params, economic_limit=0.0)
     di_eff = effective_decline_first_year(Di, b)
     return {
         "params": params,
@@ -1263,6 +1288,10 @@ def _override_payload_from_params(
         "di_effective": di_eff,
         "b": b,
         "df_terminal": Df,
+        "qo": qo,
+        "peak_index_months": (
+            int(peak_index_months) if peak_index_months is not None else None
+        ),
         "eur": eur,
         "peak_rate": None,
         "peak_month_date": None,
@@ -1303,7 +1332,8 @@ def put_forecast_override(
         )
 
     payload = _override_payload_from_params(
-        qi=body.qi, Di=body.Di, b=body.b, Df=body.Df
+        qi=body.qi, Di=body.Di, b=body.b, Df=body.Df,
+        qo=body.qo, peak_index_months=body.peak_index_months,
     )
     overrides = dict(tc.forecast_overrides or {})
     well_block = dict(overrides.get(api10) or {})

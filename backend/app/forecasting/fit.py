@@ -92,16 +92,23 @@ def detect_at_bound(
     di: float,
     b: float | None,
     peak_rate: float,
+    di_hi: float = DI_NOMINAL_HI_PER_YEAR,
 ) -> tuple[bool, str | None]:
-    """Return (any_at_bound, comma-joined note). Caller decides UI treatment."""
+    """Return (any_at_bound, comma-joined note). Caller decides UI treatment.
+
+    ``di_hi`` is the nominal-Di upper bound the fit used for this stream —
+    pass the water cap for water rows so the badge reflects the real cap
+    (12.0) rather than the oil-tuned default (4.0). See ``_stream_di_hi``.
+    The Di lower bound and the qi/b bounds are stream-independent.
+    """
     notes: list[str] = []
     qi_max = max(10.0 * peak_rate, 1.0)
     if qi > 0 and qi_max > 0 and (qi_max - qi) / qi_max < BOUND_TOLERANCE_PCT:
         notes.append(f"qi at upper bound ({qi_max:.0f})")
     if di < DI_NOMINAL_LO_PER_YEAR * (1 + BOUND_TOLERANCE_PCT):
         notes.append(f"Di at lower bound ({DI_NOMINAL_LO_PER_YEAR:.1f})")
-    if di > DI_NOMINAL_HI_PER_YEAR * (1 - BOUND_TOLERANCE_PCT):
-        notes.append(f"Di at upper bound ({DI_NOMINAL_HI_PER_YEAR:.1f})")
+    if di > di_hi * (1 - BOUND_TOLERANCE_PCT):
+        notes.append(f"Di at upper bound ({di_hi:.1f})")
     if b is not None:
         if b < B_LO + BOUND_TOLERANCE_PCT:
             notes.append(f"b at lower bound ({B_LO:.1f})")
@@ -271,17 +278,21 @@ def _rate_callable(
 
 
 def _bounds_and_p0(
-    model_type: str, peak_rate: float
+    model_type: str, peak_rate: float, *, di_hi: float = DI_NOMINAL_HI_PER_YEAR
 ) -> tuple[tuple[list[float], list[float]], list[float]]:
     """Return ((lower, upper), initial-guess) for scipy.optimize.curve_fit.
 
     All bounds and starting values are Permian-typical (see module-level
     constants). Hitting a bound during the fit is a signal that the data
     is underdetermined — the orchestrator can flag it on the row.
+
+    ``di_hi`` overrides the nominal-Di upper bound. Oil/gas use the
+    default 4.0; water passes a higher cap (it craters faster early) —
+    see ``_stream_di_hi`` / ForecastConfig.water_di_nominal_hi_per_year.
     """
     qi_max = max(10.0 * peak_rate, 1.0)
     qi_lo, qi_hi = 0.0, qi_max
-    di_lo, di_hi = DI_NOMINAL_LO_PER_YEAR, DI_NOMINAL_HI_PER_YEAR
+    di_lo, di_hi = DI_NOMINAL_LO_PER_YEAR, di_hi
     b_lo, b_hi = B_LO, B_HI
 
     # Clamp starting qi to the data so curve_fit doesn't start outside bounds.
@@ -295,6 +306,14 @@ def _bounds_and_p0(
             [qi_p0, DI_NOMINAL_P0, B_P0],
         )
     raise ValueError(f"unsupported model_type: {model_type}")
+
+
+def _stream_di_hi(stream: str, config: ForecastConfig) -> float:
+    """Nominal-Di upper bound for the stream. Water uses its own (higher)
+    cap from config; oil and gas use the oil-tuned module default."""
+    if stream == "water":
+        return config.water_di_nominal_hi_per_year
+    return DI_NOMINAL_HI_PER_YEAR
 
 
 def _params_to_dict(
@@ -402,7 +421,9 @@ def fit_rate_cum(
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
-    bounds, p0 = _bounds_and_p0(model_type, peak.peak_rate)
+    bounds, p0 = _bounds_and_p0(
+        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg)
+    )
 
     popt, predicted = _fit_core(
         df, target_col="cum_vol", func=func, bounds=bounds, p0=p0
@@ -442,7 +463,9 @@ def fit_rate_time(
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)
-    bounds, p0 = _bounds_and_p0(model_type, peak.peak_rate)
+    bounds, p0 = _bounds_and_p0(
+        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg)
+    )
 
     popt, predicted = _fit_core(
         df, target_col="rate", func=func, bounds=bounds, p0=p0
@@ -470,6 +493,15 @@ def fit_rate_time(
 # is a better engineer-defensible default than a cum fit pinned at 5.0.
 _FALLBACK_MIN_R2: float = 0.3
 
+# Water-only fallback trigger. When the cum fit's qi lands below this
+# fraction of the OBSERVED peak rate, the cumulative integral has
+# smoothed away a hard early water peak (the cum curve is dominated by
+# the long flat tail, so a low-qi/low-Di solution scores a high cum R²
+# while badly under-reading the peak and the early decline). Rate-vs-time
+# weights the peak directly and recovers it. 0.6 = "qi lost more than 40%
+# of the peak" — well clear of normal cum-vs-raw smoothing.
+_WATER_QI_UNDERFIT_FRACTION: float = 0.6
+
 
 def _di_at_bound(di: float | None) -> bool:
     if di is None:
@@ -488,7 +520,7 @@ def fit_with_fallback(
     stream: str = "oil",
     config: ForecastConfig | None = None,
 ) -> ForecastResult:
-    """Default `rate_cum` fit with a `rate_time` retry on Di-at-bound.
+    """Default `rate_cum` fit with a `rate_time` retry on two triggers.
 
     Why: `fit_rate_cum` integrates the rate model to a closed-form
     cumulative, then NLS-fits cum-vs-time. The integral has very low
@@ -500,15 +532,26 @@ def fit_with_fallback(
     but more constraining on b, so it can produce a different
     (Di, b) pair that doesn't pin.
 
-    Trigger: cum-fit's Di hits the lo/hi bound. Other bound hits
-    (qi-at-upper, b-at-bound) are not retried — leave the engineer the
-    original flag.
+    Triggers (either fires the retry):
 
-    Accept fallback when: rate-time Di is NOT at a bound AND
-    rate-time R² ≥ `_FALLBACK_MIN_R2`.
+      1. **Di-at-bound** (all streams) — cum-fit's Di hits the lo/hi
+         bound. Accept the fallback when its Di is NOT at a bound AND
+         its R² ≥ `_FALLBACK_MIN_R2` (don't trade one pinned fit for
+         another).
 
-    The adopted result is tagged `fit_method="rate_time_fallback"` so
-    the engineer can see in the grid which wells were rescued.
+      2. **Water qi-underfit** (water only) — cum-fit qi lands below
+         `_WATER_QI_UNDERFIT_FRACTION` of the observed peak rate. This
+         is the hard-early-water-peak case: the cum integral smooths the
+         peak away, so qi/Di come out far too low even though cum R² is
+         high. Accept the fallback when it recovers a materially higher
+         qi AND clears `_FALLBACK_MIN_R2`. We do NOT reject on Di-at-
+         bound here — steep early water legitimately pins the (raised)
+         water Di cap, and that's the right answer, not a degeneracy.
+
+    Other bound hits (qi-at-upper, b-at-bound) are not retried — leave
+    the engineer the original flag. The adopted result is tagged
+    `fit_method="rate_time_fallback"` so the engineer can see in the
+    grid which wells were rescued.
     """
     primary = fit_rate_cum(
         monthly_df,
@@ -517,7 +560,16 @@ def fit_with_fallback(
         stream=stream,
         config=config,
     )
-    if not _di_at_bound(primary.di_initial):
+    di_pinned = _di_at_bound(primary.di_initial)
+    # Water-only: cum qi well below the observed peak means the integral
+    # smoothed away a hard early decline. peak.peak_rate is the raw
+    # observed peak; primary.qi is the fitted cum qi.
+    qi_underfit = (
+        stream == "water"
+        and peak.peak_rate > 0
+        and primary.qi < _WATER_QI_UNDERFIT_FRACTION * peak.peak_rate
+    )
+    if not (di_pinned or qi_underfit):
         return primary
     try:
         fallback = fit_rate_time(
@@ -535,20 +587,40 @@ def fit_with_fallback(
             primary_di=primary.di_initial,
         )
         return primary
-    if _di_at_bound(fallback.di_initial) or fallback.fit_r2 < _FALLBACK_MIN_R2:
+    if fallback.fit_r2 < _FALLBACK_MIN_R2:
         return primary
+
+    if qi_underfit:
+        # Adopt only if rate-time actually recovers more of the peak.
+        # Steep water pins Di at the (raised) cap — that's expected, so
+        # don't reject on Di-at-bound the way the di_pinned path does.
+        if fallback.qi <= primary.qi:
+            return primary
+        note = (
+            f"water cum qi={primary.qi:.0f} under peak "
+            f"{peak.peak_rate:.0f}; rate-time qi={fallback.qi:.0f}, "
+            f"Di={fallback.di_initial:.2f}, "
+            f"b={(fallback.b if fallback.b is not None else float('nan')):.2f}"
+        )
+    else:
+        # Di-at-bound trigger: don't swap one pinned fit for another.
+        if _di_at_bound(fallback.di_initial):
+            return primary
+        note = (
+            f"cum fit pinned Di={primary.di_initial:.2f}; "
+            f"rate-time fallback Di={fallback.di_initial:.2f}, "
+            f"b={(fallback.b if fallback.b is not None else float('nan')):.2f}"
+        )
     log.info(
         "fallback_adopted",
         stream=stream,
+        trigger="qi_underfit" if qi_underfit else "di_at_bound",
+        primary_qi=primary.qi,
         primary_di=primary.di_initial,
+        fallback_qi=fallback.qi,
         fallback_di=fallback.di_initial,
         fallback_b=fallback.b,
         fallback_r2=fallback.fit_r2,
-    )
-    note = (
-        f"cum fit pinned Di={primary.di_initial:.2f}; "
-        f"rate-time fallback Di={fallback.di_initial:.2f}, "
-        f"b={(fallback.b if fallback.b is not None else float('nan')):.2f}"
     )
     return replace(
         fallback,
