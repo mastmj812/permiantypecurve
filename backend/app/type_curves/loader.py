@@ -36,8 +36,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Forecast, ProductionMonthly, Stream, TypeCurve, Well
+from app.forecasting.peak_detection import onset_index_from_rates
 from app.forecasting.ramp_arps import evaluate_well_rate
+from app.forecasting.types import (
+    DEFAULT_DOWNTIME_FLOOR_BOPD,
+    DEFAULT_DOWNTIME_FLOOR_BWPD,
+    DEFAULT_DOWNTIME_FLOOR_MCFD,
+)
 from app.type_curves.aggregate import AlignmentMethod, WellSeries
+
+# Per-stream onset floor for the observed overlay's leading-zero trim
+# under first_prod alignment. Mirrors ForecastConfig.downtime_floor_*.
+_ONSET_FLOOR: dict[str, float] = {
+    "oil": DEFAULT_DOWNTIME_FLOOR_BOPD,
+    "gas": DEFAULT_DOWNTIME_FLOOR_MCFD,
+    "water": DEFAULT_DOWNTIME_FLOOR_BWPD,
+}
 
 
 def _peak_month_by_api10(
@@ -154,11 +168,13 @@ def load_well_series(
     before forecasting it. For `first_prod_month` alignment, wells also
     need a non-null `first_prod_date` in the wells table.
 
-    Under `peak_month` alignment each stream is sliced from its OWN peak
-    (oil/gas from the oil peak, water from the water peak), so the
-    observed overlay lines up with the forecast bands, which are already
-    per-stream-peak-anchored. This makes the per-stream arrays ragged in
-    length; the aggregator sizes its panel to the longest stream.
+    Each stream is sliced from its OWN t=0 so the observed overlay lines
+    up with the per-stream-anchored forecast bands: under `peak_month`
+    from its own peak (oil/gas from the oil peak, water from the water
+    peak); under `first_prod_month` from its own ONSET (first producing
+    month), which trims leading zero / sub-floor months so a delayed-onset
+    stream re-zeros to its onset. This makes the per-stream arrays ragged
+    in length; the aggregator sizes its panel to the longest stream.
     """
     api10_list = list(api10s)
     oil_peaks = _peak_month_by_api10(session, api10_list, Stream.OIL)
@@ -192,16 +208,28 @@ def load_well_series(
         if not prod:
             continue
         prod_dates = [r[0] for r in prod]
-        oil_off = _first_index_on_or_after(prod_dates, starts["oil"])
-        gas_off = _first_index_on_or_after(prod_dates, starts["gas"])
-        wat_off = _first_index_on_or_after(prod_dates, starts["water"])
+        oil_full = [r[1] for r in prod]
+        gas_full = [r[2] for r in prod]
+        wat_full = [r[3] for r in prod]
+        if alignment == "first_prod_month":
+            # Trim each stream to its ONSET (first producing month) so the
+            # observed overlay matches the onset-anchored forecast bands —
+            # a delayed-onset stream (water with leading zeros) re-zeros to
+            # its onset instead of carrying phantom leading-zero months.
+            oil_off = onset_index_from_rates(oil_full, floor=_ONSET_FLOOR["oil"])
+            gas_off = onset_index_from_rates(gas_full, floor=_ONSET_FLOOR["gas"])
+            wat_off = onset_index_from_rates(wat_full, floor=_ONSET_FLOOR["water"])
+        else:  # peak_month — each stream sliced from its own peak
+            oil_off = _first_index_on_or_after(prod_dates, starts["oil"])
+            gas_off = _first_index_on_or_after(prod_dates, starts["gas"])
+            wat_off = _first_index_on_or_after(prod_dates, starts["water"])
         out.append(WellSeries(
             api10=api10,
             lateral_ft=lateral_ft,
             proppant_lbs=proppant_lbs,
-            oil_rates=[r[1] for r in prod[oil_off:]],
-            gas_rates=[r[2] for r in prod[gas_off:]],
-            water_rates=[r[3] for r in prod[wat_off:]],
+            oil_rates=oil_full[oil_off:],
+            gas_rates=gas_full[gas_off:],
+            water_rates=wat_full[wat_off:],
         ))
     return out
 

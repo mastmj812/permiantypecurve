@@ -60,6 +60,7 @@ from app.forecasting.cohort import (
 )
 from app.forecasting.eur import compute_eur
 from app.forecasting.fit import (
+    STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_RATE_COLUMN,
     STREAM_VOLUME_COLUMN,
     _flag_downtime,
@@ -75,11 +76,12 @@ from app.forecasting.models import (
 )
 from app.forecasting.orchestrator import (
     STREAMS,
+    _stream_rate_at_index,
     detect_stream_peaks,
     forecast_wells,
-    stream_rate_at_first_prod,
     stream_rate_at_peak,
 )
+from app.forecasting.peak_detection import detect_onset
 from app.forecasting.ramp_arps import (
     compute_total_eur,
     evaluate_well_rate,
@@ -637,14 +639,21 @@ def transfer_cohort_params(
             # match what a full fit would have anchored.
             stream_peak = peaks[stream_str] or peaks["oil"]
             qi = stream_rate_at_peak(monthly, stream_peak, stream_str)
-            # Ramp prefix is well-specific even on a cohort transfer:
-            # qo comes from the short well's own first-prod observation
-            # and peak_index_months from its own detected peak. Only
-            # Di/b are inherited from the long-history cohort median.
-            qo = stream_rate_at_first_prod(monthly, stream_str)
-            peak_index_months = (
-                int(stream_peak.peak_index) if stream_peak.peak_index > 0 else None
+            # Ramp prefix is well-specific even on a cohort transfer, and
+            # anchored on the stream's ONSET (first producing month) — qo
+            # is the onset rate and peak_index_months is peak-minus-onset,
+            # so leading sub-floor months don't inflate the ramp / TC
+            # timing. Only Di/b are inherited from the cohort median.
+            floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream_str])
+            onset_index = min(
+                detect_onset(
+                    monthly, rate_column=STREAM_RATE_COLUMN[stream_str], floor=floor
+                ),
+                int(stream_peak.peak_index),
             )
+            qo = _stream_rate_at_index(monthly, onset_index, stream_str)
+            peak_rel = int(stream_peak.peak_index) - onset_index
+            peak_index_months = peak_rel if peak_rel > 0 else None
             params: dict[str, Any] = {
                 "qi": qi,
                 "Di": cohort_di,
@@ -655,6 +664,8 @@ def transfer_cohort_params(
                 params["qo"] = qo
             if peak_index_months is not None:
                 params["peak_index_months"] = peak_index_months
+            if onset_index > 0:
+                params["onset_index_months"] = onset_index
             econ_limit = getattr(cfg, _STREAM_ECON_LIMIT_FIELD[stream_str])
             eur = compute_total_eur(
                 model_type="modified_hyperbolic",
@@ -751,6 +762,12 @@ def _months_between(anchor: date, last: date) -> float:
     return float((last.year - anchor.year) * 12 + (last.month - anchor.month) + 1)
 
 
+def _add_months(d: date, n: int) -> date:
+    """First-of-month ``n`` months after ``d`` (n may be 0)."""
+    m = d.month - 1 + n
+    return date(d.year + m // 12, m % 12 + 1, 1)
+
+
 def _apply_method_one(
     row: "ForecastRow",
     f: Forecast,
@@ -770,13 +787,23 @@ def _apply_method_one(
         row.eur_remaining = None
         row.eur_displayed = None
         return
-    # Anchor: with ramp params, model t=0 is at first_prod; without,
-    # at peak_month (the historical anchor for pre-migration rows).
+    # Anchor: with ramp params, model t=0 is at the stream's ONSET
+    # (first_prod + onset_index_months); without, at peak_month (the
+    # historical anchor for pre-migration rows). onset is 0 for streams
+    # with no leading sub-floor months, so this reduces to first_prod.
     has_ramp = (
         f.peak_index_months is not None
         or (f.params or {}).get("peak_index_months") is not None
     )
-    anchor = well_first_prod_date if has_ramp else f.peak_month_date
+    onset_m = int((f.params or {}).get("onset_index_months") or 0)
+    if has_ramp:
+        anchor = (
+            _add_months(well_first_prod_date, onset_m)
+            if well_first_prod_date is not None
+            else None
+        )
+    else:
+        anchor = f.peak_month_date
     if anchor is None or last_prod_date is None or last_prod_date < anchor:
         # No history under this fit → "remaining" is the full EUR;
         # displayed equals model EUR (no actual yet to layer in).
@@ -1124,14 +1151,18 @@ def well_curves(
         if (fc and fc.peak_month_date is not None) or override_block:
             n_pts = int(horizon_years * 12)
             t = np.arange(n_pts, dtype=float) / 12.0
-            # Anchor at first_prod when the row has ramp params (the
-            # post-migration / re-fit case); peak_month otherwise for
-            # back-compat with rows that pre-date the ramp columns.
+            # Anchor at the stream's ONSET (first_prod + onset_index_months)
+            # when the row has ramp params — for a delayed-onset stream
+            # (e.g. water with leading zeros) the forecast then lines up
+            # with the real history instead of slow-ramping from month 0.
+            # onset defaults to 0, so this reduces to first_prod. peak_month
+            # otherwise for back-compat with pre-ramp rows.
             has_ramp = eval_params.get("peak_index_months") is not None and (
                 eval_params.get("qo") is not None
             )
             if has_ramp:
-                anchor_date = first_prod_date
+                onset_m = int(eval_params.get("onset_index_months") or 0)
+                anchor_date = _add_months(first_prod_date, onset_m)
             else:
                 # Use the global row's peak when available; the override
                 # itself doesn't carry a peak_month_date.
@@ -1253,20 +1284,27 @@ def forecast_preview(
         actual_cum_val = float(agg[0]) if agg[0] is not None else None
         last_prod_date: date | None = agg[1]
         # Anchor: with ramp params in the previewed param set, model
-        # t=0 is at first_prod; else at the saved forecast's peak.
+        # t=0 is at the stream's onset (first_prod + onset_index_months);
+        # else at the saved forecast's peak. The editable param set the
+        # modal posts doesn't carry onset (it's a fixed property of the
+        # data), so fall back to the saved row's onset. Defaults to 0.
         has_ramp = req.params.get("peak_index_months") is not None and req.params.get("qo") is not None
+        fc_row = session.execute(
+            select(Forecast).where(
+                Forecast.api10 == req.api10, Forecast.stream == req.stream
+            )
+        ).scalar_one_or_none()
+        req_onset = req.params.get("onset_index_months")
+        onset_m = int(
+            req_onset
+            if req_onset is not None
+            else ((fc_row.params or {}).get("onset_index_months") or 0 if fc_row else 0)
+        )
         anchor: date | None = None
-        if has_ramp and well is not None:
-            anchor = well.first_prod_date
+        if has_ramp and well is not None and well.first_prod_date is not None:
+            anchor = _add_months(well.first_prod_date, onset_m)
         else:
-            # Fall back to the saved forecast row's peak_month_date so
-            # legacy (no-ramp) previews stay anchored consistently
-            # with the rendered chart.
-            fc_row = session.execute(
-                select(Forecast).where(
-                    Forecast.api10 == req.api10, Forecast.stream == req.stream
-                )
-            ).scalar_one_or_none()
+            # Legacy (no-ramp) previews anchor at the saved peak month.
             anchor = fc_row.peak_month_date if fc_row is not None else None
         if anchor is not None and last_prod_date is not None and last_prod_date >= anchor:
             t_years = _months_between(anchor, last_prod_date) / 12.0

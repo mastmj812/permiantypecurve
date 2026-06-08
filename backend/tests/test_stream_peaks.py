@@ -12,7 +12,8 @@ from datetime import date
 
 import pandas as pd
 
-from app.forecasting.orchestrator import detect_stream_peaks
+from app.forecasting.orchestrator import _stream_rate_at_index, detect_stream_peaks
+from app.forecasting.peak_detection import detect_onset, detect_peak
 
 
 def _frame(oil: list[float], water: list[float]) -> pd.DataFrame:
@@ -56,6 +57,25 @@ def test_water_falls_back_to_oil_peak_when_no_water_production() -> None:
     # All-zero water has no real peak; water falls back to the oil peak
     # so the stream still gets an anchor rather than being dropped.
     assert peaks["water"] is peaks["oil"]
+
+
+def test_onset_transform_matches_motivating_well() -> None:
+    # Reproduce the orchestrator's onset anchoring on the real well
+    # 4249534197 water series: 5 leading zeros, peak at idx 8 (1569).
+    # Expect onset=5, qo=onset rate (746), peak_index_months = 8-5 = 3.
+    water = [0, 0, 0, 0, 0, 746, 1231, 1012, 1569, 927, 686, 658]
+    oil = [200, 300, 400, 464, 450, 430, 410, 390, 370, 350, 330, 310]
+    df = _frame(oil, water)
+
+    wp = detect_peak(df, rate_column="rate_calday_bwpd")
+    onset = detect_onset(df, rate_column="rate_calday_bwpd", floor=10.0)
+    assert wp is not None and wp.peak_index == 8
+    assert onset == 5
+    peak_index_months = wp.peak_index - onset
+    assert peak_index_months == 3
+    assert _stream_rate_at_index(df, onset, "water") == 746
+    # No leading zeros on oil → onset 0, ramp anchored at first prod.
+    assert detect_onset(df, rate_column="rate_calday_bopd", floor=5.0) == 0
 
 
 def test_no_oil_peak_yields_none_for_oil_and_gas() -> None:

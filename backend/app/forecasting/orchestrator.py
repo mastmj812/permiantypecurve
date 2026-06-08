@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Forecast, ProductionMonthly, Stream
 from app.forecasting.fit import (
+    STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_ECON_LIMIT_FIELD,
     fit_rate_cum,
     fit_rate_time,
@@ -34,6 +35,7 @@ from app.forecasting.fit import (
 from app.forecasting.peak_detection import (
     PeakResult,
     detect_oil_peak,
+    detect_onset,
     detect_peak,
 )
 from app.forecasting.ramp_arps import compute_total_eur
@@ -174,7 +176,11 @@ def forecast_well(
     """Fit all three streams for a single well.
 
     Oil and gas anchor on the oil peak; water anchors on its own peak
-    (see ``detect_stream_peaks``). Returns a dict {stream: ForecastResult
+    (see ``detect_stream_peaks``). Each stream's ramp prefix is anchored
+    on its own ONSET (first producing month) rather than the well's
+    first-prod, so leading zero / sub-floor months don't inflate the ramp
+    length or the type-curve timing (``onset_index_months`` records the
+    offset; see ``detect_onset``). Returns a dict {stream: ForecastResult
     or None on fit failure}. When `persist=True` (default), each
     successful result is written to the forecasts table via upsert.
     """
@@ -209,7 +215,7 @@ def forecast_well(
         # peak_index_months (the ramp length) is therefore per-stream:
         # oil/gas measure from the oil peak, water from the water peak.
         peak = peaks[stream] or oil_peak
-        peak_index_months = int(peak.peak_index)
+        peak_index_abs = int(peak.peak_index)
         try:
             result = fit_fn(
                 monthly,
@@ -233,17 +239,36 @@ def forecast_well(
                 result, peak_rate=stream_rate_at_peak(monthly, peak, stream)
             )
 
+        # Onset: trim leading sub-floor months so the ramp anchors at the
+        # stream's first PRODUCING month, not the well's first-prod. Without
+        # this, a delayed-onset / leading-zero stream (water flowback that
+        # starts months late, or simply unreported early months) inflates
+        # peak_index_months by those phantom months and pushes the
+        # type-curve peak timing later. onset is <= peak by construction.
+        floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
+        onset_index = min(
+            detect_onset(monthly, rate_column=_STREAM_RATE_COL[stream], floor=floor),
+            peak_index_abs,
+        )
+        # Ramp length and qo are now ONSET-relative: ramp from the onset
+        # rate up to qi over (peak - onset) months. onset_index_months
+        # records the offset from well first-prod so the chart / TC can
+        # place the curve on the right month.
+        peak_index_months = peak_index_abs - onset_index
+        qo = _stream_rate_at_index(monthly, onset_index, stream)
+
         # Stamp the ramp params. params dict also carries them so the
         # evaluator can pick them up without the row-level fields.
         # EUR is recomputed as ramp_eur + arps_eur to match the
         # ramp+Arps model — _build_result's Arps-only EUR was right
         # for the fit math but doesn't reflect the full forecast.
-        qo = stream_rate_at_first_prod(monthly, stream)
         new_params = dict(result.params)
         if qo is not None:
             new_params["qo"] = qo
         if peak_index_months > 0:
             new_params["peak_index_months"] = peak_index_months
+        if onset_index > 0:
+            new_params["onset_index_months"] = onset_index
         total_eur = compute_total_eur(
             model_type=result.model_type,
             params=new_params,
@@ -288,6 +313,20 @@ def stream_rate_at_peak(
         return 0.0
     val = df.iloc[peak.peak_index][_STREAM_RATE_COL[stream]]
     return float(val) if val is not None and not pd.isna(val) else 0.0
+
+
+def _stream_rate_at_index(
+    monthly: pd.DataFrame, index: int, stream: str
+) -> float | None:
+    """Return the stream's calday rate at ``index`` (0-based, chronological).
+
+    Anchors ``qo`` at the stream's onset month rather than the well's
+    first-prod month. ``None`` when out of range or null."""
+    df = monthly.sort_values("prod_date").reset_index(drop=True)
+    if index < 0 or index >= len(df):
+        return None
+    val = df.iloc[index][_STREAM_RATE_COL[stream]]
+    return float(val) if val is not None and not pd.isna(val) else None
 
 
 def stream_rate_at_first_prod(monthly: pd.DataFrame, stream: str) -> float | None:
