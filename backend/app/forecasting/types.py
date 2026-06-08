@@ -60,7 +60,12 @@ class ForecastConfig:
 
     model_type: str = "modified_hyperbolic"
     fit_method: str = "rate_cum"
+    # Terminal (exponential-tail) decline. df_terminal_per_year is the
+    # Delaware / default value; Midland wells use df_terminal_midland.
+    # The orchestrator picks per well from wells.subbasin — Midland's
+    # boundary-dominated tails warrant a shallower terminal.
     df_terminal_per_year: float = DEFAULT_DF_TERMINAL_PER_YEAR
+    df_terminal_midland: float = 0.06
     horizon_years: float = DEFAULT_FORECAST_HORIZON_YEARS
     economic_limit_bopd: float = DEFAULT_ECONOMIC_LIMIT_BOPD
     economic_limit_mcfd: float = DEFAULT_ECONOMIC_LIMIT_MCFD
@@ -75,6 +80,27 @@ class ForecastConfig:
     # Nominal-Di upper bound for the water fit (oil/gas use the oil-tuned
     # fit.DI_NOMINAL_HI_PER_YEAR). Water craters faster early; see above.
     water_di_nominal_hi_per_year: float = DEFAULT_WATER_DI_NOMINAL_HI_PER_YEAR
+    # Peak-anchor qi (ON by default): the fit's qi is constrained to
+    # [lo, hi] * observed_peak_rate instead of the wide [0, 10*peak]
+    # default. Anchoring qi near the peak stops the cum fit from settling
+    # into the coupled low-qi / low-Di degenerate corner — diagnostics on
+    # braveheart_wca showed corr(qi_capture, di_gap)=+0.71 on oil, which
+    # this drops to ~+0.12 (qi<0.80: 30%->0%, shallow-Di: 18%->1%).
+    # Applies to OIL and WATER only — gas inherits the oil peak, so its
+    # peak_rate is the oil rate and anchoring would use the wrong scale
+    # (see fit._qi_bounds). Set either to None to disable.
+    qi_anchor_lo_frac: float | None = 0.90
+    qi_anchor_hi_frac: float | None = 1.05
+    # Override the hyperbolic-b upper bound (default fit.B_HI = 1.2, a
+    # deliberately tight Wolfcamp cap). Raising it allows fatter tails —
+    # diagnostics show the model under-predicts the out-year tail / cum by
+    # ~10%, which a higher b can lift. None = use the module default.
+    b_nominal_hi: float | None = None
+    # Override the hyperbolic-b LOWER bound (default fit.B_LO = 0.9).
+    # Because the cum fit is nearly insensitive to b, raising the ceiling
+    # doesn't fatten tails — only forcing b up via the floor does. None =
+    # module default.
+    b_nominal_lo: float | None = None
     # >= 6 months post-peak required for the default fit (brief).
     min_post_peak_months: int = 6
     # Wells with fewer than this many post-peak months are excluded from

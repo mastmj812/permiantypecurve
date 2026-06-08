@@ -80,12 +80,17 @@ def test_water_qi_underfit_triggers_rate_time_fallback() -> None:
     peak = detect_peak(df, rate_column="rate_calday_bwpd")
     assert peak is not None
 
-    primary = fit_rate_cum(df, peak=peak, stream="water")
+    # Peak-anchored qi (the default) makes a qi under-pick impossible, so
+    # this fallback path is only reachable with anchoring off. Exercise it
+    # in isolation with anchoring disabled — it's still the fallback for
+    # callers that opt out of qi-anchoring.
+    cfg = ForecastConfig(qi_anchor_lo_frac=None, qi_anchor_hi_frac=None)
+    primary = fit_rate_cum(df, peak=peak, stream="water", config=cfg)
     # The cum fit smooths the peak away: qi lands well under the observed
     # peak (this is the precondition for the fallback to fire).
     assert primary.qi < 0.6 * peak.peak_rate
 
-    rescued = fit_with_fallback(df, peak=peak, stream="water")
+    rescued = fit_with_fallback(df, peak=peak, stream="water", config=cfg)
     assert rescued.fit_method == "rate_time_fallback"
     # Rate-time recovers far more of the peak than the cum fit did.
     assert rescued.qi > primary.qi

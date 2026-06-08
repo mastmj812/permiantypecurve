@@ -278,7 +278,14 @@ def _rate_callable(
 
 
 def _bounds_and_p0(
-    model_type: str, peak_rate: float, *, di_hi: float = DI_NOMINAL_HI_PER_YEAR
+    model_type: str,
+    peak_rate: float,
+    *,
+    di_hi: float = DI_NOMINAL_HI_PER_YEAR,
+    qi_lo: float | None = None,
+    qi_hi: float | None = None,
+    b_lo: float = B_LO,
+    b_hi: float = B_HI,
 ) -> tuple[tuple[list[float], list[float]], list[float]]:
     """Return ((lower, upper), initial-guess) for scipy.optimize.curve_fit.
 
@@ -289,21 +296,29 @@ def _bounds_and_p0(
     ``di_hi`` overrides the nominal-Di upper bound. Oil/gas use the
     default 4.0; water passes a higher cap (it craters faster early) —
     see ``_stream_di_hi`` / ForecastConfig.water_di_nominal_hi_per_year.
+
+    ``qi_lo`` / ``qi_hi`` override the qi bounds (absolute rate units).
+    Default is [0, 10*peak]. The orchestrator narrows them to a band
+    around the observed peak when ``ForecastConfig.qi_anchor_*_frac`` is
+    set — peak-anchoring qi stops the cum-fit from settling into the
+    low-qi / low-Di degenerate corner.
     """
     qi_max = max(10.0 * peak_rate, 1.0)
-    qi_lo, qi_hi = 0.0, qi_max
+    qi_lo = 0.0 if qi_lo is None else max(0.0, qi_lo)
+    qi_hi = qi_max if qi_hi is None else max(qi_hi, qi_lo + 1e-6, 1.0)
     di_lo, di_hi = DI_NOMINAL_LO_PER_YEAR, di_hi
-    b_lo, b_hi = B_LO, B_HI
+    b_hi = max(b_hi, b_lo + 1e-6)
 
-    # Clamp starting qi to the data so curve_fit doesn't start outside bounds.
+    # Clamp starting guesses so curve_fit doesn't start outside bounds.
     qi_p0 = float(np.clip(peak_rate, qi_lo + 1e-6, qi_hi))
+    b_p0 = float(np.clip(B_P0, b_lo, b_hi))
 
     if model_type in ("arps_exponential", "arps_harmonic"):
         return (([qi_lo, di_lo], [qi_hi, di_hi]), [qi_p0, DI_NOMINAL_P0])
     if model_type in ("arps_hyperbolic", "modified_hyperbolic"):
         return (
             ([qi_lo, di_lo, b_lo], [qi_hi, di_hi, b_hi]),
-            [qi_p0, DI_NOMINAL_P0, B_P0],
+            [qi_p0, DI_NOMINAL_P0, b_p0],
         )
     raise ValueError(f"unsupported model_type: {model_type}")
 
@@ -314,6 +329,28 @@ def _stream_di_hi(stream: str, config: ForecastConfig) -> float:
     if stream == "water":
         return config.water_di_nominal_hi_per_year
     return DI_NOMINAL_HI_PER_YEAR
+
+
+def _qi_bounds(
+    peak_rate: float, config: ForecastConfig, stream: str
+) -> tuple[float | None, float | None]:
+    """Optional qi bounds anchored to the observed peak. (None, None) —
+    the default [0, 10*peak] band — unless both
+    ``ForecastConfig.qi_anchor_lo_frac`` and ``qi_anchor_hi_frac`` are
+    set, in which case qi is constrained to [lo, hi] * peak_rate. Anchoring
+    qi near the peak stops the cum fit from trading a low qi for a too-
+    shallow Di (the coupled degeneracy).
+
+    GAS is exempt: it inherits the oil peak (detect_stream_peaks), so the
+    ``peak_rate`` passed here is the OIL rate, not gas — anchoring gas qi
+    to [lo, hi]*oil_rate would crush it (gas qi is MCFD-scale, ~GOR× oil).
+    """
+    if stream == "gas":
+        return None, None
+    lo, hi = config.qi_anchor_lo_frac, config.qi_anchor_hi_frac
+    if lo is None or hi is None or peak_rate <= 0:
+        return None, None
+    return lo * peak_rate, hi * peak_rate
 
 
 def _params_to_dict(
@@ -421,8 +458,12 @@ def fit_rate_cum(
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
+    qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
+    b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
+    b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
     bounds, p0 = _bounds_and_p0(
-        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg)
+        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo, qi_hi=qi_hi, b_lo=b_lo, b_hi=b_hi,
     )
 
     popt, predicted = _fit_core(
@@ -463,8 +504,12 @@ def fit_rate_time(
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)
+    qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
+    b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
+    b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
     bounds, p0 = _bounds_and_p0(
-        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg)
+        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo, qi_hi=qi_hi, b_lo=b_lo, b_hi=b_hi,
     )
 
     popt, predicted = _fit_core(
