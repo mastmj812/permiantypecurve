@@ -54,6 +54,9 @@ class WellHeader:
     tvd_ft: float | None = None
     county: str | None = None
     basin: str | None = None
+    # Permian sub-basin (Delaware / Midland / …) — drives the basin-aware
+    # terminal-Df in forecasting. From curated.wells_enriched.subbasin.
+    subbasin: str | None = None
     status: str = "UNKNOWN"
     sh_lat: float | None = None
     sh_lon: float | None = None

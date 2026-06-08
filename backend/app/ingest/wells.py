@@ -76,6 +76,7 @@ def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
         "tvd_ft": h.tvd_ft,
         "county": h.county,
         "basin": h.basin,
+        "subbasin": h.subbasin,
         "status": _validated_status(h.status),
         "sh_geom": _point_or_none(h.sh_lon, h.sh_lat),
         "bh_geom": _point_or_none(h.bh_lon, h.bh_lat),

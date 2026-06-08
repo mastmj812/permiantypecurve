@@ -24,7 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.db.models import Forecast, ProductionMonthly, Stream
+from app.db.models import Forecast, ProductionMonthly, Stream, Well
 from app.forecasting.fit import (
     STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_ECON_LIMIT_FIELD,
@@ -54,6 +54,16 @@ _PEAK_RATE_COLUMN: dict[str, str] = {
     "gas": "rate_calday_bopd",  # inherits oil's peak month
     "water": "rate_calday_bwpd",
 }
+
+
+def df_terminal_for_subbasin(subbasin: str | None, config: ForecastConfig) -> float:
+    """Terminal Df for the well's Permian sub-basin. Midland uses the
+    shallower ``df_terminal_midland`` (its boundary-dominated tails flatten
+    more); Delaware and every other sub-basin use ``df_terminal_per_year``
+    (the policy: Midland 0.06, else 0.08)."""
+    if subbasin and subbasin.strip().lower() == "midland":
+        return config.df_terminal_midland
+    return config.df_terminal_per_year
 
 
 def detect_stream_peaks(
@@ -185,6 +195,14 @@ def forecast_well(
     successful result is written to the forecasts table via upsert.
     """
     cfg = config or ForecastConfig()
+    # Basin-aware terminal Df: Midland wells get the shallower tail. Look
+    # up the well's sub-basin once and bake the chosen Df into the config
+    # used for every stream's fit + EUR.
+    subbasin = session.execute(
+        select(Well.subbasin).where(Well.api10 == api10)
+    ).scalar_one_or_none()
+    cfg = replace(cfg, df_terminal_per_year=df_terminal_for_subbasin(subbasin, cfg))
+
     monthly = _load_monthly(session, api10)
     out: dict[str, ForecastResult | None] = {"oil": None, "gas": None, "water": None}
     if monthly.empty:

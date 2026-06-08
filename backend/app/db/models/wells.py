@@ -76,6 +76,10 @@ class Well(Base):
 
     county: Mapped[str | None] = mapped_column(String(64), index=True)
     basin: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Permian sub-basin (Delaware / Midland / Central Basin Platform /
+    # …) from curated.wells_enriched.subbasin. Drives the basin-aware
+    # terminal-Df assumption in forecasting (Midland = 0.06, else 0.08).
+    subbasin: Mapped[str | None] = mapped_column(String(40), index=True)
     status: Mapped[WellStatus] = mapped_column(
         pg_enum(WellStatus, name="well_status"),
         default=WellStatus.UNKNOWN,
