@@ -111,10 +111,30 @@ def _load_monthly(session: Session, api10: str) -> pd.DataFrame:
         .where(ProductionMonthly.api10 == api10)
         .order_by(ProductionMonthly.prod_date)
     ).all()
-    return pd.DataFrame(rows, columns=[
+    df = pd.DataFrame(rows, columns=[
         "prod_date", "oil_bbl", "gas_mcf", "water_bbl", "producing_days",
         "rate_calday_bopd", "rate_calday_mcfd", "rate_calday_bwpd",
     ])
+    # Coalesce NULL monthly volumes / rates to 0. Raw warehouse production
+    # carries reporting-gap months — a real calendar row where a stream's
+    # volume + rate are NULL (operator filed a partial report; common on
+    # some NM wells). A single such gap is catastrophic for the cum-fit:
+    # `_post_peak_slice` does `vol_col.cumsum()`, NaN poisons the cumulative
+    # array from the gap forward, and scipy's curve_fit raises
+    # "array must not contain infs or NaNs". The orchestrator's broad
+    # except swallows that as a fit failure, so the well silently gets NO
+    # forecast row for that stream — surfacing later as a "missing" well in
+    # the TC workspace that the Forecast button can't repair (it re-runs
+    # this same path and fails identically). Treat a gap as zero reported
+    # production: the cum stays calendar-aligned (the gap contributes
+    # nothing), the zero-rate month is then dropped by the downtime filter,
+    # and the fit proceeds. Wells with no gaps are unaffected (no-op fill).
+    _numeric = [
+        "oil_bbl", "gas_mcf", "water_bbl", "producing_days",
+        "rate_calday_bopd", "rate_calday_mcfd", "rate_calday_bwpd",
+    ]
+    df[_numeric] = df[_numeric].apply(pd.to_numeric, errors="coerce").fillna(0.0)
+    return df
 
 
 def _persist(
