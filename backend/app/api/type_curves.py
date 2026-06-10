@@ -269,6 +269,10 @@ class PatchRequest(BaseModel):
     # null un-assigns, omission leaves the current deal_id untouched.
     # The PATCH handler distinguishes these via `model_fields_set`.
     deal_id: uuid.UUID | None = None
+    # In-place alignment change (e.g. moving an unshared curve onto
+    # peak_ramp without versioning). Sets is_stale — the saved series
+    # still reflects the OLD alignment until /reaggregate rebuilds it.
+    alignment_method: str | None = None
 
 
 # ============================ helpers ============================
@@ -721,6 +725,14 @@ def patch_type_curve(
         if req.deal_id is not None and session.get(Deal, req.deal_id) is None:
             raise HTTPException(status_code=404, detail="deal not found")
         row.deal_id = req.deal_id
+    if req.alignment_method is not None:
+        validated = _validate_alignment(req.alignment_method)
+        if AlignmentMethod(validated) != row.alignment_method:
+            row.alignment_method = AlignmentMethod(validated)
+            # The persisted series was aggregated under the OLD
+            # alignment — flag it so the workspace banner / the
+            # update-in-place flow knows a /reaggregate is required.
+            row.is_stale = True
     session.commit()
     session.refresh(row)
     return TypeCurveRow.from_orm_row(row)

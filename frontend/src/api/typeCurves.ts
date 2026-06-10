@@ -203,6 +203,9 @@ export async function patchTypeCurve(
     // Explicit-null-vs-omitted matters here: pass `null` to un-assign,
     // omit the key entirely to leave the current deal_id alone.
     deal_id?: string | null;
+    // In-place alignment change — marks the curve stale; follow with
+    // reaggregateTypeCurve to rebuild the series under it.
+    alignment_method?: AlignmentMethod;
   },
 ): Promise<TypeCurveRow> {
   const r = await apiFetch(`/api/type-curves/${id}`, {

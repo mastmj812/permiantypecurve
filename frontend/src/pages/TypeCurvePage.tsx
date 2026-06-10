@@ -18,6 +18,7 @@ import {
   fetchTypeCurve,
   listTypeCurves,
   patchTypeCurve,
+  reaggregateTypeCurve,
   previewTypeCurveFit,
   saveTypeCurve,
 } from "../api/typeCurves";
@@ -122,11 +123,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // (checked by default — replacing the published curve is the usual
   // intent; the parent stays in the library as the historical record).
   const [takeOverDeal, setTakeOverDeal] = useState(true);
-  // Alignment for the NEW version. Independent of the loaded curve's
-  // (fixed) alignment so a re-version can move to the recommended
-  // method — defaults to peak_ramp.
+  // Alignment for the NEW version / in-place rebuild. Independent of
+  // the loaded curve's (fixed) alignment so a re-version can move to
+  // the recommended method — defaults to peak_ramp.
   const [versionAlignment, setVersionAlignment] =
     useState<AlignmentMethod>("peak_ramp");
+  // Update-in-place (unshared curves): rebuild the saved series under
+  // the chosen alignment without creating a version.
+  const [inPlaceBusy, setInPlaceBusy] = useState(false);
+  const [inPlaceError, setInPlaceError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -463,6 +468,34 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // alignment back restores its stored series. The preview is
   // override-blind (global forecasts only), exactly like the version
   // save, so preview === what Save will persist.
+  // Rebuild the loaded curve IN PLACE: persist the chosen alignment
+  // (when changed), re-aggregate the saved series from the current
+  // per-well forecasts (override-aware — reaggregate resolves this
+  // curve's per-well overrides, unlike the version save), and reload.
+  // No version row is created; the previous series is gone. Meant for
+  // curves that haven't been shared yet.
+  async function onUpdateInPlace() {
+    if (!selectedSaved) return;
+    setInPlaceBusy(true);
+    setInPlaceError(null);
+    try {
+      if (versionAlignment !== selectedSaved.alignment_method) {
+        await patchTypeCurve(selectedSaved.id, {
+          alignment_method: versionAlignment,
+        });
+      }
+      const updated = await reaggregateTypeCurve(selectedSaved.id);
+      setSelectedSaved(updated);
+      setAgg(updated.series);
+      await refreshLibrary();
+      clearTweakState();
+    } catch (e) {
+      setInPlaceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInPlaceBusy(false);
+    }
+  }
+
   const alignPreviewSeq = useRef(0);
   function onVersionAlignmentChange(next: AlignmentMethod) {
     setVersionAlignment(next);
@@ -1065,14 +1098,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
 
         {selectedSaved && (
           <section className="filter-section">
-            <h3>Save as new version</h3>
+            <h3>Update this curve</h3>
             <p className="muted" style={{ margin: "4px 0 8px" }}>
-              Re-aggregates this curve&apos;s {selectedSaved.included_api10s.length}{" "}
-              wells from the current per-well forecasts and saves the
-              result as a new version of {selectedSaved.name}. The
-              loaded curve is not modified.
+              Rebuilds from the current per-well forecasts (
+              {selectedSaved.included_api10s.length} wells). Pick the
+              alignment — the charts preview it live when it differs
+              from the saved one — then rebuild in place or save as a
+              new version.
             </p>
-            <label className="chk-inline">alignment for the new version:</label>
+            <label className="chk-inline">alignment:</label>
             <select
               value={versionAlignment}
               onChange={(e) =>
@@ -1097,6 +1131,33 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   until you save
                 </p>
               )}
+            <p className="muted" style={{ margin: "10px 0 4px" }}>
+              <strong>Rebuild in place</strong> — overwrites this
+              curve&apos;s saved series under the alignment above; no
+              new version is created. For curves that haven&apos;t
+              been shared. Honors this curve&apos;s per-well
+              overrides.
+            </p>
+            {inPlaceError && (
+              <div className="alert alert-error" style={{ marginTop: 4 }}>
+                {inPlaceError}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={inPlaceBusy || saving}
+              onClick={onUpdateInPlace}
+            >
+              {inPlaceBusy
+                ? "rebuilding…"
+                : `rebuild ${selectedSaved.name} in place`}
+            </button>
+
+            <p className="muted" style={{ margin: "14px 0 4px" }}>
+              <strong>…or save as a new version</strong> — keeps the
+              loaded curve untouched as the historical record.
+            </p>
             <input
               type="text"
               placeholder={`${selectedSaved.name}_v2`}
