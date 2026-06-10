@@ -10,13 +10,13 @@ Normalization basis is per-1000-lateral-ft for v1; the function is
 structured so per-proppant-lb or per-well can drop in via a different
 `normalize_by` value without changing the aggregation math.
 
-Alignment is peak-month: each well's t=0 is its own peak. Oil and gas
-share the oil peak; water aligns on its own (earlier) peak — same
-per-stream rule as forecasting (see orchestrator.detect_stream_peaks).
-Because water is sliced from an earlier month it can run longer than
-oil, so the per-stream arrays may differ in length; the panel is sized
-to the longest stream and shorter streams are NaN-padded in the tail.
-The loader (loader.load_well_series) prepares the per-stream slices.
+Alignment is peak-month: each well's t=0 is its own peak, and EVERY
+stream aligns on its own detected peak (gas commonly peaks after oil;
+water before) — same per-stream rule as forecasting (see
+orchestrator.detect_stream_peaks). Because streams are sliced from
+different months the per-stream arrays may differ in length; the panel
+is sized to the longest stream and shorter streams are NaN-padded in
+the tail. The loader (loader.load_well_series) prepares the slices.
 """
 
 from __future__ import annotations

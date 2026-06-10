@@ -86,9 +86,10 @@ class ForecastConfig:
     # into the coupled low-qi / low-Di degenerate corner — diagnostics on
     # braveheart_wca showed corr(qi_capture, di_gap)=+0.71 on oil, which
     # this drops to ~+0.12 (qi<0.80: 30%->0%, shallow-Di: 18%->1%).
-    # Applies to OIL and WATER only — gas inherits the oil peak, so its
-    # peak_rate is the oil rate and anchoring would use the wrong scale
-    # (see fit._qi_bounds). Set either to None to disable.
+    # Applies to ALL streams since every stream anchors on its OWN
+    # detected peak (orchestrator.detect_stream_peaks) — gas was exempt
+    # while it inherited the oil peak (wrong rate scale). Set either to
+    # None to disable.
     qi_anchor_lo_frac: float | None = 0.90
     qi_anchor_hi_frac: float | None = 1.05
     # Override the hyperbolic-b upper bound (default fit.B_HI = 1.2, a

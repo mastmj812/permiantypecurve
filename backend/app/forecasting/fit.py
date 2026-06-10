@@ -341,12 +341,12 @@ def _qi_bounds(
     qi near the peak stops the cum fit from trading a low qi for a too-
     shallow Di (the coupled degeneracy).
 
-    GAS is exempt: it inherits the oil peak (detect_stream_peaks), so the
-    ``peak_rate`` passed here is the OIL rate, not gas — anchoring gas qi
-    to [lo, hi]*oil_rate would crush it (gas qi is MCFD-scale, ~GOR× oil).
+    All three streams anchor on their OWN detected peak now
+    (orchestrator.detect_stream_peaks), so ``peak_rate`` is always in
+    the stream's own units and anchoring applies uniformly. (Gas was
+    historically exempt because it inherited the OIL peak — anchoring
+    MCFD-scale qi to a BOPD-scale rate would have crushed it.)
     """
-    if stream == "gas":
-        return None, None
     lo, hi = config.qi_anchor_lo_frac, config.qi_anchor_hi_frac
     if lo is None or hi is None or peak_rate <= 0:
         return None, None

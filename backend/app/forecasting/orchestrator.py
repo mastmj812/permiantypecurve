@@ -1,14 +1,19 @@
 """Run forecasts for one or many wells across oil/gas/water streams.
 
 Glue between the math (`fit.py`) and the DB (`forecasts` table). Key
-domain rule: oil and gas share oil's peak month (gas inherits it), while
-WATER is anchored on its own peak — Permian flowback water peaks hard in
-month 0-1 and declines immediately, months before oil ramps to peak, so
-inheriting the oil peak under-reads water qi and the early decline. Each
-stream's per-well forecast is expressed in years-since-first-prod (the
-peak is an internal ramp anchor), so per-stream peaks stay coherent —
-all three streams still map back to one first-prod calendar. See
-``detect_stream_peaks``.
+domain rule: EVERY stream anchors on its OWN detected peak. Water peaks
+hard in month 0-1 (flowback), months before oil ramps up; gas commonly
+peaks AFTER oil as the GOR climbs (39% of forecasted wells in this
+dataset, p90 +4 months, with the true gas peak up to 1.5x the gas rate
+at the oil month) — inheriting the oil peak under-read each stream's
+qi and started the fit on the wrong limb. A stream with no real
+production (no detectable peak / zero-rate peak) is SKIPPED — no
+forecast row — rather than fit against zeros anchored on the oil
+month, which under peak-anchored qi bounds manufactured phantom
+oil-scale forecasts. Each stream's per-well forecast is expressed in
+years-since-first-prod (the peak is an internal ramp anchor), so
+per-stream peaks stay coherent — all three streams still map back to
+one first-prod calendar. See ``detect_stream_peaks``.
 """
 
 from __future__ import annotations
@@ -34,7 +39,6 @@ from app.forecasting.fit import (
 )
 from app.forecasting.peak_detection import (
     PeakResult,
-    detect_oil_peak,
     detect_onset,
     detect_peak,
 )
@@ -45,13 +49,12 @@ log = get_logger("forecasting.orchestrator")
 
 STREAMS: tuple[str, ...] = ("oil", "gas", "water")
 
-# Stream whose peak each stream anchors on. Oil and gas share oil's peak
-# (gas tracks oil closely enough that one t=0 stays coherent); water gets
-# its own — Permian flowback water peaks hard in month 0-1 and declines
-# immediately, months before oil ramps to peak. See detect_stream_peaks.
+# Rate column each stream's peak is detected on — every stream anchors
+# on its OWN peak (gas previously inherited oil's; see module docstring
+# for why that under-read gas on rising-GOR wells).
 _PEAK_RATE_COLUMN: dict[str, str] = {
     "oil": "rate_calday_bopd",
-    "gas": "rate_calday_bopd",  # inherits oil's peak month
+    "gas": "rate_calday_mcfd",
     "water": "rate_calday_bwpd",
 }
 
@@ -69,30 +72,28 @@ def df_terminal_for_subbasin(subbasin: str | None, config: ForecastConfig) -> fl
 def detect_stream_peaks(
     monthly: pd.DataFrame,
 ) -> dict[str, PeakResult | None]:
-    """Per-stream peak month for one well.
+    """Per-stream peak month for one well — each stream on its OWN rate.
 
-    Oil and gas share the oil peak (gas inherits it by convention).
-    Water is detected independently on its own rate column: anchoring
-    water on the oil peak reads a low qi (the hard early water peak has
-    already decayed by the oil peak) and a shallow Di (the steep early
-    water decline sits upstream of the post-peak fit slice). When a well
-    has no detectable water peak (no water production / all-null), water
-    falls back to the oil peak so it still gets a forecast anchored
-    somewhere sensible rather than being dropped.
+    Water peaks hard in month 0-1 (flowback) months before oil; gas
+    commonly peaks AFTER oil as the GOR climbs (39% of forecasted
+    wells, p90 +4 months). Anchoring either on the oil peak reads the
+    wrong qi and starts the fit slice on the wrong limb.
+
+    A zero-rate "peak" (all-zero column — zeros aren't null, so
+    detect_peak still returns index 0) isn't a real peak: the stream
+    comes back None and the orchestrator SKIPS it. The old behavior —
+    falling back to the oil anchor — fit zeros against oil-scale
+    peak-anchored qi bounds and manufactured phantom forecasts.
 
     Pure function (takes a frame, no DB) so the per-stream rule is unit
     testable the same way ``cohort.classify_history`` is.
     """
-    oil_peak = detect_oil_peak(monthly)
-    water_peak = detect_peak(monthly, rate_column=_PEAK_RATE_COLUMN["water"])
-    # A zero-rate "peak" (all-zero water column — zeros aren't null, so
-    # detect_peak still returns index 0) isn't a real peak. Treat it as
-    # "no water" and fall back to the oil anchor.
-    has_water = water_peak is not None and water_peak.peak_rate > 0
+    def _real(p: PeakResult | None) -> PeakResult | None:
+        return p if (p is not None and p.peak_rate > 0) else None
+
     return {
-        "oil": oil_peak,
-        "gas": oil_peak,
-        "water": water_peak if has_water else oil_peak,
+        stream: _real(detect_peak(monthly, rate_column=col))
+        for stream, col in _PEAK_RATE_COLUMN.items()
     }
 
 
@@ -236,12 +237,11 @@ def forecast_well(
         log.warning("no_production", api10=api10)
         return out
 
-    # Per-stream peak: oil and gas share the oil peak; water gets its own
-    # (flowback peaks months before oil — see detect_stream_peaks).
+    # Per-stream peak: every stream anchors on its own (gas commonly
+    # peaks after oil; water before — see detect_stream_peaks).
     peaks = detect_stream_peaks(monthly)
-    oil_peak = peaks["oil"]
-    if oil_peak is None:
-        log.warning("no_oil_peak", api10=api10)
+    if all(p is None for p in peaks.values()):
+        log.warning("no_stream_peaks", api10=api10)
         return out
 
     # Default "rate_cum" runs the wrapper that retries with rate-time
@@ -256,10 +256,14 @@ def forecast_well(
         fit_fn = fit_with_fallback
 
     for stream in STREAMS:
-        # Each stream is fit and ramp-anchored against ITS OWN peak.
-        # peak_index_months (the ramp length) is therefore per-stream:
-        # oil/gas measure from the oil peak, water from the water peak.
-        peak = peaks[stream] or oil_peak
+        # Each stream is fit and ramp-anchored against ITS OWN peak;
+        # peak_index_months (the ramp length) is per-stream. A stream
+        # with no real production has no peak — skip it (no forecast
+        # row) rather than fit zeros against another stream's anchor.
+        peak = peaks[stream]
+        if peak is None:
+            log.info("no_stream_production_skip", api10=api10, stream=stream)
+            continue
         peak_index_abs = int(peak.peak_index)
         try:
             result = fit_fn(
@@ -272,17 +276,6 @@ def forecast_well(
         except Exception as e:  # noqa: BLE001 — fit failures are routine
             log.exception("fit_failed", api10=api10, stream=stream, err=str(e))
             continue
-
-        # Gas inherits oil's peak MONTH but not oil's peak RATE — rewrite
-        # to the gas rate at that month so the detail modal shows the
-        # right anchor value. Oil and water already carry the correct
-        # per-stream peak_rate from their own detected peak (the fit set
-        # result.peak_rate = peak.peak_rate, which is in the stream's
-        # own units).
-        if stream == "gas":
-            result = replace(
-                result, peak_rate=stream_rate_at_peak(monthly, peak, stream)
-            )
 
         # Onset: trim leading sub-floor months so the ramp anchors at the
         # stream's first PRODUCING month, not the well's first-prod. Without

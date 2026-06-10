@@ -89,15 +89,17 @@ def _stream_slice_starts(
     alignment: AlignmentMethod,
     first_prod_date: date | None,
     oil_peak_date: date | None,
+    gas_peak_date: date | None,
     water_peak_date: date | None,
 ) -> dict[str, date | None]:
     """Per-stream t=0 date for the observed overlay.
 
     Under ``first_prod_month`` every stream starts at first prod (the
-    well's single calendar t=0). Under ``peak_month`` oil and gas start
-    at the oil peak while water starts at its own peak — falling back to
-    the oil peak when the well has no water peak on file (e.g. not yet
-    re-fit). Pure function so the per-stream rule is unit testable.
+    well's single calendar t=0). Under ``peak_month`` each stream
+    starts at its OWN peak (gas commonly peaks after oil; water before)
+    — falling back to the oil peak when the stream has no peak on file
+    (rows that pre-date per-stream peaks and aren't re-fit yet). Pure
+    function so the per-stream rule is unit testable.
     """
     if alignment in ("first_prod_month", "peak_ramp"):
         # peak_ramp also fetches from first prod — the onset trim and
@@ -105,7 +107,7 @@ def _stream_slice_starts(
         return {s: first_prod_date for s in ("oil", "gas", "water")}
     return {
         "oil": oil_peak_date,
-        "gas": oil_peak_date,
+        "gas": gas_peak_date if gas_peak_date is not None else oil_peak_date,
         "water": water_peak_date if water_peak_date is not None else oil_peak_date,
     }
 
@@ -190,6 +192,7 @@ def load_well_series(
     """
     api10_list = list(api10s)
     oil_peaks = _peak_month_by_api10(session, api10_list, Stream.OIL)
+    gas_peaks = _peak_month_by_api10(session, api10_list, Stream.GAS)
     water_peaks = _peak_month_by_api10(session, api10_list, Stream.WATER)
     attrs = _well_attrs_by_api10(session, api10_list)
 
@@ -208,6 +211,7 @@ def load_well_series(
             alignment=alignment,
             first_prod_date=first_prod_date,
             oil_peak_date=oil_peaks[api10],
+            gas_peak_date=gas_peaks.get(api10),
             water_peak_date=water_peaks.get(api10),
         )
         start_dates = [d for d in starts.values() if d is not None]
@@ -260,7 +264,10 @@ def load_well_series(
                 return rates[-pad:]
 
             oil_rates = _to_anchor(oil_rates, oil_off, oil_peaks.get(api10), "oil")
-            gas_rates = _to_anchor(gas_rates, gas_off, oil_peaks.get(api10), "gas")
+            gas_rates = _to_anchor(
+                gas_rates, gas_off,
+                gas_peaks.get(api10) or oil_peaks.get(api10), "gas",
+            )
             wat_rates = _to_anchor(
                 wat_rates, wat_off,
                 water_peaks.get(api10) or oil_peaks.get(api10), "water",

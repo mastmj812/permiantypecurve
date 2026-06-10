@@ -8,14 +8,13 @@ Rule (from the brief):
     rate spike (e.g. flush production from an offset frac in month 18)
     must NOT win.
 
-    Gas inherits oil's peak month — we don't detect a separate gas peak,
-    because gas tracks oil closely enough that a shared t=0 keeps the
-    forecasts and TC aggregation coherent. WATER, however, gets its own
-    peak: Permian flowback water peaks hard in month 0-1 and declines
-    immediately, months before oil ramps to its peak. Anchoring water on
-    the oil peak reads a low qi (the water peak has already decayed) and
-    a shallow Di (the steep early decline is upstream of the fit slice).
-    See app.forecasting.orchestrator.detect_stream_peaks for the wiring.
+    Every stream anchors on its OWN detected peak (since 2026-06-10;
+    gas previously inherited oil's). Water peaks hard in month 0-1
+    (flowback) months before oil; gas commonly peaks AFTER oil as the
+    GOR climbs — 39% of forecasted wells in this dataset, p90 +4
+    months. Anchoring a stream on the oil peak reads the wrong qi and
+    starts the fit slice on the wrong limb. See
+    app.forecasting.orchestrator.detect_stream_peaks for the wiring.
 
     ``detect_peak`` is stream-agnostic — pass the stream's rate column.
     ``detect_oil_peak`` is the oil-defaulted wrapper kept for callers

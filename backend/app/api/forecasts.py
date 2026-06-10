@@ -651,11 +651,14 @@ def transfer_cohort_params(
                 skipped_locked.append((api10, stream_enum))
                 continue
 
-            # Anchor on THIS stream's peak (water on its own hard early
-            # peak; oil/gas on the oil peak) — same per-stream convention
-            # as the autoforecast, so transferred short-history rows
-            # match what a full fit would have anchored.
-            stream_peak = peaks[stream_str] or peaks["oil"]
+            # Anchor on THIS stream's own peak — same per-stream
+            # convention as the autoforecast (every stream detects its
+            # own; gas commonly peaks after oil). A stream with no real
+            # production has no peak and is skipped: a transfer row
+            # with qi=0 would be a phantom forecast.
+            stream_peak = peaks[stream_str]
+            if stream_peak is None:
+                continue
             qi = stream_rate_at_peak(monthly, stream_peak, stream_str)
             # Ramp prefix is well-specific even on a cohort transfer, and
             # anchored on the stream's ONSET (first producing month) — qo
