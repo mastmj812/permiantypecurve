@@ -370,7 +370,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       setSaveName("");
       setSaveNotes("");
       setVersionOf(null);
-      await refreshLibrary();
+      // Refresh deals too — a version save can move the parent's deal
+      // slot (take_over_deal), and the cohort-handoff path assigns the
+      // new curve to a deal; either changes the deals panel's counts.
+      await Promise.all([refreshLibrary(), refreshDeals()]);
       setSelectedSaved(final);
       setAgg(final.series);
       clearTweakState();
