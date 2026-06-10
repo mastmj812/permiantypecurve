@@ -74,9 +74,17 @@ _CHART_HEIGHT_IN = 2.16
 _CHART_LEFT_IN = 0.64
 _CHART_TOP_IN = 2.28
 _CHART_GAP_IN = 0.04
-_RIGHT_COL_LEFT_IN = _CHART_LEFT_IN + _CHART_WIDTH_IN + 0.08
-# Big map (probit excluded): fills the right column entirely.
-_BIG_MAP_WIDTH_IN = 6.93
+# 16:9 template (verified from deal_slide.pptx). The right column is
+# RIGHT-ALIGNED: its right edge sits _CHART_LEFT_IN from the slide
+# edge, mirroring the chart column's left margin so the slide reads
+# symmetric. (Previously the right column was left-packed against the
+# charts, leaving a ~1.8" dead margin on the right in probit layout.)
+_SLIDE_WIDTH_IN = 13.333
+_RIGHT_COL_LEFT_IN = _SLIDE_WIDTH_IN - _CHART_LEFT_IN - _CHART_WIDTH_IN
+# Big map (probit excluded): spans from just right of the charts out
+# to the mirrored right margin.
+_BIG_MAP_LEFT_IN = _CHART_LEFT_IN + _CHART_WIDTH_IN + 0.08
+_BIG_MAP_WIDTH_IN = _SLIDE_WIDTH_IN - _CHART_LEFT_IN - _BIG_MAP_LEFT_IN
 _BIG_MAP_HEIGHT_IN = _CHART_HEIGHT_IN * 2 + _CHART_GAP_IN
 
 # Footnote (downtime-filter disclosure) sits below the cum chart,
@@ -488,10 +496,11 @@ def _place_chart_images(
     right_col_left = Inches(_RIGHT_COL_LEFT_IN)
 
     if probit_png is None:
-        # Big-map layout — map fills the right column.
+        # Big-map layout — map fills the right column out to the
+        # mirrored right margin.
         slide.shapes.add_picture(
             io.BytesIO(map_png),
-            right_col_left, Inches(_CHART_TOP_IN),
+            Inches(_BIG_MAP_LEFT_IN), Inches(_CHART_TOP_IN),
             width=Inches(_BIG_MAP_WIDTH_IN), height=Inches(_BIG_MAP_HEIGHT_IN),
         )
         return

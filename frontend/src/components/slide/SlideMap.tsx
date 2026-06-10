@@ -2,11 +2,13 @@
 //
 // Slimmer than the main MapView — no toolbar, no drawing, no popups,
 // no cohort/selection state. Just the basemap + the cohort wells
-// rendered in green, fit-bounded, then snapshotted to a PNG so the
-// browser print step captures it reliably (live MapLibre canvases
-// print as a black rectangle without `preserveDrawingBuffer`, and even
-// then they sometimes blank out — the snapshot+swap trick sidesteps
-// both pitfalls).
+// rendered in green, fit-bounded to the cohort, and INTERACTIVE: the
+// engineer can drag / scroll-zoom to frame the shot before exporting.
+// A hidden <img> is refreshed with a canvas snapshot on every map
+// "idle", so whatever is on screen at export time is exactly what the
+// PPTX capture (which reads the img src) and the browser print path
+// (which swaps img for canvas via @media print CSS — live MapLibre
+// canvases print as a black rectangle) both pick up.
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, {
@@ -133,12 +135,21 @@ async function loadBlocks(map: MlMap): Promise<void> {
     source: BLOCKS_SOURCE_ID,
     layout: {
       "text-field": BLOCK_LABEL_EXPR,
-      "text-size": 16,
+      // Zoom-scaled: a wide cohort fit-bounds to z~9-10 where the old
+      // hard-coded 16px read enormous on the slide. ["zoom"] must be
+      // the OUTERMOST expression (nesting it inside case/match
+      // silently kills the layer — see project MapLibre gotchas).
+      "text-size": [
+        "interpolate", ["linear"], ["zoom"],
+        7, 8,
+        9, 10,
+        11, 13,
+        13, 16,
+      ],
       // protomaps' font CDN only ships Regular + Italic — requesting
       // "Noto Sans Bold" 404s on glyph fetch and silently kills the
-      // entire block layer's render. We lean on the 2x size
-      // differential vs sections (8pt) and a thicker halo for
-      // emphasis instead.
+      // entire block layer's render. We lean on the size differential
+      // vs sections and a thicker halo for emphasis instead.
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
@@ -146,7 +157,7 @@ async function loadBlocks(map: MlMap): Promise<void> {
     paint: {
       "text-color": "#000000",
       "text-halo-color": "rgba(255,255,255,1.0)",
-      "text-halo-width": 2.5,
+      "text-halo-width": 2.0,
     },
   });
 }
@@ -217,9 +228,18 @@ async function loadSections(map: MlMap): Promise<void> {
     id: SECTIONS_LABEL_LAYER,
     type: "symbol",
     source: SECTIONS_SOURCE_ID,
+    // Section labels are unreadable confetti below ~z11 (a 1-sq-mi
+    // grid at county extent). The lines stay at every zoom for grid
+    // context; the numbers only appear once the user zooms in far
+    // enough for them to resolve.
+    minzoom: 11,
     layout: {
       "text-field": SECTION_LABEL_EXPR,
-      "text-size": 8,
+      "text-size": [
+        "interpolate", ["linear"], ["zoom"],
+        11, 7,
+        13, 9,
+      ],
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
@@ -292,15 +312,16 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
   return b;
 }
 
-// Default ~6.93" × 4.34" at 96 px/in to match the export's
-// slide-level map placement (right side, full chart-stack height).
+// Default ~6.55" × 4.36" at 96 px/in to match the export's
+// slide-level map placement (right column, right-aligned to mirror
+// the chart column's left margin, full chart-stack height).
 export function SlideMap({
   api10s,
   wellDetails,
   dealId = null,
   showBlocks = true,
   showSections = true,
-  width = 665,
+  width = 629,
   height = 418,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -366,11 +387,12 @@ export function SlideMap({
       };
       map.addLayer(solidLayer);
 
-      // Fit to the cohort — 12% padding so the wells aren't crammed
-      // against the edge of the snapshot.
+      // Fit to the cohort — modest padding so the autozoom lands as
+      // tight as the spread allows; the user can drag/scroll-zoom to
+      // reframe before exporting (every idle refreshes the capture).
       const b = cohortBounds(wellDetails);
       if (b && !b.isEmpty()) {
-        map.fitBounds(b, { padding: 40, duration: 0, maxZoom: 13 });
+        map.fitBounds(b, { padding: 24, duration: 0, maxZoom: 13 });
       }
 
       // Kick off the overlay fetches in parallel; allSettled so a
@@ -406,7 +428,11 @@ export function SlideMap({
         for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
           moveToTop(id);
         }
-        map.once("idle", () => {
+        // Refresh the capture img on EVERY idle from here on — the
+        // map stays live and interactive, so each pan/scroll-zoom the
+        // user makes re-snapshots once the tiles settle. The PPTX
+        // export and the print path always read the latest view.
+        const refresh = () => {
           try {
             const url = map.getCanvas().toDataURL("image/png");
             setSnapshot(url);
@@ -416,10 +442,12 @@ export function SlideMap({
             // it does so the developer sees the cause of a blank map.
             console.error("slide map snapshot failed", e);
           }
-        });
+        };
+        map.on("idle", refresh);
         // Nudge the renderer in case the map was already idle when the
-        // overlay sources got added — without this, `once("idle")` can
-        // sit waiting forever if the new sources don't trigger a redraw.
+        // overlay sources got added — without this the first "idle"
+        // can sit waiting forever if the new sources don't trigger a
+        // redraw.
         map.triggerRepaint();
       });
     };
@@ -439,13 +467,15 @@ export function SlideMap({
 
   return (
     <div className="slide-map" style={{ width, height }}>
-      {/* Keep the map div mounted underneath; once we have a snapshot,
-          paint the img on top. We can't unmount the map div because
-          MapLibre relies on the container for its lifecycle. */}
+      {/* The live canvas stays visible AND interactive — drag /
+          scroll-zoom to frame the shot. The img below carries the
+          latest idle-time snapshot: hidden on screen (CSS), it's what
+          the PPTX capture reads (img.src) and what @media print swaps
+          in (live MapLibre canvases print as a black rectangle). */}
       <div
         ref={containerRef}
         className="slide-map-canvas"
-        style={{ width, height, visibility: snapshot ? "hidden" : "visible" }}
+        style={{ width, height }}
       />
       {snapshot && (
         <img

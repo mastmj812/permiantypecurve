@@ -100,7 +100,11 @@ async function capturePanel(
   }
 
   const rect = target.getBoundingClientRect();
-  if (rect.width <= 0 || rect.height <= 0) {
+  // Zero-size only matters for SVGs (drawn at their CSS rect). The
+  // map IMG is display:none on screen (the live canvas is shown
+  // instead) so its rect is 0×0 by design — its capture path below
+  // uses the snapshot PNG's natural dimensions.
+  if (svg && (rect.width <= 0 || rect.height <= 0)) {
     throw new Error(`capture target has zero size`);
   }
   const canvas = iframeDoc.defaultView!.document.createElement("canvas");
