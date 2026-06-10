@@ -91,6 +91,12 @@ class SaveRequest(BaseModel):
     # streams[<stream>].fitted is replaced with a re-evaluation of these
     # params and marked manual_override=True. Keys: "oil" / "gas" / "water".
     fit_overrides: dict[str, FitOverride] | None = None
+    # Versions-endpoint only: when true and the parent curve is assigned
+    # to a deal, the new version atomically takes the parent's deal slot
+    # (version gets parent.deal_id, parent is unassigned) in the same
+    # transaction — so a deal export can never see both curves at once.
+    # Ignored on the plain create endpoint.
+    take_over_deal: bool = False
 
 
 class TypeCurvePreviewRequest(BaseModel):
@@ -600,9 +606,18 @@ def save_as_new_version(
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     row = _persist(session, payload=payload, req=req, version_of=parent.id)
+    took_over_deal = False
+    if req.take_over_deal and parent.deal_id is not None:
+        # Deal-slot handoff: the version replaces its parent in the
+        # deal in one transaction, so an export can never include both.
+        row.deal_id = parent.deal_id
+        parent.deal_id = None
+        session.commit()
+        session.refresh(row)
+        took_over_deal = True
     log.info(
         "type_curve_versioned", id=str(row.id), parent=str(parent.id),
-        n_wells=len(req.included_api10s),
+        n_wells=len(req.included_api10s), took_over_deal=took_over_deal,
     )
     return TypeCurveRow.from_orm_row(row)
 

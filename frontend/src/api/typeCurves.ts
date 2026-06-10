@@ -136,6 +136,9 @@ export async function saveTypeCurve(args: {
   // Optional per-stream override of the fitted curve. Server re-evaluates
   // these and bakes them into the saved series.
   fit_overrides?: Record<string, FitOverride> | null;
+  // Versions only: atomically move the parent's deal assignment onto
+  // the new version (parent is unassigned in the same transaction).
+  take_over_deal?: boolean;
 }): Promise<TypeCurveRow> {
   const path = args.version_of
     ? `/api/type-curves/${args.version_of}/versions`
@@ -152,6 +155,7 @@ export async function saveTypeCurve(args: {
       alignment_method: args.alignment_method ?? "first_prod_month",
       n_months: args.n_months ?? null,
       fit_overrides: args.fit_overrides ?? null,
+      take_over_deal: args.take_over_deal ?? false,
     }),
   });
   if (!r.ok) throw new Error(`save failed: ${r.status} ${await r.text()}`);

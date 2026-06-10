@@ -118,6 +118,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const [saveName, setSaveName] = useState("");
   const [saveNotes, setSaveNotes] = useState("");
   const [versionOf, setVersionOf] = useState<string | null>(null);
+  // Save-as-version: hand the parent's deal slot to the new version
+  // (checked by default — replacing the published curve is the usual
+  // intent; the parent stays in the library as the historical record).
+  const [takeOverDeal, setTakeOverDeal] = useState(true);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -339,6 +343,8 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
         alignment_method: alignment,
         version_of: parent,
         fit_overrides: collectOverrides(),
+        take_over_deal:
+          !!selectedSaved && selectedSaved.deal_id != null && takeOverDeal,
       });
       // Auto-assign to the handoff deal if the cohort had one preset.
       // Verifies the deal still exists in case the user deleted it
@@ -434,6 +440,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     // fresh Aggregate arrives from Review (see the compute effect);
     // the dropdown stays editable for the standalone-save case.
     setVersionOf(row.id);
+    setTakeOverDeal(true);
     clearTweakState();
   }
 
@@ -1031,6 +1038,18 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               rows={3}
               style={{ width: "100%", marginTop: 6 }}
             />
+            {selectedSaved.deal_id && (
+              <label className="chk-inline" style={{ marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={takeOverDeal}
+                  onChange={(e) => setTakeOverDeal(e.target.checked)}
+                />{" "}
+                replace {selectedSaved.name} in deal{" "}
+                {deals.find((d) => d.id === selectedSaved.deal_id)?.name ??
+                  "(unknown)"}
+              </label>
+            )}
             {saveError && (
               <div className="alert alert-error" style={{ marginTop: 8 }}>
                 {saveError}
