@@ -321,16 +321,23 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   }
 
   async function onSave() {
-    if (!saveName.trim() || included.length === 0) return;
+    // With a saved curve loaded, the save is ALWAYS a new version of
+    // it, built from ITS exact membership — independent of any
+    // workspace state a stale session might hold. The server
+    // recomputes the aggregation from the current per-well forecasts;
+    // the loaded curve itself is never modified.
+    const wells = selectedSaved ? selectedSaved.included_api10s : included;
+    const parent = selectedSaved ? selectedSaved.id : versionOf;
+    if (!saveName.trim() || wells.length === 0) return;
     setSaving(true);
     setSaveError(null);
     try {
       const saved = await saveTypeCurve({
         name: saveName.trim(),
         notes: saveNotes.trim() || null,
-        included_api10s: included,
+        included_api10s: wells,
         alignment_method: alignment,
-        version_of: versionOf,
+        version_of: parent,
         fit_overrides: collectOverrides(),
       });
       // Auto-assign to the handoff deal if the cohort had one preset.
@@ -1001,6 +1008,47 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             <option value="peak_month">Peak month (decline-only)</option>
           </select>
         </section>
+
+        {selectedSaved && (
+          <section className="filter-section">
+            <h3>Save as new version</h3>
+            <p className="muted" style={{ margin: "4px 0 8px" }}>
+              Re-aggregates this curve&apos;s {selectedSaved.included_api10s.length}{" "}
+              wells from the current per-well forecasts and saves the
+              result as a new version of {selectedSaved.name}. The
+              loaded curve is not modified.
+            </p>
+            <input
+              type="text"
+              placeholder={`${selectedSaved.name}_v2`}
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+            />
+            <textarea
+              placeholder="notes (optional)"
+              value={saveNotes}
+              onChange={(e) => setSaveNotes(e.target.value)}
+              rows={3}
+              style={{ width: "100%", marginTop: 6 }}
+            />
+            {saveError && (
+              <div className="alert alert-error" style={{ marginTop: 8 }}>
+                {saveError}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!saveName.trim() || saving}
+              onClick={onSave}
+              style={{ marginTop: 8 }}
+            >
+              {saving
+                ? "saving…"
+                : `save new version (${selectedSaved.included_api10s.length} wells)`}
+            </button>
+          </section>
+        )}
 
         {!selectedSaved && (
           <section className="filter-section">
