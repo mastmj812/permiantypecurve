@@ -58,7 +58,7 @@ from app.forecasting.cohort import (
     load_stream_donors,
     partition_by_history,
 )
-from app.forecasting.eur import compute_eur
+from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
 from app.forecasting.fit import (
     STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_RATE_COLUMN,
@@ -89,12 +89,21 @@ from app.forecasting.ramp_arps import (
 )
 from app.forecasting.types import (
     DEFAULT_ECONOMIC_LIMIT_BOPD,
+    DEFAULT_ECONOMIC_LIMIT_BWPD,
+    DEFAULT_ECONOMIC_LIMIT_MCFD,
     DEFAULT_FORECAST_HORIZON_YEARS,
     ForecastConfig,
 )
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
 log = get_logger("api.forecasts")
+
+# Monthly→volume conversion for the chart cum series in this module.
+# DAYS_PER_YEAR / 12 — same convention as the fit / EUR math and the
+# shared display-EUR helper (ramp_arps.trapezoid_eur), so on-screen
+# cums converge to the displayed EURs. (Was 30.4375 = 365.25/12, a
+# 0.07% drift vs everything the fits integrate.)
+_DAYS_PER_MONTH = DAYS_PER_YEAR / 12.0
 
 # ============================ pydantic schemas ============================
 
@@ -104,9 +113,18 @@ class ForecastConfigBody(BaseModel):
     fit_method: str = "rate_cum"
     df_terminal_per_year: float = Field(default=0.08, ge=0.0, le=0.5)
     horizon_years: float = Field(default=DEFAULT_FORECAST_HORIZON_YEARS, gt=0.0, le=100.0)
+    # Economic limits default to the canonical 0.0 from app.forecasting
+    # .types — this tool is TECHNICAL-only and EUR is the raw 50-yr
+    # integral (economics happens downstream on the export). These used
+    # to default to 30 MCFD / 50 BWPD here, which silently truncated
+    # gas/water EURs on the batch path only, making stored EURs
+    # path-dependent (a Save Override with identical params recomputed
+    # at limit 0 and the EUR jumped). Migration 0020 repaired the
+    # affected rows. Keep these in lockstep with ForecastConfig —
+    # test_technical_eur_defaults.py pins the equality.
     economic_limit_bopd: float = Field(default=DEFAULT_ECONOMIC_LIMIT_BOPD, ge=0.0)
-    economic_limit_mcfd: float = Field(default=30.0, ge=0.0)
-    economic_limit_bwpd: float = Field(default=50.0, ge=0.0)
+    economic_limit_mcfd: float = Field(default=DEFAULT_ECONOMIC_LIMIT_MCFD, ge=0.0)
+    economic_limit_bwpd: float = Field(default=DEFAULT_ECONOMIC_LIMIT_BWPD, ge=0.0)
     # Absolute downtime floor per stream. A post-peak month below this
     # rate gets dropped from the fit regardless of context — catches
     # the choppy-restart pattern that the rolling-max relative check
@@ -519,8 +537,8 @@ def _filtered_rate_and_cum(
             rate_filtered[peak_idx + j] = None
 
     # Re-integrate cum from the filtered rates using a trapezoid step
-    # between consecutive non-null samples. ~30.4375 days per month
-    # matches the convention everywhere else in this file.
+    # between consecutive non-null samples. _DAYS_PER_MONTH matches the
+    # convention everywhere else in this file.
     cum_filtered: list[float | None] = [None] * n
     running = 0.0
     last_idx: int | None = None
@@ -531,7 +549,7 @@ def _filtered_rate_and_cum(
             cum_filtered[i] = None
             continue
         if last_idx is not None and last_rate is not None:
-            running += 0.5 * (last_rate + ri) * 30.4375 * (i - last_idx)
+            running += 0.5 * (last_rate + ri) * _DAYS_PER_MONTH * (i - last_idx)
         cum_filtered[i] = running
         last_idx = i
         last_rate = ri
@@ -1175,10 +1193,10 @@ def well_curves(
                 # Trapezoid step from t[i-1] to t[i] (one month apart).
                 # cum[0] = 0 (no production has accumulated AT the
                 # anchor boundary itself). Each subsequent step adds
-                # the average of the two end-rates times the
-                # 30.4375-day month length.
+                # the average of the two end-rates times the month
+                # length (_DAYS_PER_MONTH).
                 if i > 0:
-                    cum_running += 0.5 * (float(r[i - 1]) + rate_i) * 30.4375
+                    cum_running += 0.5 * (float(r[i - 1]) + rate_i) * _DAYS_PER_MONTH
                 forecast_cum.append(cum_running)
                 yr = anchor_date.year + (anchor_date.month - 1 + i) // 12
                 mo = ((anchor_date.month - 1 + i) % 12) + 1

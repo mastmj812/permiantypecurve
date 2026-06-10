@@ -140,7 +140,7 @@ def test_metadata_sheet_includes_fitted_50yr_eur() -> None:
     """The deal-handoff workbook reports the 50-yr Arps projection per
     percentile (technical EUR), NOT the data-window cumsum (which got
     mistaken for an EUR). The stub fit is constant-rate (Di=0=Df=b),
-    so its 50-yr integral collapses to qi * 30.4375 * 600 months."""
+    so its 50-yr integral collapses to qi * (365/12) * 600 months."""
     tc = _curve("holdTheLine_bs1s_v2")
     content = _build_workbook(_deal(), [tc])
     wb = load_workbook(io.BytesIO(content))
@@ -164,8 +164,9 @@ def test_metadata_sheet_includes_fitted_50yr_eur() -> None:
     )
     oil_row = rows[header_idx + 1]
     assert oil_row[0] == "oil"
-    # Constant-rate stub: 100 BOPD/1000 ft × 30.4375 days × 600 months.
-    expected = 100.0 * 30.4375 * 600
+    # Constant-rate stub: 100 BOPD/1000 ft × (365/12) days × 600 months
+    # — the shared display-EUR convention (ramp_arps.trapezoid_eur).
+    expected = 100.0 * (365.0 / 12.0) * 600
     p50 = oil_row[3]
     assert p50 is not None
     # ±1% tolerance — the integration uses 600 monthly samples; numeric

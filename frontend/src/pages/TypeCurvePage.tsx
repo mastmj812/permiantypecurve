@@ -1310,10 +1310,10 @@ function fitSignature(row: TypeCurveRow): string {
 
 // Average days per month for cum integration. The aggregated percentile
 // rates are calendar-day rates (e.g. BOPD averaged across the month),
-// so monthly volume = rate × days_per_month. Using the long-run average
-// (365.25 / 12) keeps the cum from drifting against the per-well calday
-// totals the backend would compute for an EUR.
-const DAYS_PER_MONTH = 30.4375;
+// so monthly volume = rate × days_per_month. 365/12 matches the
+// backend's DAYS_PER_YEAR / 12 convention (fit/EUR math, export cums)
+// so cums computed on either side of the API agree exactly.
+const DAYS_PER_MONTH = 365 / 12;
 
 // Horizon for the full-forecast charts in the right column. 50 yr × 12 mo
 // matches the backend's per-percentile evaluation horizon and the CSV

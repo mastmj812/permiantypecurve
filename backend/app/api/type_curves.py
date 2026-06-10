@@ -700,10 +700,13 @@ def delete_type_curve(
 
 
 # Days-per-month constant for monthly→cum conversion in the forecast
-# export. Matches the convention used by the per-well fit code
-# (`fit_p50.py::_DAYS_PER_MONTH`) so the exported cum matches the EUR
-# values in metadata.csv to within rounding.
-_DAYS_PER_MONTH = 30.4375
+# export. DAYS_PER_YEAR / 12 — the SAME convention as the fit / EUR
+# math (eur.DAYS_PER_YEAR = 365) and the shared display-EUR helper
+# (ramp_arps.trapezoid_eur), so the exported cum column converges to
+# the metadata sheet's EUR row exactly. (This used to be 30.4375 —
+# 365.25/12 — while the fit math used 365/12; a 0.07% systematic drift
+# between the export cums and every other surface.)
+_DAYS_PER_MONTH = 365.0 / 12.0
 
 # Horizon for the fitted-forecast CSV. 50 years × 12 months = 600 rows.
 # Matches the brief's `DEFAULT_FORECAST_HORIZON_YEARS` and the per-
@@ -757,35 +760,22 @@ def _fitted_eur_per_1000ft(
 ) -> dict[str, float | None]:
     """50-yr trapezoid integral of each percentile's fitted Arps rate.
 
-    Mirrors the frontend's ``eurFromArpsParams`` helper so the export
-    metadata sheet reports the same number the Type Curve UI's EUR
-    table shows. Raw integral — no economic-limit cutoff (this tool is
-    technical-only; economics happens downstream).
-
-    Trapezoid rule: month K's volume = (rate at start + rate at end)/2
-    * dt, last month flat-extrapolated. Closes the small systematic
-    bias (~0.2% on Permian fits) the right-endpoint rectangle rule had
-    against the closed-form ``compute_eur``.
+    Routes through the shared ``ramp_arps.trapezoid_eur`` (the same
+    rule the frontend's ``eurFromArpsParams``, the deal-deck well rows,
+    and the well-stats endpoint use) so the export metadata sheet
+    reports the same number the Type Curve UI's EUR table shows. Raw
+    integral — no economic-limit cutoff (this tool is technical-only;
+    economics happens downstream).
 
     None for any percentile whose underlying series couldn't be fit.
     """
+    from app.forecasting.ramp_arps import trapezoid_eur
+
     rates_by_pct = _evaluate_fitted_rates(stream_data)
-    out: dict[str, float | None] = {}
-    for key, rates in rates_by_pct.items():
-        if rates is None:
-            out[key] = None
-            continue
-        cum = 0.0
-        n = len(rates)
-        for i in range(n):
-            a = rates[i]
-            if a is None or not math.isfinite(a):
-                continue
-            nxt = rates[i + 1] if i + 1 < n else None
-            b = float(nxt) if (nxt is not None and math.isfinite(nxt)) else float(a)
-            cum += (float(a) + b) / 2.0 * _DAYS_PER_MONTH
-        out[key] = cum
-    return out
+    return {
+        key: (trapezoid_eur(rates) if rates is not None else None)
+        for key, rates in rates_by_pct.items()
+    }
 
 
 def _evaluate_fitted_rates(
@@ -1018,10 +1008,11 @@ def get_type_curve_well_stats(
     that matches included_api10s exactly.
 
     EUR is recomputed on the fly from the RESOLVED oil forecast
-    (TC override → global → none) using the same monthly trapezoid
-    that the Review tab's ``eurFromArpsParams`` uses: evaluate the
-    modified-hyperbolic fit out to 600 monthly samples and trapezoid-
-    integrate. Routing through ``resolve_forecast`` keeps the probit
+    (TC override → global → none) via the shared
+    ``ramp_arps.display_eur_from_params`` — the same monthly-trapezoid
+    convention the Review tab's ``eurFromArpsParams``, the deal-deck
+    well rows, and the per-percentile export EURs use, ramp prefix
+    included. Routing through ``resolve_forecast`` keeps the probit
     dots aligned with what the workspace shows for each well — a TC
     override edited via the workspace flows through to the deck.
     Falls back to the stored ``forecasts.eur`` column when params are
@@ -1030,12 +1021,8 @@ def get_type_curve_well_stats(
     via ``scipy.integrate.quad`` (continuous integral); the trapezoid
     agrees with it to <0.1% on Permian fits.
     """
-    from app.type_curves.fit_p50 import evaluate_fit
+    from app.forecasting.ramp_arps import display_eur_from_params
     from app.type_curves.overrides import resolve_forecast
-
-    # Same constant the frontend uses (frontend/src/forecasts/arps.ts).
-    DAYS_PER_MONTH = 30.4375
-    N_MONTHS = 600
 
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
@@ -1077,44 +1064,16 @@ def get_type_curve_well_stats(
 
         if payload:
             params = payload.get("params") or {}
-            required = ("qi", "Di", "b", "Df")
-            if all(
-                k in params
-                and isinstance(params[k], (int, float))
-                and math.isfinite(float(params[k]))
-                for k in required
-            ):
-                try:
-                    fit = evaluate_fit(
-                        qi=float(params["qi"]),
-                        Di=float(params["Di"]),
-                        b=float(params["b"]),
-                        Df=float(params["Df"]),
-                        # Per-well forecasts start at peak — no ramp prefix.
-                        qo=float(params["qi"]),
-                        peak_index=0,
-                        n_months=N_MONTHS,
-                    )
-                    # Trapezoid: month K's volume = (rate at start of
-                    # month + rate at end of month) / 2 * dt, last
-                    # month flat-extrapolated. Mirrors the frontend's
-                    # eurFromArpsParams to within numerical noise.
-                    smoothed = fit["smoothed_rate"]
-                    n = len(smoothed)
-                    eur = 0.0
-                    for i in range(n):
-                        rate_i = float(smoothed[i])
-                        if not math.isfinite(rate_i):
-                            continue
-                        nxt = smoothed[i + 1] if i + 1 < n else rate_i
-                        nxt_f = (
-                            float(nxt)
-                            if math.isfinite(float(nxt))
-                            else rate_i
-                        )
-                        eur += (rate_i + nxt_f) / 2.0 * DAYS_PER_MONTH
-                except Exception:
-                    eur = None
+            try:
+                # Ramp-aware: post-migration-0013 fits carry qo /
+                # peak_index_months in params and the stored eur
+                # includes the ramp volume — dropping the ramp here
+                # (the old qo=qi / peak_index=0 shortcut) understated
+                # ramp-fit wells by the ramp volume vs every other
+                # surface.
+                eur = display_eur_from_params(params)
+            except Exception:
+                eur = None
             if eur is None:
                 # Last-ditch fallback: stored eur on the payload (override
                 # payloads carry it, global rows project it through).

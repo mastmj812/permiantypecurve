@@ -548,12 +548,22 @@ _FALLBACK_MIN_R2: float = 0.3
 _WATER_QI_UNDERFIT_FRACTION: float = 0.6
 
 
-def _di_at_bound(di: float | None) -> bool:
+def _di_at_bound(di: float | None, *, di_hi: float = DI_NOMINAL_HI_PER_YEAR) -> bool:
+    """True when Di sits within tolerance of the nominal-Di fit bounds.
+
+    ``di_hi`` must be the SAME per-stream cap the fit ran with (water's
+    raised 12.0, oil/gas's 4.0 — see ``_stream_di_hi``). With the oil
+    cap hardcoded, every water fit with Di in (3.92, 11.76) read as
+    "pinned" even though it sat comfortably inside the water bounds —
+    needlessly firing the rate-time fallback and, when that fallback
+    landed below 3.92 with R² ≥ 0.3, silently replacing a legitimate
+    steep cum fit. Same per-stream rule as ``detect_at_bound``.
+    """
     if di is None:
         return False
     return (
         di < DI_NOMINAL_LO_PER_YEAR * (1 + BOUND_TOLERANCE_PCT)
-        or di > DI_NOMINAL_HI_PER_YEAR * (1 - BOUND_TOLERANCE_PCT)
+        or di > di_hi * (1 - BOUND_TOLERANCE_PCT)
     )
 
 
@@ -598,14 +608,19 @@ def fit_with_fallback(
     `fit_method="rate_time_fallback"` so the engineer can see in the
     grid which wells were rescued.
     """
+    cfg = config or ForecastConfig()
     primary = fit_rate_cum(
         monthly_df,
         model_type=model_type,
         peak=peak,
         stream=stream,
-        config=config,
+        config=cfg,
     )
-    di_pinned = _di_at_bound(primary.di_initial)
+    # Judge "pinned" against the cap THIS stream's fit actually used —
+    # water runs with the raised cap (ForecastConfig.water_di_nominal_
+    # hi_per_year), oil/gas with the module default.
+    stream_di_hi = _stream_di_hi(stream, cfg)
+    di_pinned = _di_at_bound(primary.di_initial, di_hi=stream_di_hi)
     # Water-only: cum qi well below the observed peak means the integral
     # smoothed away a hard early decline. peak.peak_rate is the raw
     # observed peak; primary.qi is the fitted cum qi.
@@ -622,7 +637,7 @@ def fit_with_fallback(
             model_type=model_type,
             peak=peak,
             stream=stream,
-            config=config,
+            config=cfg,
         )
     except Exception as e:  # noqa: BLE001 — fallback is best-effort
         log.info(
@@ -649,7 +664,7 @@ def fit_with_fallback(
         )
     else:
         # Di-at-bound trigger: don't swap one pinned fit for another.
-        if _di_at_bound(fallback.di_initial):
+        if _di_at_bound(fallback.di_initial, di_hi=stream_di_hi):
             return primary
         note = (
             f"cum fit pinned Di={primary.di_initial:.2f}; "
