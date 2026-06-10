@@ -122,6 +122,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // (checked by default — replacing the published curve is the usual
   // intent; the parent stays in the library as the historical record).
   const [takeOverDeal, setTakeOverDeal] = useState(true);
+  // Alignment for the NEW version. Independent of the loaded curve's
+  // (fixed) alignment so a re-version can move to the recommended
+  // method — defaults to peak_ramp.
+  const [versionAlignment, setVersionAlignment] =
+    useState<AlignmentMethod>("peak_ramp");
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -340,7 +345,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
         name: saveName.trim(),
         notes: saveNotes.trim() || null,
         included_api10s: wells,
-        alignment_method: alignment,
+        // Version saves carry their own alignment choice (the loaded
+        // curve's alignment is fixed; the new version can move to the
+        // recommended method).
+        alignment_method: selectedSaved ? versionAlignment : alignment,
         version_of: parent,
         fit_overrides: collectOverrides(),
         take_over_deal:
@@ -441,6 +449,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     // the dropdown stays editable for the standalone-save case.
     setVersionOf(row.id);
     setTakeOverDeal(true);
+    setVersionAlignment("peak_ramp");
     clearTweakState();
   }
 
@@ -1028,6 +1037,22 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               result as a new version of {selectedSaved.name}. The
               loaded curve is not modified.
             </p>
+            <label className="chk-inline">alignment for the new version:</label>
+            <select
+              value={versionAlignment}
+              onChange={(e) =>
+                setVersionAlignment(e.target.value as AlignmentMethod)
+              }
+              style={{ width: "100%", marginBottom: 6 }}
+            >
+              <option value="peak_ramp">
+                Peak-aligned + ramp (recommended)
+              </option>
+              <option value="first_prod_month">
+                First-prod month (incl. ramp-up)
+              </option>
+              <option value="peak_month">Peak month (decline-only)</option>
+            </select>
             <input
               type="text"
               placeholder={`${selectedSaved.name}_v2`}
