@@ -34,6 +34,7 @@ import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 import { effectiveDecline, nominalDecline } from "../api/forecasts";
+import { navigateHash } from "../navigation";
 import { useMapStore } from "../store/mapStore";
 
 type Stream = "oil" | "gas" | "water";
@@ -1289,6 +1290,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 // Forecast flow ever set it, so a loaded curve's wells
                 // couldn't be QC'd there at all.
                 st.setForecastApi10s(selectedSaved.included_api10s);
+                // A #/type-curves/{id} detail hash (left by the
+                // workspace back-nav) FORCES the TC tab in App's
+                // routing — clear it or this page switch is silently
+                // swallowed.
+                navigateHash("");
                 st.setCurrentPage("review");
               }}
             >

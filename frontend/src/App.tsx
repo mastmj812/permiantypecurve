@@ -11,6 +11,7 @@ import {
 import { fetchTypeCurve } from "./api/typeCurves";
 import type { FilterSpec, WellStatus } from "./api/types";
 import { HealthBadge } from "./components/HealthBadge";
+import { navigateHash } from "./navigation";
 import { LoginPage } from "./pages/LoginPage";
 import { MapPage } from "./pages/MapPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -68,19 +69,6 @@ function parseTypeCurveDetailHash(): { typeCurveId: string } | null {
   const hash = window.location.hash || "";
   const m = hash.match(/^#\/type-curves\/([^/?]+)$/);
   return m ? { typeCurveId: m[1]! } : null;
-}
-
-// Navigate by changing the URL hash and ALWAYS dispatching a
-// hashchange event manually. Setting ``window.location.hash`` directly
-// is unreliable across browsers when the new value is empty or only
-// differs by a trailing "#" (Safari sometimes skips the event entirely),
-// which lets the route-state hooks fall out of sync with the URL.
-// Using history.pushState + a manual dispatch is consistent everywhere.
-function navigateHash(newHash: string): void {
-  const base = window.location.pathname + window.location.search;
-  const target = newHash ? base + newHash : base;
-  window.history.pushState(null, "", target);
-  window.dispatchEvent(new HashChangeEvent("hashchange"));
 }
 
 const TABS: Array<{ id: "map" | "review" | "type_curve"; label: string }> = [
