@@ -285,6 +285,10 @@ def _write_metadata_sheet(
         ),
     ])
     ws.append(["alignment_method", tc.alignment_method.value])
+    # SPE / PRMS reserves orientation: the p10 columns are the HIGH
+    # case (exceeded by 10% of wells), p90 the LOW case. Stamped here
+    # so downstream econ tooling can't misread the percentile columns.
+    ws.append(["percentile_convention", "SPE (P10 = high case, P90 = low case)"])
     ws.append(["created_at", tc.created_at.isoformat()])
     ws.append(["version_of", str(tc.version_of) if tc.version_of else ""])
     ws.append(["n_wells", len(tc.included_api10s or [])])

@@ -935,6 +935,10 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
         ),
     ])
     writer.writerow(["alignment_method", tc.alignment_method.value])
+    # SPE / PRMS orientation: p10 columns = HIGH case, p90 = LOW case.
+    writer.writerow(
+        ["percentile_convention", "SPE (P10 = high case, P90 = low case)"]
+    )
     writer.writerow(["created_at", tc.created_at.isoformat()])
     writer.writerow(["version_of", str(tc.version_of) if tc.version_of else ""])
     writer.writerow(["n_wells", len(tc.included_api10s or [])])

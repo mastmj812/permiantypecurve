@@ -543,12 +543,14 @@ function mergeSeriesForAxes(a: StreamSeries, b: StreamSeries): StreamSeries {
     well_count: pad(b.well_count, 0),
   };
   return {
-    // Take the broader band envelope from either curve so the axis covers both.
-    p10: A.p10.map((v, i) => ymin(v, B.p10[i] ?? null)),
-    p25: A.p25.map((v, i) => ymin(v, B.p25[i] ?? null)),
+    // Take the broader band envelope from either curve so the axis covers
+    // both. SPE orientation: p10/p25 are the UPPER band edges (high case)
+    // → pointwise max; p75/p90 are the LOWER edges → pointwise min.
+    p10: A.p10.map((v, i) => ymax(v, B.p10[i] ?? null)),
+    p25: A.p25.map((v, i) => ymax(v, B.p25[i] ?? null)),
     p50: A.p50.map((v, i) => ymax(v, B.p50[i] ?? null)),
-    p75: A.p75.map((v, i) => ymax(v, B.p75[i] ?? null)),
-    p90: A.p90.map((v, i) => ymax(v, B.p90[i] ?? null)),
+    p75: A.p75.map((v, i) => ymin(v, B.p75[i] ?? null)),
+    p90: A.p90.map((v, i) => ymin(v, B.p90[i] ?? null)),
     mean: A.mean.map((v, i) => ymax(v, B.mean[i] ?? null)),
     well_count: A.well_count.map((v, i) => Math.max(v, B.well_count[i] ?? 0)),
     implied_eur_per_1000ft: a.implied_eur_per_1000ft,

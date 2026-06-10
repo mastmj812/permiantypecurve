@@ -25,14 +25,16 @@ interface Props {
 }
 
 const PAD = { top: 22, right: 64, bottom: 44, left: 60 };
+// SPE convention: Pxx = value exceeded by xx% of wells (P10 = high
+// case). Dots plot at cumulative-from-below, so Pxx sits at 1 - xx/100.
 const RIGHT_AXIS_LABELS: Array<{ label: string; pct: number }> = [
-  { label: "P1", pct: 0.01 },
-  { label: "P10", pct: 0.10 },
-  { label: "P25", pct: 0.25 },
+  { label: "P99", pct: 0.01 },
+  { label: "P90", pct: 0.10 },
+  { label: "P75", pct: 0.25 },
   { label: "P50", pct: 0.50 },
-  { label: "P75", pct: 0.75 },
-  { label: "P90", pct: 0.90 },
-  { label: "P99", pct: 0.99 },
+  { label: "P25", pct: 0.75 },
+  { label: "P10", pct: 0.90 },
+  { label: "P1", pct: 0.99 },
 ];
 
 // Beasley-Springer-Moro probit (inverse normal CDF). ~4-decimal

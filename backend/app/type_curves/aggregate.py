@@ -26,10 +26,22 @@ from typing import Any, Literal
 
 import numpy as np
 
-# Standard percentiles surfaced everywhere downstream (chart bands,
-# implied EUR table, CSV export).
+# Standard percentile labels surfaced everywhere downstream (chart
+# bands, EUR table, CSV export).
+#
+# CONVENTION — SPE / PRMS reserves convention, NOT numpy's statistical
+# percentile: "P10" is the HIGH case (exceeded by only 10% of wells),
+# "P90" the LOW case (exceeded by 90%). P10 ≥ P50 ≥ P90. Numerically,
+# label Pxx maps to the (100 − xx)-th statistical percentile of the
+# cross-well distribution — see ``_SPE_NUMPY_PERCENTILES`` below.
+# Adopted 2026-06-10 (the tool previously used the statistical
+# orientation, i.e. p10 = low); saved type curves were flipped in
+# migration 0021 so persisted series JSONB matches this convention.
 PERCENTILES: tuple[int, ...] = (10, 25, 50, 75, 90)
 PERCENTILE_KEYS: tuple[str, ...] = tuple(f"p{p}" for p in PERCENTILES)
+# numpy percentile to evaluate for each SPE label, in PERCENTILES order:
+# P10 → 90th, P25 → 75th, P50 → 50th, P75 → 25th, P90 → 10th.
+_SPE_NUMPY_PERCENTILES: tuple[int, ...] = tuple(100 - p for p in PERCENTILES)
 
 # Mean number of days per calendar month — used to convert daily rates to
 # per-month volumes when computing implied EUR. Matches DAYS_PER_YEAR/12.
@@ -140,7 +152,10 @@ def _stream_panel(
             p75.append(None); p90.append(None); means.append(None)
             continue
         # `linear` interpolation for percentiles is the standard.
-        qs = np.percentile(usable, PERCENTILES, method="linear")
+        # SPE orientation: the "p10" series takes the 90th statistical
+        # percentile (high case), "p90" the 10th (low case) — see the
+        # PERCENTILES comment at the top of the module.
+        qs = np.percentile(usable, _SPE_NUMPY_PERCENTILES, method="linear")
         p10.append(float(qs[0])); p25.append(float(qs[1]))
         p50.append(float(qs[2])); p75.append(float(qs[3])); p90.append(float(qs[4]))
         means.append(float(np.mean(usable)))
