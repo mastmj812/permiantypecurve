@@ -1171,6 +1171,24 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               label="Wells"
               value={selectedSaved.included_api10s.length.toString()}
             />
+            <button
+              type="button"
+              className="link-btn"
+              style={{ fontSize: 11, textAlign: "left" }}
+              title="Open these wells in the Review tab to QC the global forecasts (probit, Novi divergence, per-well fits) before saving a new version. No re-fit runs — Review only fits on the map-tab Forecast button."
+              onClick={() => {
+                const st = useMapStore.getState();
+                // Make this curve's wells the Review tab's working
+                // set. Review fetches existing forecasts for whatever
+                // forecastApi10s holds — previously only the map-tab
+                // Forecast flow ever set it, so a loaded curve's wells
+                // couldn't be QC'd there at all.
+                st.setForecastApi10s(selectedSaved.included_api10s);
+                st.setCurrentPage("review");
+              }}
+            >
+              review {selectedSaved.included_api10s.length} forecasts in Review tab →
+            </button>
             <Stat
               label="Normalization"
               value={normalizationLabel(selectedSaved.normalization_basis)}
