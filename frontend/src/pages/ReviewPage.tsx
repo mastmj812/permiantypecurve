@@ -763,6 +763,16 @@ export function ReviewPage() {
           disabled={includedCount === 0}
           title="Open the Type curve page with the included set"
           onClick={() => {
+            // Snapshot the EXACT well list this button's count promises:
+            // the formation/outlier-FILTERED rows minus exclusions.
+            // TypeCurvePage aggregates this snapshot — previously it
+            // used the full forecastApi10s scope, so a filtered Review
+            // ("Aggregate 45") silently built the TC from all 120.
+            useMapStore.getState().setTypeCurveApi10s(
+              filtered
+                .filter((r) => !excluded.has(r.api10))
+                .map((r) => r.api10),
+            );
             // One-shot trigger — TypeCurvePage consumes this to fire
             // the compute. Without it, tab nav back to TC would
             // re-fire the compute on every visit.

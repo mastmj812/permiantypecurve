@@ -62,6 +62,11 @@ interface TypeCurvePageProps {
 
 export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}) {
   const forecastApi10s = useMapStore((s) => s.forecastApi10s);
+  // The Review page's Aggregate button snapshots its filtered+included
+  // list here so the TC is built from exactly the wells the button
+  // counted. Null (other nav paths / fresh batch) falls back to the
+  // full forecast scope — the legacy behavior.
+  const typeCurveApi10s = useMapStore((s) => s.typeCurveApi10s);
   const excluded = useMapStore((s) => s.excludedApi10s);
   // Cohort-handoff prefill: when the user reached this page via the
   // cohort bar's Forecast button, these are populated. The save form
@@ -71,8 +76,8 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const activeCohortDealId = useMapStore((s) => s.activeCohortDealId);
 
   const included = useMemo(
-    () => forecastApi10s.filter((a) => !excluded.has(a)),
-    [forecastApi10s, excluded],
+    () => (typeCurveApi10s ?? forecastApi10s).filter((a) => !excluded.has(a)),
+    [typeCurveApi10s, forecastApi10s, excluded],
   );
 
   // Trigger-gated compute, mirroring the Forecast/Review pattern. The
