@@ -46,7 +46,10 @@ from app.db.models import (
     Well,
 )
 from app.db.session import SessionLocal
-from app.ingest.novi_forecast import upsert_novi_forecast_records
+from app.ingest.novi_forecast import (
+    delete_novi_forecast_for_api10s,
+    upsert_novi_forecast_records,
+)
 from app.ingest.production import upsert_production_records
 from app.ingest.wells import upsert_well_headers
 from app.warehouse_client.novi_forecast import fetch_novi_forecast_for_api10s
@@ -237,6 +240,17 @@ def sync_permian(
                 metadata={"kind": "novi_forecast"},
             ) as job:
                 with Session(wh_engine) as wh:
+                    # Vintage rule: wipe the refresh scope first so the
+                    # table holds exactly ONE Novi vintage per well —
+                    # upsert alone leaves the previous vintage's early
+                    # months behind when the new snapshot starts later,
+                    # and the overlay then renders a stitched
+                    # two-vintage series with a cum discontinuity.
+                    # Tradeoff: a crash between this delete and the
+                    # inserts leaves those wells with no Novi rows
+                    # until the next successful sync — visibly absent
+                    # beats subtly wrong, and a re-run repairs it.
+                    delete_novi_forecast_for_api10s(session, api10s)
                     fc_iter = fetch_novi_forecast_for_api10s(wh, api10s)
                     total = 0
                     for batch in _batched(fc_iter, 1000):
