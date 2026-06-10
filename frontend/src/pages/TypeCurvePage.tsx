@@ -449,8 +449,43 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     // the dropdown stays editable for the standalone-save case.
     setVersionOf(row.id);
     setTakeOverDeal(true);
-    setVersionAlignment("peak_ramp");
+    // Start at the PARENT's alignment so what's on screen always
+    // matches what Save would produce; switching the dropdown fires a
+    // live preview (see onVersionAlignmentChange) before any save.
+    setVersionAlignment(row.alignment_method);
     clearTweakState();
+  }
+
+  // Changing the new version's alignment previews the re-aggregation
+  // in the main charts — same behavior as the pre-save flow, so the
+  // engineer sees the peak_ramp (or other) fit BEFORE committing. The
+  // saved curve itself is untouched; picking the parent's own
+  // alignment back restores its stored series. The preview is
+  // override-blind (global forecasts only), exactly like the version
+  // save, so preview === what Save will persist.
+  const alignPreviewSeq = useRef(0);
+  function onVersionAlignmentChange(next: AlignmentMethod) {
+    setVersionAlignment(next);
+    if (!selectedSaved) return;
+    const seq = ++alignPreviewSeq.current;
+    if (next === selectedSaved.alignment_method) {
+      setAgg(selectedSaved.series);
+      return;
+    }
+    setComputing(true);
+    computeTypeCurve({
+      api10s: selectedSaved.included_api10s,
+      alignment_method: next,
+    })
+      .then((p) => {
+        if (seq === alignPreviewSeq.current) setAgg(p);
+      })
+      .catch((e) => {
+        console.error("version alignment preview failed", e);
+      })
+      .finally(() => {
+        if (seq === alignPreviewSeq.current) setComputing(false);
+      });
   }
 
   // Preload the requested curve when arriving via the
@@ -688,7 +723,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Cartesian"
                 width={380}
                 xMaxMonths={dataWindowMonths}
@@ -700,7 +735,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="log"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Semi-log (rate)"
                 width={380}
                 xMaxMonths={dataWindowMonths}
@@ -713,7 +748,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="log"
                   yLabel={units.rate}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Full forecast — semi-log (rate)"
                   width={380}
                   smoothedOverride={previewFullSmoothed[stream]}
@@ -732,7 +767,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Early time (first 12 months)"
                 xMaxMonths={12}
                 xTickStep={1}
@@ -746,7 +781,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="linear"
                   yLabel={units.cum}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Cumulative (data window)"
                   width={380}
                   xMaxMonths={dataWindowMonths}
@@ -760,7 +795,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="linear"
                   yLabel={units.cum}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Full forecast — cumulative"
                   width={380}
                   smoothedOverride={cumPreviewFullSmoothed}
@@ -1041,7 +1076,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             <select
               value={versionAlignment}
               onChange={(e) =>
-                setVersionAlignment(e.target.value as AlignmentMethod)
+                onVersionAlignmentChange(e.target.value as AlignmentMethod)
               }
               style={{ width: "100%", marginBottom: 6 }}
             >
@@ -1053,6 +1088,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               </option>
               <option value="peak_month">Peak month (decline-only)</option>
             </select>
+            {versionAlignment !== selectedSaved.alignment_method &&
+              agg?.alignment_method === versionAlignment && (
+                <p className="muted" style={{ margin: "2px 0 6px" }}>
+                  charts are previewing the new version (
+                  {alignmentLabel(versionAlignment)}); the saved curve
+                  keeps {alignmentLabel(selectedSaved.alignment_method)}{" "}
+                  until you save
+                </p>
+              )}
             <input
               type="text"
               placeholder={`${selectedSaved.name}_v2`}
