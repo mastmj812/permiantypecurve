@@ -75,8 +75,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const activeCohortName = useMapStore((s) => s.activeCohortName);
   const activeCohortDealId = useMapStore((s) => s.activeCohortDealId);
 
+  // Snapshots (the Review Aggregate button, or a loaded saved curve)
+  // are AUTHORITATIVE membership: the Aggregate button already applied
+  // the exclusion set when it built the snapshot, and a loaded curve's
+  // list must round-trip into its versions untouched. Re-applying the
+  // live exclusion set on top would let a stale Review un-tick
+  // silently shrink a version's membership. Only the legacy
+  // forecast-scope fallback still filters by exclusions.
   const included = useMemo(
-    () => (typeCurveApi10s ?? forecastApi10s).filter((a) => !excluded.has(a)),
+    () => typeCurveApi10s ?? forecastApi10s.filter((a) => !excluded.has(a)),
     [typeCurveApi10s, forecastApi10s, excluded],
   );
 
@@ -271,6 +278,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       // recompute. Falls through.
     } else {
       setTcTriggerPending(false);
+      // Fresh Aggregate from Review: the new working set has no
+      // implicit parent. Clear any version-of default left behind by
+      // a previously loaded curve so Save doesn't silently create a
+      // version of an unrelated curve.
+      setVersionOf(null);
     }
     setComputing(true);
     setSelectedSaved(null);
@@ -404,6 +416,17 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     setAlignment(row.alignment_method);
     setEditedNotes(row.notes ?? "");
     setUpdateError(null);
+    // Hydrate the workspace scope from the loaded curve so a
+    // subsequent Save-as-version carries EXACTLY this curve's
+    // membership. Without this, the save form kept whatever well list
+    // the workspace last held (a different cohort, or nothing), and a
+    // "version" could silently have different wells than its parent.
+    useMapStore.getState().setTypeCurveApi10s(row.included_api10s);
+    // Default the save form to versioning the curve being viewed —
+    // the natural intent of load → tweak → save. Cleared again when a
+    // fresh Aggregate arrives from Review (see the compute effect);
+    // the dropdown stays editable for the standalone-save case.
+    setVersionOf(row.id);
     clearTweakState();
   }
 
