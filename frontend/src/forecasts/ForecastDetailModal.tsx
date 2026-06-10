@@ -117,6 +117,11 @@ export function ForecastDetailModal({
   // is active.
   const [previewEurDisplayed, setPreviewEurDisplayed] = useState<number | null>(null);
   const [previewEurRemaining, setPreviewEurRemaining] = useState<number | null>(null);
+  // Surfaced near the save/lock buttons when a persistence call fails.
+  // Without this a rejected PATCH/PUT is indistinguishable from a
+  // successful save — the user walks away believing the manual fit
+  // persisted. Cleared at the start of the next save/lock attempt.
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!forecastForStream) return;
@@ -166,6 +171,10 @@ export function ForecastDetailModal({
   }, [onPrev, onNext, onClose]);
 
   useEffect(() => {
+    // Cancellation guard: rapid prev/next nav overlaps requests, and a
+    // slower older response resolving last would overwrite `curves`
+    // with the previous well's production under the new well's header.
+    let cancelled = false;
     setLoading(true);
     // Pass tc_id when in TC context so any saved per-(api10,stream)
     // override on the type curve drives the forecast portion of the
@@ -173,10 +182,16 @@ export function ForecastDetailModal({
     // "Save TC override" would appear to revert on the next refetch.
     fetchWellCurves(api10, 50, tcContext?.id ?? null)
       .then((r) => {
+        if (cancelled) return;
         const found = r.streams.find((s) => s.stream === stream) ?? null;
         setCurves(found);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [api10, stream, tcContext?.id]);
 
   const history = useMemo<SeriesPoint[]>(() => {
@@ -380,6 +395,7 @@ export function ForecastDetailModal({
     if (editPeakIndexMonths != null) {
       params.peak_index_months = editPeakIndexMonths;
     }
+    setSaveError(null);
 
     if (tcContext) {
       // TC-context save: write a per-TC override. The global forecast
@@ -389,29 +405,36 @@ export function ForecastDetailModal({
       // (otherwise the red line snaps back to the global on the next
       // render — preview just clears, fitForecast falls back to the
       // unchanged /curves payload).
-      const resolved = await putForecastOverride(
-        tcContext.id,
-        api10,
-        stream,
-        {
-          qi: params.qi ?? editQi ?? 0,
-          Di: params.Di ?? editDi ?? 0,
-          b: params.b ?? editB ?? 0,
-          Df: params.Df ?? editDf ?? 0.08,
-          // Pass the ramp prefix when present so the override
-          // preserves it. The backend stores it on the override
-          // payload and /curves uses it when the modal refetches.
-          qo: params.qo ?? editQo ?? null,
-          peak_index_months:
-            params.peak_index_months ?? editPeakIndexMonths ?? null,
-        },
-      );
-      tcContext.onOverrideChanged(
-        api10,
-        stream,
-        resolved.source,
-        resolved.payload,
-      );
+      try {
+        const resolved = await putForecastOverride(
+          tcContext.id,
+          api10,
+          stream,
+          {
+            qi: params.qi ?? editQi ?? 0,
+            Di: params.Di ?? editDi ?? 0,
+            b: params.b ?? editB ?? 0,
+            Df: params.Df ?? editDf ?? 0.08,
+            // Pass the ramp prefix when present so the override
+            // preserves it. The backend stores it on the override
+            // payload and /curves uses it when the modal refetches.
+            qo: params.qo ?? editQo ?? null,
+            peak_index_months:
+              params.peak_index_months ?? editPeakIndexMonths ?? null,
+          },
+        );
+        tcContext.onOverrideChanged(
+          api10,
+          stream,
+          resolved.source,
+          resolved.payload,
+        );
+      } catch (e) {
+        // Keep the modal open and the user's edits intact — the
+        // override did NOT persist and the message says so.
+        setSaveError(e instanceof Error ? e.message : String(e));
+        return;
+      }
       setPreviewPoints([]);
       setPreviewCumPoints([]);
       setPreviewEur(null);
@@ -427,10 +450,18 @@ export function ForecastDetailModal({
       return;
     }
 
-    const updated = await patchForecast(forecastForStream.id, {
-      params,
-      manual_override: true,
-    });
+    let updated: ForecastRow;
+    try {
+      updated = await patchForecast(forecastForStream.id, {
+        params,
+        manual_override: true,
+      });
+    } catch (e) {
+      // Keep the modal open and the user's edits intact — the save
+      // did NOT persist and the message says so.
+      setSaveError(e instanceof Error ? e.message : String(e));
+      return;
+    }
     onSaved(updated);
     setPreviewPoints([]);
     setPreviewCumPoints([]);
@@ -472,10 +503,15 @@ export function ForecastDetailModal({
 
   async function toggleLock() {
     if (!forecastForStream) return;
-    const updated = await patchForecast(forecastForStream.id, {
-      locked: !forecastForStream.locked,
-    });
-    onSaved(updated);
+    setSaveError(null);
+    try {
+      const updated = await patchForecast(forecastForStream.id, {
+        locked: !forecastForStream.locked,
+      });
+      onSaved(updated);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    }
   }
 
   const units = STREAM_UNITS[stream];
@@ -736,6 +772,11 @@ export function ForecastDetailModal({
                       {forecastForStream.locked ? "locked" : "lock"}
                     </button>
                   )}
+                </div>
+              )}
+              {saveError && (
+                <div className="alert alert-error" style={{ marginTop: 4 }}>
+                  save failed — changes not persisted: {saveError}
                 </div>
               )}
               <div className="param-stats">

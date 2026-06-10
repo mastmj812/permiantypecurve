@@ -140,6 +140,11 @@ export function MapView() {
   // One reusable popup for hover info — avoids flicker from creating /
   // destroying a Popup per mousemove. Cleaned up implicitly by map.remove().
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  // Monotonic sequence for click-selection summaries. Two quick clicks
+  // overlap their summaryForApi10s requests; without this guard the
+  // slower (older) response can resolve last and reset the selection
+  // to the older set — a well visibly highlights then silently drops.
+  const clickSeqRef = useRef(0);
   const [tilesMissing, setTilesMissing] = useState(false);
   const [blocksError, setBlocksError] = useState<string | null>(null);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
@@ -241,8 +246,19 @@ export function MapView() {
           if (!api10) return;
           toggleApi10(api10);
           const nextSet = new Set(useMapStore.getState().selectedApi10s);
-          const summary = await summaryForApi10s(Array.from(nextSet));
-          setSelection(Array.from(nextSet), summary);
+          const seq = ++clickSeqRef.current;
+          try {
+            const summary = await summaryForApi10s(Array.from(nextSet));
+            // A newer click superseded this request — drop the stale
+            // result instead of resetting the selection to nextSet.
+            if (seq !== clickSeqRef.current) return;
+            setSelection(Array.from(nextSet), summary);
+          } catch (e) {
+            // toggleApi10 already updated the store, so the highlight
+            // stays consistent with what the user clicked — only the
+            // drawer summary stats may be stale.
+            console.error("click selection summary failed", e);
+          }
         },
       });
       drawer.install();
