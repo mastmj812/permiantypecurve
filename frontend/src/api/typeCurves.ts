@@ -3,7 +3,9 @@
 import { apiFetch } from "./auth";
 
 export type NormalizationBasis = "per_lateral_ft" | "per_proppant_lb" | "per_well";
-export type AlignmentMethod = "peak_month" | "first_prod_month";
+// peak_ramp = peak-aligned with ramp lookback: every well's peak sits
+// at the cohort-median ramp length, its own ramp in the months before.
+export type AlignmentMethod = "peak_month" | "first_prod_month" | "peak_ramp";
 
 export interface FittedTypeCurve {
   model_type: string;

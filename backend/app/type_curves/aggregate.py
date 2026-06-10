@@ -48,7 +48,10 @@ _SPE_NUMPY_PERCENTILES: tuple[int, ...] = tuple(100 - p for p in PERCENTILES)
 DAYS_PER_MONTH: float = 365.0 / 12.0
 
 NormalizationBasis = Literal["per_lateral_ft", "per_proppant_lb", "per_well"]
-AlignmentMethod = Literal["peak_month", "first_prod_month"]
+# peak_ramp = peak-aligned with ramp lookback: every well's peak at the
+# cohort-median ramp length M, its own ramp in the months before. See
+# loader.load_wells_with_forecast.
+AlignmentMethod = Literal["peak_month", "first_prod_month", "peak_ramp"]
 
 
 @dataclass(frozen=True)

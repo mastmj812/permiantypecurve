@@ -3,13 +3,22 @@
 Glue between the DB (`wells`, `production_monthly`, `forecasts`) and the
 pure aggregation in `aggregate.py`.
 
-Two alignments supported:
-  * `first_prod_month` (default) — t=0 at `wells.first_prod_date`.
-      The standard Permian operator practice; includes the well's
-      ramp-up to peak. Use this for economics / DCF modeling.
+Three alignments supported:
+  * `peak_ramp` (default for new curves) — every well's PEAK sits at a
+      common month index M = the cohort-median ramp length (per
+      stream), with each well's own ramp occupying the months before
+      it. Fixes the staggered-peak smearing of `first_prod_month`
+      (cross-well percentiles never see all peaks in the same month →
+      qi suppressed, early decline flattened → Di understated) while
+      still carrying real ramp months for economics / facility
+      buildout. Wells with ramps shorter than M contribute nulls
+      before their onset; wells with longer ramps lose their earliest
+      ramp month(s) off the front of the panel.
+  * `first_prod_month` — t=0 at the stream's onset. Includes the ramp,
+      but staggered peaks smear qi/Di — kept for back-compat with
+      curves saved under it.
   * `peak_month` — t=0 at `forecast.peak_month_date` (oil-stream peak).
-      Use for pure decline-curve analysis where well-to-well decline
-      patterns matter more than absolute time-zero.
+      Pure decline analysis; NO ramp months in the panel.
 Both require the well to have an oil forecast — that's how we enforce
 the "engineer reviewed fit quality before aggregating" workflow.
 
@@ -90,7 +99,9 @@ def _stream_slice_starts(
     the oil peak when the well has no water peak on file (e.g. not yet
     re-fit). Pure function so the per-stream rule is unit testable.
     """
-    if alignment == "first_prod_month":
+    if alignment in ("first_prod_month", "peak_ramp"):
+        # peak_ramp also fetches from first prod — the onset trim and
+        # the per-well pad to the common peak index happen downstream.
         return {s: first_prod_date for s in ("oil", "gas", "water")}
     return {
         "oil": oil_peak_date,
@@ -160,6 +171,7 @@ def load_well_series(
     api10s: Iterable[str],
     *,
     alignment: AlignmentMethod = "first_prod_month",
+    ramp_anchors: dict[str, int] | None = None,
 ) -> list[WellSeries]:
     """Build the inputs the aggregator expects from the DB.
 
@@ -211,7 +223,7 @@ def load_well_series(
         oil_full = [r[1] for r in prod]
         gas_full = [r[2] for r in prod]
         wat_full = [r[3] for r in prod]
-        if alignment == "first_prod_month":
+        if alignment in ("first_prod_month", "peak_ramp"):
             # Trim each stream to its ONSET (first producing month) so the
             # observed overlay matches the onset-anchored forecast bands —
             # a delayed-onset stream (water with leading zeros) re-zeros to
@@ -223,13 +235,44 @@ def load_well_series(
             oil_off = _first_index_on_or_after(prod_dates, starts["oil"])
             gas_off = _first_index_on_or_after(prod_dates, starts["gas"])
             wat_off = _first_index_on_or_after(prod_dates, starts["water"])
+
+        oil_rates = oil_full[oil_off:]
+        gas_rates = gas_full[gas_off:]
+        wat_rates = wat_full[wat_off:]
+
+        if alignment == "peak_ramp":
+            # Slide each stream so its PEAK lands on the cohort anchor
+            # M — same mechanism as the forecast loader, so the
+            # observed overlay sits on the bands. m_w = months from
+            # onset to the forecast's peak month; pad (or trim) the
+            # front by M - m_w.
+            anchors = ramp_anchors or {}
+
+            def _to_anchor(
+                rates: list[float | None], off: int, peak_date: date | None, stream: str
+            ) -> list[float | None]:
+                m_w = max(
+                    0, _first_index_on_or_after(prod_dates, peak_date) - off
+                )
+                pad = int(anchors.get(stream, 0)) - m_w
+                if pad >= 0:
+                    return [None] * pad + rates
+                return rates[-pad:]
+
+            oil_rates = _to_anchor(oil_rates, oil_off, oil_peaks.get(api10), "oil")
+            gas_rates = _to_anchor(gas_rates, gas_off, oil_peaks.get(api10), "gas")
+            wat_rates = _to_anchor(
+                wat_rates, wat_off,
+                water_peaks.get(api10) or oil_peaks.get(api10), "water",
+            )
+
         out.append(WellSeries(
             api10=api10,
             lateral_ft=lateral_ft,
             proppant_lbs=proppant_lbs,
-            oil_rates=oil_full[oil_off:],
-            gas_rates=gas_full[gas_off:],
-            water_rates=wat_full[wat_off:],
+            oil_rates=oil_rates,
+            gas_rates=gas_rates,
+            water_rates=wat_rates,
         ))
     return out
 
@@ -314,19 +357,30 @@ def _forecast_rates(
     n_months: int,
     *,
     include_ramp: bool,
+    shift_months: int = 0,
 ) -> list[float | None]:
     """N-month rate trajectory from t=0 forward.
 
     ``include_ramp`` controls whether the ramp prefix is evaluated:
-    True under first_prod_month alignment (t=0 is first prod, ramp
-    runs from t=0 to peak_index_months), False under peak_month
-    alignment (t=0 is peak, no ramp segment to draw). When ramp params
+    True under first_prod_month / peak_ramp alignment, False under
+    peak_month (t=0 is peak, no ramp segment to draw). When ramp params
     are missing from `params`, evaluate_well_rate falls back to pure
     Arps regardless.
+
+    ``shift_months`` slides the well along the panel's month axis —
+    the peak_ramp mechanism. Positive: the well starts that many
+    months late (front-padded with nulls — there's no production
+    signal before its onset). Negative: the well's earliest ramp
+    months fall before the panel and are dropped. The caller passes
+    ``M - peak_index_months`` so every well's peak lands on the common
+    month M.
     """
     if params is None or n_months <= 0:
         return [None] * max(n_months, 0)
-    t_years = np.arange(n_months, dtype=float) / 12.0
+    lead = max(0, shift_months)
+    t_years = (
+        np.arange(n_months - lead, dtype=float) - min(shift_months, 0)
+    ) / 12.0
     qo = params.get("qo") if include_ramp else None
     peak_index_months = (
         params.get("peak_index_months") if include_ramp else None
@@ -337,7 +391,43 @@ def _forecast_rates(
         qi=params["qi"], Di=params["Di"], b=params["b"], Df=params["Df"],
         t_years=t_years,
     )
-    return [float(x) for x in rates]
+    return [None] * lead + [float(x) for x in rates]
+
+
+def cohort_ramp_anchors(
+    session: Session,
+    tc: TypeCurve,
+    api10s: Iterable[str],
+) -> dict[str, int]:
+    """Common peak month index M per stream for peak_ramp alignment.
+
+    M = the cohort median of ``peak_index_months`` across the resolved
+    (override → global) forecasts; wells whose fit carries no ramp
+    count as 0. The median guarantees at least one well's ramp reaches
+    back to panel month 0, so the ramp region always has data. Compute
+    ONCE per aggregation and pass the same dict to both loaders so the
+    forecast bands and the observed QC overlay line up.
+    """
+    api10_list = list(api10s)
+    if not api10_list:
+        return {"oil": 0, "gas": 0, "water": 0}
+    forecast_rows = session.execute(
+        select(Forecast).where(Forecast.api10.in_(api10_list))
+    ).scalars().all()
+    by_key: dict[tuple[str, Stream], Forecast] = {
+        (f.api10, f.stream): f for f in forecast_rows
+    }
+    anchors: dict[str, int] = {}
+    for stream in (Stream.OIL, Stream.GAS, Stream.WATER):
+        ramps: list[int] = []
+        for api10 in api10_list:
+            params = _resolve_params(tc, api10, stream, by_key.get((api10, stream)))
+            if params is not None:
+                ramps.append(int(params.get("peak_index_months") or 0))
+        anchors[stream.value] = (
+            int(round(float(np.median(ramps)))) if ramps else 0
+        )
+    return anchors
 
 
 def load_wells_with_forecast(
@@ -347,6 +437,7 @@ def load_wells_with_forecast(
     *,
     alignment: AlignmentMethod = "first_prod_month",
     n_months: int = 600,
+    ramp_anchors: dict[str, int] | None = None,
 ) -> list[WellSeries]:
     """Build the WellSeries list for forecast-based aggregation.
 
@@ -375,7 +466,19 @@ def load_wells_with_forecast(
         (f.api10, f.stream): f for f in forecast_rows
     }
 
-    include_ramp = alignment == "first_prod_month"
+    include_ramp = alignment in ("first_prod_month", "peak_ramp")
+    if alignment == "peak_ramp" and ramp_anchors is None:
+        # Direct callers (CLI, tests) that didn't precompute the
+        # anchors — derive them here. The API path passes them in so
+        # the observed overlay uses the identical M.
+        ramp_anchors = cohort_ramp_anchors(session, tc, api10_list)
+    anchors = ramp_anchors or {}
+
+    def _shift(params: dict[str, Any] | None, stream: str) -> int:
+        if alignment != "peak_ramp" or params is None:
+            return 0
+        m_w = int(params.get("peak_index_months") or 0)
+        return int(anchors.get(stream, 0)) - m_w
 
     out: list[WellSeries] = []
     for api10 in api10_list:
@@ -384,9 +487,10 @@ def load_wells_with_forecast(
         lateral_ft, proppant_lbs, first_prod_date = attrs.get(
             api10, (None, None, None)
         )
-        if include_ramp and first_prod_date is None:
+        if alignment == "first_prod_month" and first_prod_date is None:
             # No well-defined t=0 → can't aggregate this well in
-            # first-prod-aligned mode.
+            # first-prod-aligned mode. (peak_ramp anchors on the peak
+            # index, not the calendar, so it has no such requirement.)
             continue
 
         oil_params = _resolve_params(
@@ -399,9 +503,18 @@ def load_wells_with_forecast(
             tc, api10, Stream.WATER, forecasts_by.get((api10, Stream.WATER))
         )
 
-        oil_rates = _forecast_rates(oil_params, n_months, include_ramp=include_ramp)
-        gas_rates = _forecast_rates(gas_params, n_months, include_ramp=include_ramp)
-        wat_rates = _forecast_rates(wat_params, n_months, include_ramp=include_ramp)
+        oil_rates = _forecast_rates(
+            oil_params, n_months, include_ramp=include_ramp,
+            shift_months=_shift(oil_params, "oil"),
+        )
+        gas_rates = _forecast_rates(
+            gas_params, n_months, include_ramp=include_ramp,
+            shift_months=_shift(gas_params, "gas"),
+        )
+        wat_rates = _forecast_rates(
+            wat_params, n_months, include_ramp=include_ramp,
+            shift_months=_shift(wat_params, "water"),
+        )
 
         out.append(
             WellSeries(

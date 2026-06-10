@@ -124,6 +124,11 @@ export function SlideCumChart({
     lateralByApi10,
     "history_cum_filtered",
     stream,
+    // peak_ramp: same lookback as the rate slide so the cum spaghetti
+    // includes the ramp volume and registers with the band cum.
+    current.alignment_method === "peak_ramp"
+      ? currentStream.fitted?.peak_index ?? 0
+      : 0,
   );
 
   return (

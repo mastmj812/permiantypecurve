@@ -113,7 +113,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // alignment unchanged" guard below doesn't spuriously fire on
   // first mount when there's a persisted result.
   const [alignment, setAlignment] = useState<AlignmentMethod>(
-    persistedAgg?.alignment_method ?? "first_prod_month",
+    persistedAgg?.alignment_method ?? "peak_ramp",
   );
   const [saveName, setSaveName] = useState("");
   const [saveNotes, setSaveNotes] = useState("");
@@ -1009,6 +1009,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             }
             style={{ width: "100%" }}
           >
+            <option value="peak_ramp">
+              Peak-aligned + ramp (recommended)
+            </option>
             <option value="first_prod_month">
               First-prod month (incl. ramp-up)
             </option>
@@ -1363,6 +1366,7 @@ function normalizationLabel(basis: string): string {
 
 function alignmentLabel(method: string): string {
   switch (method) {
+    case "peak_ramp": return "Peak-aligned + ramp";
     case "first_prod_month": return "First-prod month (incl. ramp-up)";
     case "peak_month": return "Peak month (decline-only)";
     default: return method;
@@ -1370,9 +1374,11 @@ function alignmentLabel(method: string): string {
 }
 
 function xAxisLabel(method: string): string {
-  return method === "first_prod_month"
-    ? "Months since first prod"
-    : "Months since peak";
+  switch (method) {
+    case "first_prod_month": return "Months since first prod";
+    case "peak_ramp": return "Months (peak-aligned, ramp lookback)";
+    default: return "Months since peak";
+  }
 }
 
 function fmtEur(v: number | null | undefined): string {

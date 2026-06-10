@@ -37,7 +37,11 @@ from app.type_curves.aggregate import (
     aggregate,
     serialize_aggregate,
 )
-from app.type_curves.loader import load_well_series, load_wells_with_forecast
+from app.type_curves.loader import (
+    cohort_ramp_anchors,
+    load_well_series,
+    load_wells_with_forecast,
+)
 
 # Forecast-aggregation horizon. 50 years × 12 months. Picks up the same
 # horizon the per-well fit_p50_series + frontend FULL_FORECAST_N_MONTHS
@@ -277,9 +281,21 @@ def _validate_basis(basis: str) -> AggBasis:
 
 
 def _validate_alignment(method: str) -> AggAlign:
-    if method not in ("peak_month", "first_prod_month"):
+    if method not in ("peak_month", "first_prod_month", "peak_ramp"):
         raise HTTPException(status_code=400, detail=f"invalid alignment_method: {method}")
     return method  # type: ignore[return-value]
+
+
+def _month_col_label(alignment: str) -> str:
+    """Month-axis column name for the CSV exports — tells the
+    downstream consumer what month 1 means."""
+    if alignment == "first_prod_month":
+        return "month_since_first_prod"
+    if alignment == "peak_ramp":
+        # Month 1 is the start of the cohort ramp; the peak sits at the
+        # cohort-median ramp length (the fitted peak_index).
+        return "month_peak_aligned_ramp"
+    return "month_since_peak"
 
 
 def _apply_fit_overrides(
@@ -387,14 +403,25 @@ def _compute(
     """
     validated_alignment = _validate_alignment(alignment)
     validated_basis = _validate_basis(basis)
+    resolver_tc = tc if tc is not None else _empty_tc_for_resolver()
+
+    # peak_ramp: compute the common peak index M (per stream) ONCE and
+    # hand the same dict to both loaders so the forecast bands and the
+    # observed QC overlay share the exact alignment.
+    anchors = (
+        cohort_ramp_anchors(session, resolver_tc, api10s)
+        if validated_alignment == "peak_ramp"
+        else None
+    )
 
     # --- canonical forecast-based aggregation ---
     forecast_wells = load_wells_with_forecast(
         session,
-        tc if tc is not None else _empty_tc_for_resolver(),
+        resolver_tc,
         api10s,
         alignment=validated_alignment,
         n_months=_FORECAST_N_MONTHS,
+        ramp_anchors=anchors,
     )
     if not forecast_wells:
         raise HTTPException(
@@ -444,7 +471,7 @@ def _compute(
 
     # --- empirical observed-only aggregation ---
     observed_wells = load_well_series(
-        session, api10s, alignment=validated_alignment
+        session, api10s, alignment=validated_alignment, ramp_anchors=anchors
     )
     if observed_wells:
         observed_agg = aggregate(
@@ -853,9 +880,7 @@ def _forecast_csv(
     """
     rates_by_pct = _evaluate_fitted_rates(stream_data)
 
-    month_col = (
-        "month_since_first_prod" if alignment == "first_prod_month" else "month_since_peak"
-    )
+    month_col = _month_col_label(alignment)
     buf = io.StringIO()
     writer = csv.writer(buf)
     # Columns are bare ``{pct}_{rate|cum}`` — stream is implied by the
@@ -902,9 +927,7 @@ def _stream_csv(
 ) -> bytes:
     # Column name reflects the alignment so downstream consumers know
     # whether month 1 is peak month or first-prod month.
-    month_col = (
-        "month_since_first_prod" if alignment == "first_prod_month" else "month_since_peak"
-    )
+    month_col = _month_col_label(alignment)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
