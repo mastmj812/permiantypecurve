@@ -730,13 +730,14 @@ def transfer_cohort_params(
                 values["created_at"] = datetime.now(timezone.utc)
 
             stmt = pg_insert(Forecast.__table__).values(**values)
+            # Same provenance rule as orchestrator._persist: a transfer
+            # overwrite of an unlocked row resets manual_override to
+            # False (machine params → machine provenance); `locked`
+            # stays excluded (locked rows are skipped above).
             update_cols = {
                 c: stmt.excluded[c]
                 for c in values
-                if c not in {
-                    "id", "api10", "stream", "created_at",
-                    "manual_override", "locked",
-                }
+                if c not in {"id", "api10", "stream", "created_at", "locked"}
             }
             stmt = stmt.on_conflict_do_update(
                 constraint="uq_forecasts_api10_stream", set_=update_cols
@@ -1019,6 +1020,14 @@ def patch_forecast(
             economic_limit=econ_limit,
         )
         f.manual_override = True  # user-touched
+        # Auto-lock on manual edit: an edited-but-unlocked row would be
+        # silently overwritten by the next bulk re-fit (the orchestrator
+        # only skips LOCKED rows), losing the engineer's params while —
+        # pre-fix — even keeping manual_override=True on machine-fit
+        # values. Locking here makes "I touched it" mean "re-fit keeps
+        # its hands off" without a separate click. An explicit
+        # `locked: false` in the same request still wins (applied below).
+        f.locked = True
 
     if req.locked is not None:
         f.locked = req.locked

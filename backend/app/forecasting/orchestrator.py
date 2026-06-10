@@ -183,10 +183,17 @@ def _persist(
         values["created_at"] = datetime.now(timezone.utc)
 
     stmt = pg_insert(Forecast.__table__).values(**values)
+    # `locked` stays excluded from the update set (locked rows never
+    # reach this point anyway — see the early return above). But
+    # `manual_override` IS overwritten (to False, from `values`): when
+    # the machine replaces an unlocked row's params, the row's
+    # provenance must read "machine fit" — previously the stale True
+    # survived the overwrite and the grid showed engineer provenance
+    # on autofit values.
     update_cols = {
         c: stmt.excluded[c]
         for c in values
-        if c not in {"id", "api10", "stream", "created_at", "manual_override", "locked"}
+        if c not in {"id", "api10", "stream", "created_at", "locked"}
     }
     stmt = stmt.on_conflict_do_update(
         constraint="uq_forecasts_api10_stream", set_=update_cols
