@@ -127,7 +127,9 @@ export function InspectProductionCharts({
       );
       out.push({
         api10,
-        formation: meta?.formation ?? null,
+        // formation_blueox code drives the series color (colorForFormation
+        // resolves codes); raw formation stays available on the bundle.
+        formation: meta?.formation_blueox ?? null,
         rate,
         cum,
       });

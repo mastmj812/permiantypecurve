@@ -699,7 +699,9 @@ function buildWellPopupHtml(p: Record<string, unknown>): string {
       <div class="mtt-name">${headline}</div>
       <table class="mtt-table">
         ${api10Row}
-        <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
+        <tr><td>Formation</td><td>${escHtml(p.formation_blueox)}${
+          p.formation ? ` <span class="muted">(${escHtml(p.formation)})</span>` : ""
+        }</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.vintage_year)}</td></tr>

@@ -3,7 +3,13 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
 import type { FacetCount, WellStatus } from "../api/types";
-import { FORMATIONS, type FormationGroup, colorForFormation } from "../map/formations";
+import {
+  type FormationGroup,
+  GROUP_DISPLAY_ORDER,
+  codeRank,
+  colorForFormation,
+  groupForBlueox,
+} from "../map/formations";
 import { useMapStore } from "../store/mapStore";
 
 const ALL_STATUSES: WellStatus[] = ["PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN"];
@@ -201,16 +207,21 @@ function FormationSection({
     const out: Record<FormationGroup, FacetCount[]> = {
       Wolfcamp: [],
       "Bone Spring": [],
+      Avalon: [],
       Spraberry: [],
       Other: [],
     };
     for (const f of facets) {
-      out[groupForName(f.value)].push(f);
+      out[groupForBlueox(f.value)].push(f);
     }
-    // Inside each group, sort by count desc then name asc so the bulk
-    // formations bubble up.
+    // Inside each group, order by nomenclature (stratigraphic, shallow → deep).
+    // "Other" has no meaningful strat order, so keep it count-desc.
     for (const k of Object.keys(out) as FormationGroup[]) {
-      out[k].sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+      if (k === "Other") {
+        out[k].sort((a, b) => b.count - a.count || a.value.localeCompare(b.value));
+      } else {
+        out[k].sort((a, b) => codeRank(a.value) - codeRank(b.value));
+      }
     }
     return out;
   }, [facets]);
@@ -222,7 +233,7 @@ function FormationSection({
 
   // Render groups in fixed order, skipping empty ones. "Other" only
   // appears when there's something unclassified in the data.
-  const order: FormationGroup[] = ["Wolfcamp", "Bone Spring", "Spraberry", "Other"];
+  const order: FormationGroup[] = GROUP_DISPLAY_ORDER;
 
   return (
     <section className="filter-section">
@@ -268,38 +279,8 @@ function FormationSection({
   );
 }
 
-// Classify a formation into a UI group. Prefer an exact match in
-// the canonical FORMATIONS list (kept in lockstep with the actual
-// `wells.formation` strings Novi emits), and fall back to substring
-// matching for any unmapped values so a fresh formation that's not
-// yet in the list still lands in a reasonable bucket. Order
-// matters in the fallback: a name like "BONE SPRING,WOLFCAMP"
-// mentions both intervals, but we group it under Bone Spring (the
-// shallower one) since that's typically the primary producer in a
-// dual-interval completion.
-const _GROUP_BY_UPPER: Map<string, FormationGroup> = new Map(
-  FORMATIONS.map((f) => [f.name.toUpperCase(), f.group]),
-);
-
-function groupForName(name: string): FormationGroup {
-  const u = name.toUpperCase();
-  const mapped = _GROUP_BY_UPPER.get(u);
-  if (mapped) return mapped;
-  if (u.includes("BONE SPRING") || u.includes("AVALON") || u.includes("LEONARD")) {
-    return "Bone Spring";
-  }
-  if (u.includes("WOLFCAMP") || u.includes("WLFCMP") || u.includes("CLINE")) {
-    return "Wolfcamp";
-  }
-  if (
-    u.includes("SPRABERRY") ||
-    u.includes("JO MILL") ||
-    u.startsWith("DEAN")
-  ) {
-    return "Spraberry";
-  }
-  return "Other";
-}
+// Formation grouping now comes from groupForBlueox (code → group) in
+// map/formations.ts — the facet values are formation_blueox codes.
 
 // ---------------- Vintage (date range) ----------------
 function VintageSection({

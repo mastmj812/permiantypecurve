@@ -15,7 +15,7 @@
 import { useMemo, useState } from "react";
 
 import type { WellDetailLite } from "../api/wells";
-import { colorForFormation } from "../map/formations";
+import { colorForBlueox } from "../map/formations";
 
 export interface GunBarrelProps {
   wells: WellDetailLite[];
@@ -296,7 +296,7 @@ export function GunBarrel({
           stroke; other selected wells fade slightly so the highlight
           reads. Deselected wells stay ghosted regardless of hover. */}
       {projected.map((p) => {
-        const color = colorForFormation(p.well.formation);
+        const color = colorForBlueox(p.well.basin_blueox, p.well.formation_blueox);
         const selected = selectedApi10s.has(p.api10);
         const isHovered = hoveredApi10 === p.api10;
         const anyHover = hoveredApi10 != null;
@@ -414,7 +414,8 @@ function GunBarrelTooltip({
         {w.name ?? w.api10}
       </text>
       <text x={tx + 10} y={ty + 34} fontSize="11" fill="#374151">
-        {w.formation ?? "(no formation)"}
+        {w.formation_blueox ?? "—"}
+        {w.formation ? ` (${w.formation})` : ""}
       </text>
       <text x={tx + 10} y={ty + 50} fontSize="11" fill="#374151">
         TVD {Math.round(point.tvd).toLocaleString()} ft

@@ -1,19 +1,26 @@
-import { groupedFormations } from "../map/formations";
+import { legendByBasin, BASINS, type BasinBlueox } from "../map/formations";
+
+const BASIN_LABEL: Record<BasinBlueox, string> = {
+  delaware: "Delaware",
+  midland: "Midland",
+  cbp: "Central Basin Platform",
+};
 
 export function Legend() {
-  const groups = groupedFormations();
+  const byBasin = legendByBasin();
+  const basins = BASINS;
   return (
     <div className="legend">
       <header className="legend-header">Legend</header>
       <div className="legend-section">
-        <strong>Formation</strong>
-        {(["Wolfcamp", "Bone Spring", "Spraberry"] as const).map((g) => (
-          <div key={g} className="legend-group">
-            <span className="muted">{g}</span>
-            {groups[g].map((f) => (
-              <span key={f.name} className="legend-item">
-                <span className="swatch" style={{ background: f.color }} />
-                {f.name}
+        <strong>Formation (Blue Ox)</strong>
+        {basins.map((basin) => (
+          <div key={basin} className="legend-group">
+            <span className="muted">{BASIN_LABEL[basin]}</span>
+            {byBasin[basin].map((c) => (
+              <span key={c.code} className="legend-item">
+                <span className="swatch" style={{ background: c.color }} />
+                {c.code}
               </span>
             ))}
           </div>

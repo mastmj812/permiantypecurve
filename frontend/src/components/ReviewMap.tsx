@@ -393,7 +393,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
     } else {
       map.setFilter(LAYER_ID, [
         "==",
-        ["get", "formation"],
+        ["get", "formation_blueox"],
         formationFilter,
       ]);
     }
@@ -697,7 +697,9 @@ function buildReviewPopupHtml(p: Record<string, unknown>): string {
       <div class="mtt-name">${headline}</div>
       ${sub}
       <table class="mtt-table">
-        <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
+        <tr><td>Formation</td><td>${escHtml(p.formation_blueox)}${
+          p.formation ? ` <span class="muted">(${escHtml(p.formation)})</span>` : ""
+        }</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.well_vintage_year)}</td></tr>
         <tr><td>Lateral</td><td>${fmtIntHtml(p.well_lateral_ft)} ft</td></tr>
