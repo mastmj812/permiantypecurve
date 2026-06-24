@@ -128,7 +128,7 @@ def _rows_for_api10s(session: Session, api10s: list[str]) -> list[WellSummaryRow
     res = session.execute(
         select(
             Well.api10,
-            Well.formation,
+            Well.formation_blueox.label("formation"),
             Well.operator,
             func.extract("year", Well.first_prod_date).label("vintage"),
             Well.lateral_ft,
@@ -182,7 +182,7 @@ def select_wells(
     stmt = (
         select(
             Well.api10,
-            Well.formation,
+            Well.formation_blueox.label("formation"),
             Well.operator,
             func.extract("year", Well.first_prod_date).label("vintage"),
             Well.lateral_ft,

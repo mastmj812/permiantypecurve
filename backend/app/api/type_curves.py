@@ -1185,7 +1185,7 @@ def get_type_curve_workspace_wells(
             Well.api10,
             Well.name,
             Well.operator,
-            Well.formation,
+            Well.formation_blueox.label("formation"),
             Well.lateral_ft,
             Well.first_prod_date,
             Well.county,

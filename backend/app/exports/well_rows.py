@@ -130,7 +130,7 @@ def per_well_rows(
             w.api10,
             w.name,
             w.operator,
-            w.formation,
+            w.formation_blueox,
             lat,
             bwpf,
             ppf,

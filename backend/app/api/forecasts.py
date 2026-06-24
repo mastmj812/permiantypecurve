@@ -882,7 +882,7 @@ def list_forecasts(
             Forecast,
             Well.name,
             Well.operator,
-            Well.formation,
+            Well.formation_blueox.label("formation"),
             Well.lateral_ft,
             Well.vintage_year,
             Well.first_prod_date,

@@ -51,7 +51,10 @@ class FilterSpec:
         ST_Intersects, the selection endpoint adds an ST_Contains/Within)."""
         clauses: list[ColumnElement[bool]] = []
         if self.formations:
-            clauses.append(Well.formation.in_(self.formations))
+            # `formations` now carries standardized formation_blueox codes
+            # (the facet universe is formation_blueox), so filter on that
+            # column. Raw `formation` is retained but no longer the filter key.
+            clauses.append(Well.formation_blueox.in_(self.formations))
         if self.operators:
             clauses.append(Well.operator.in_(self.operators))
         if self.counties:
