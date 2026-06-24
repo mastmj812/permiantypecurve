@@ -69,6 +69,8 @@ def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
         "name": h.name,
         "operator": h.operator,
         "formation": h.formation,
+        "formation_blueox": h.formation_blueox,
+        "basin_blueox": h.basin_blueox,
         "first_prod_date": h.first_prod_date,
         "lateral_ft": h.lateral_ft,
         "proppant_lbs": h.proppant_lbs,

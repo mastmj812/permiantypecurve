@@ -47,6 +47,13 @@ class WellHeader:
     name: str | None = None
     operator: str | None = None
     formation: str | None = None
+    # Blue Ox standardized formation code + its basin
+    # (curated.wells_enriched.formation_blueox / basin_blueox). Parallel to
+    # raw ``formation``; the app's basin-aware formation coloring/filtering
+    # keys on these. ``formation_blueox`` is NULL for unmapped wells;
+    # ``basin_blueox`` is 'delaware'/'midland' (NULL outside those basins).
+    formation_blueox: str | None = None
+    basin_blueox: str | None = None
     first_prod_date: date | None = None
     lateral_ft: float | None = None
     proppant_lbs: float | None = None
