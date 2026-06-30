@@ -945,7 +945,12 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
     if well is not None:
         row.well_name = well.name
         row.well_operator = well.operator
-        row.well_formation = well.formation
+        # Standardized formation (formation_blueox) for display — keep in
+        # sync with the /forecasts list endpoint, which also labels
+        # formation_blueox as `formation`. Using raw well.formation here
+        # would revert the Review row to the un-standardized value on every
+        # Save Override / Lock (PATCH splices this response back in-place).
+        row.well_formation = well.formation_blueox
         row.well_lateral_ft = (
             float(well.lateral_ft) if well.lateral_ft is not None else None
         )

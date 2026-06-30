@@ -862,7 +862,9 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     updated_at: new Date(0).toISOString(),
     well_name: w.name,
     well_operator: w.operator,
-    well_formation: w.formation,
+    // Standardized formation to match the /forecasts list + edit paths,
+    // which surface formation_blueox as `well_formation`.
+    well_formation: w.formation_blueox,
     well_lateral_ft: w.lateral_ft,
     well_vintage_year: w.vintage_year,
     well_first_prod_date: w.first_prod_date,
