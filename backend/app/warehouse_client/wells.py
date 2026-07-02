@@ -178,6 +178,15 @@ def fetch_well_headers(
     or future scope changes; passing ``first_completion_after=None`` or
     ``horizontal_only=False`` widens the result.
 
+    The completion-date floor admits one extra class: horizontals that
+    carry NO completion date at all (``first_completion_date IS NULL`` —
+    P&A / Abandoned / Spud / DUC / etc.). These are real drilled wellbores
+    that narvi already shows, so anduin surfaces them too. Permits
+    (``well_status`` ``Permit Approved`` / ``Permit Cancelled``) are the
+    one exclusion — they are phantom locations with no physical wellbore.
+    NULL-completion wells map to non-PDP statuses, so they never appear on
+    the default PDP map view; they show only when their status facet is on.
+
     Permian scope is enforced upstream at the engineering_db layer
     (raw_enverus is filtered ``envregion='PERMIAN'`` at ingest, Novi's
     ``us-horizontals`` export is effectively Permian-only). No
@@ -190,7 +199,14 @@ def fetch_well_headers(
     where_clauses: list[str] = ["TRUE"]
     params: dict[str, object] = {}
     if first_completion_after is not None:
-        where_clauses.append("first_completion_date >= :first_completion_after")
+        # Vintage floor for wells that HAVE a completion date, OR a real
+        # drilled wellbore with no completion date at all — but never a
+        # permit (phantom location, no wellbore). See the docstring.
+        where_clauses.append(
+            "(first_completion_date >= :first_completion_after"
+            " OR (first_completion_date IS NULL"
+            " AND COALESCE(well_status, '') NOT ILIKE 'Permit%'))"
+        )
         params["first_completion_after"] = first_completion_after
     if horizontal_only:
         where_clauses.append("is_horizontal = TRUE")
