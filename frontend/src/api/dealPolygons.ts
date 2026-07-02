@@ -1,11 +1,18 @@
-// Deal-acreage polygon client. Mirrors backend/app/api/deal_polygons.py.
+// Acreage-polygon client. Mirrors backend/app/api/deal_polygons.py.
+//
+// Uploaded shapefiles are just displayed — there's no deal assignment.
+// The backend still returns deal_id/color/visibility_key on the GeoJSON
+// (nullable, unused here); the frontend renders every polygon with a
+// single ACREAGE_COLOR and one show/hide toggle.
 
 import { apiFetch } from "./auth";
 
+// Shared fill/outline color for all uploaded acreage polygons. Kept in
+// one place so the Map tab, Review tab, and slide export agree.
+export const ACREAGE_COLOR = "#7c3aed";
+
 export interface DealPolygonRow {
   id: string;
-  deal_id: string | null;
-  deal_name: string | null;
   name: string;
   attributes: Record<string, unknown>;
   source_file: string | null;
@@ -17,13 +24,7 @@ export interface DealPolygonGeoJSONFeature {
   geometry: GeoJSON.MultiPolygon | GeoJSON.Polygon;
   properties: {
     id: string;
-    deal_id: string | null;
-    deal_name: string | null;
     name: string;
-    color: string;
-    // Single key keyed off deal_id (or "_unlinked"); the MapView
-    // filter expression matches this against the visibility store.
-    visibility_key: string;
   };
 }
 
@@ -63,19 +64,6 @@ export async function uploadShapefile(file: File): Promise<UploadShapefileRespon
     throw new Error(`upload shapefile failed: ${r.status} ${body}`);
   }
   return (await r.json()) as UploadShapefileResponse;
-}
-
-export async function patchDealPolygon(
-  id: string,
-  deal_id: string | null,
-): Promise<DealPolygonRow> {
-  const r = await apiFetch(`/api/deals/polygons/${id}`, {
-    method: "PATCH",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ deal_id }),
-  });
-  if (!r.ok) throw new Error(`patch deal polygon failed: ${r.status}`);
-  return (await r.json()) as DealPolygonRow;
 }
 
 export async function deleteDealPolygon(id: string): Promise<void> {

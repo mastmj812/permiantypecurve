@@ -4,7 +4,7 @@
 // then commits the remainder into the active cohort via "Add N to
 // cohort". Cancel/Esc walks away without mutating the cohort.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchWellDetails, type WellDetailLite } from "../api/wells";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
@@ -33,6 +33,55 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   // in lockstep: hovering a circle bolds the corresponding line (and
   // vice versa). Null when nothing is hovered.
   const [hoveredApi10, setHoveredApi10] = useState<string | null>(null);
+
+  // Drag state — same free-floating convention as ForecastDetailModal
+  // (and the erebor/narvi gunbarrel windows): grab the header to move
+  // the panel aside and see the wells on the map behind it. Position
+  // is a translate offset from the initial centered render.
+  const [dragPos, setDragPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragOriginRef = useRef<{
+    mouseX: number;
+    mouseY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  const onDragHandleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLElement>) => {
+      // Only the header background starts a drag — ignore the close
+      // button (and any future header controls) so clicks still work.
+      const target = e.target as HTMLElement;
+      if (target.closest("button") || target.closest("input")) return;
+      dragOriginRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        startX: dragPos.x,
+        startY: dragPos.y,
+      };
+      e.preventDefault();
+    },
+    [dragPos.x, dragPos.y],
+  );
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const o = dragOriginRef.current;
+      if (!o) return;
+      setDragPos({
+        x: o.startX + (e.clientX - o.mouseX),
+        y: o.startY + (e.clientY - o.mouseY),
+      });
+    }
+    function onUp() {
+      dragOriginRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
   // ESC closes, same convention as ForecastDetailModal. Skip when
   // focus is in an input so we don't fight inputs in nested controls.
@@ -104,16 +153,20 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   const hasCohort = cohort != null;
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(e) => {
-        // Backdrop click closes; clicks inside the modal body bubble
-        // up to here too, so guard on currentTarget.
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="modal inspect-modal" role="dialog" aria-modal="true">
-        <div className="inspect-modal-header">
+    // Floating (no backdrop) so the panel can be dragged aside while the
+    // map/selection stays visible and interactive behind it — matching
+    // ForecastDetailModal. Close via ✕ / Cancel / Esc.
+    <div className="modal-floating-wrap">
+      <div
+        className="modal inspect-modal modal-floating"
+        role="dialog"
+        aria-modal="true"
+        style={{ transform: `translate(${dragPos.x}px, ${dragPos.y}px)` }}
+      >
+        <div
+          className="inspect-modal-header modal-drag-handle"
+          onMouseDown={onDragHandleMouseDown}
+        >
           <div className="inspect-modal-title">
             Inspect — {totalCount} well{totalCount === 1 ? "" : "s"} from staging
             {cohort && (

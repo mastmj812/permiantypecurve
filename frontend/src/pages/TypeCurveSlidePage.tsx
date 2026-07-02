@@ -51,6 +51,7 @@ export function TypeCurveSlidePage({
   // visible in the preview.
   const [showBlocks, setShowBlocks] = useState(true);
   const [showSections, setShowSections] = useState(true);
+  const [showDeals, setShowDeals] = useState(true);
 
   useEffect(() => {
     // Remove the app's default body margin / background so the slide
@@ -176,12 +177,12 @@ export function TypeCurveSlidePage({
               with the new overlay set — captureSlideComposite reads
               the rendered IMG, which is what the PPTX picks up. */}
           <SlideMap
-            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}`}
+            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}-d${showDeals ? 1 : 0}`}
             api10s={api10s}
             wellDetails={data.wellDetails}
-            dealId={data.curve.deal_id ?? null}
             showBlocks={showBlocks}
             showSections={showSections}
+            showDeals={showDeals}
             width={mapWidth}
             height={mapHeight}
           />
@@ -241,6 +242,14 @@ export function TypeCurveSlidePage({
             onChange={(e) => setShowSections(e.target.checked)}
           />
           Sections
+        </label>
+        <label className="chk-inline">
+          <input
+            type="checkbox"
+            checked={showDeals}
+            onChange={(e) => setShowDeals(e.target.checked)}
+          />
+          Acreage
         </label>
       </div>
       {/* Visible (oil) section. The PPTX export captures rate/cum

@@ -1,20 +1,18 @@
-// Admin modal for deal-acreage polygons. Upload a shapefile (.zip),
-// assign each parsed polygon to a Deal via dropdown, or delete.
+// Admin modal for acreage polygons. Upload a shapefile (.zip) to
+// display it on the map, or delete an uploaded polygon. There's no
+// deal assignment — uploaded acreage is just shown.
 //
 // State source of truth is the backend; this component re-fetches
-// after every mutation so the per-deal toggles in MapToolbar (which
-// read from mapStore.dealPolygons) reflect the change as soon as it
-// lands.
+// after every mutation so the map (which reads from
+// mapStore.dealPolygons) reflects the change as soon as it lands.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { type DealSummary, listDeals } from "../api/deals";
 import {
   type DealPolygonRow,
   deleteDealPolygon,
   fetchDealPolygonGeoJSON,
   fetchDealPolygons,
-  patchDealPolygon,
   uploadShapefile,
 } from "../api/dealPolygons";
 import { useMapStore } from "../store/mapStore";
@@ -25,7 +23,6 @@ interface Props {
 
 export function DealPolygonsModal({ onClose }: Props) {
   const [polygons, setPolygons] = useState<DealPolygonRow[]>([]);
-  const [deals, setDeals] = useState<DealSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -37,7 +34,7 @@ export function DealPolygonsModal({ onClose }: Props) {
       const fc = await fetchDealPolygonGeoJSON();
       useMapStore.getState().setDealPolygons(fc);
     } catch (e) {
-      console.warn("failed to refresh deal polygons in store", e);
+      console.warn("failed to refresh acreage polygons in store", e);
     }
   }, []);
 
@@ -45,9 +42,8 @@ export function DealPolygonsModal({ onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [polys, dealList] = await Promise.all([fetchDealPolygons(), listDeals()]);
+      const polys = await fetchDealPolygons();
       setPolygons(polys);
-      setDeals(dealList);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -75,16 +71,6 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
   }
 
-  async function handleAssign(polygonId: string, dealId: string | null) {
-    try {
-      await patchDealPolygon(polygonId, dealId);
-      await refresh();
-      await refreshStore();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
   async function handleDelete(polygonId: string) {
     if (!confirm("Delete this polygon? This cannot be undone.")) return;
     try {
@@ -104,7 +90,7 @@ export function DealPolygonsModal({ onClose }: Props) {
         style={{ maxWidth: 960 }}
       >
         <header className="modal-header">
-          <strong>Deal acreage polygons</strong>
+          <strong>Acreage polygons</strong>
           <button type="button" className="link-btn" onClick={onClose}>
             close
           </button>
@@ -123,7 +109,8 @@ export function DealPolygonsModal({ onClose }: Props) {
             />
             <span className="muted" style={{ fontSize: 11 }}>
               Upload a .zip containing the shapefile components (.shp + .dbf +
-              .prj). Each feature becomes one row; assign to a deal below.
+              .prj). Each feature becomes one polygon and is displayed on the
+              Map and Review tabs.
             </span>
           </div>
 
@@ -140,7 +127,6 @@ export function DealPolygonsModal({ onClose }: Props) {
                 <th>Name</th>
                 <th>Source file</th>
                 <th>Attributes</th>
-                <th>Deal</th>
                 <th></th>
               </tr>
             </thead>
@@ -167,21 +153,6 @@ export function DealPolygonsModal({ onClose }: Props) {
                     </pre>
                   </td>
                   <td>
-                    <select
-                      value={p.deal_id ?? ""}
-                      onChange={(e) =>
-                        handleAssign(p.id, e.target.value || null)
-                      }
-                    >
-                      <option value="">— Unassigned —</option>
-                      {deals.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
                     <button
                       type="button"
                       className="link-btn"
@@ -194,7 +165,7 @@ export function DealPolygonsModal({ onClose }: Props) {
               ))}
               {polygons.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={5} className="muted" style={{ textAlign: "center" }}>
+                  <td colSpan={4} className="muted" style={{ textAlign: "center" }}>
                     No polygons yet — upload a shapefile to get started.
                   </td>
                 </tr>

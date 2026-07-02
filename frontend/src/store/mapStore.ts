@@ -124,17 +124,16 @@ export interface MapState {
   showWellsticks: boolean;
   setShowWellsticks: (v: boolean) => void;
 
-  // ---- deal-acreage polygons ----
+  // ---- acreage polygons (uploaded shapefiles) ----
   // GeoJSON FeatureCollection cached after a fetch from
   // /api/deals/polygons.geojson. Null = not yet loaded.
   dealPolygons: DealPolygonGeoJSON | null;
   setDealPolygons: (fc: DealPolygonGeoJSON | null) => void;
-  // Per-deal visibility. Keys are deal_id strings, plus "_unlinked"
-  // for polygons that haven't been assigned to a deal yet. Defaults
-  // to all-true on first load — per the user's design choice
-  // "default ON". Missing key = visible.
-  dealVisibility: Record<string, boolean>;
-  setDealVisibility: (key: string, visible: boolean) => void;
+  // Single show/hide toggle for all uploaded acreage polygons. Deal
+  // assignment was removed — polygons are just displayed, so one flag
+  // covers the whole layer. Defaults ON.
+  showDealPolygons: boolean;
+  setShowDealPolygons: (v: boolean) => void;
 
   // ---- TC add-wells mode ----
   // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
@@ -239,9 +238,8 @@ export const useMapStore = create<MapState>((set) => ({
 
   dealPolygons: null,
   setDealPolygons: (dealPolygons) => set({ dealPolygons }),
-  dealVisibility: {},
-  setDealVisibility: (key, visible) =>
-    set((s) => ({ dealVisibility: { ...s.dealVisibility, [key]: visible } })),
+  showDealPolygons: true,
+  setShowDealPolygons: (showDealPolygons) => set({ showDealPolygons }),
 
   tcAddWellsMode: null,
   setTcAddWellsMode: (tcAddWellsMode) => set({ tcAddWellsMode }),
