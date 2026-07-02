@@ -336,14 +336,15 @@ def list_polygons_geojson(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """FeatureCollection for the Map tab + SlideMap. Properties carry
-    the visibility key (deal_id / "_unlinked") and the assigned deal's
-    color so the frontend filter expression can read them directly."""
+    the source_file (the uploaded shapefile) so the frontend can filter
+    per-shapefile visibility, plus legacy deal fields the map ignores."""
     rows = session.execute(
         select(
             DealPolygon.id,
             DealPolygon.deal_id,
             Deal.name.label("deal_name"),
             DealPolygon.name,
+            DealPolygon.source_file,
             func.ST_AsGeoJSON(DealPolygon.geom).label("geom_json"),
         ).outerjoin(Deal, Deal.id == DealPolygon.deal_id)
     ).all()
@@ -362,13 +363,16 @@ def list_polygons_geojson(
                 "geometry": geometry,
                 "properties": {
                     "id": str(r.id),
+                    "name": r.name,
+                    # The uploaded shapefile this feature came from —
+                    # drives per-shapefile show/hide on the Map tab.
+                    "source_file": r.source_file,
+                    # Legacy deal fields, retained for back-compat with
+                    # any consumer that still reads them; the map no
+                    # longer uses deal assignment.
                     "deal_id": str(r.deal_id) if r.deal_id else None,
                     "deal_name": r.deal_name,
-                    "name": r.name,
                     "color": _color_for_deal(r.deal_id),
-                    # Single key the MapView filter expression reads —
-                    # keeps the filter logic identical for linked and
-                    # unlinked polygons.
                     "visibility_key": str(r.deal_id) if r.deal_id else "_unlinked",
                 },
             }

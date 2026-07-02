@@ -20,8 +20,6 @@ export function MapToolbar() {
   const showSections = useMapStore((s) => s.showSections);
   const setShowSections = useMapStore((s) => s.setShowSections);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
-  const showDealPolygons = useMapStore((s) => s.showDealPolygons);
-  const setShowDealPolygons = useMapStore((s) => s.setShowDealPolygons);
   const [dealModalOpen, setDealModalOpen] = useState(false);
 
   const polygonCount = dealPolygons?.features.length ?? 0;
@@ -76,25 +74,16 @@ export function MapToolbar() {
       </div>
       <div className="toolbar-group">
         <span className="toolbar-label">Acreage:</span>
-        {polygonCount === 0 ? (
-          <span className="muted" style={{ fontSize: 11 }}>
-            no shapefile uploaded
-          </span>
-        ) : (
-          <label className="chk-inline" title="Show / hide uploaded acreage polygons">
-            <input
-              type="checkbox"
-              checked={showDealPolygons}
-              onChange={(e) => setShowDealPolygons(e.target.checked)}
-            />
-            Show ({polygonCount})
-          </label>
-        )}
+        <span className="muted" style={{ fontSize: 11 }}>
+          {polygonCount === 0
+            ? "no shapefile uploaded"
+            : `${polygonCount} polygon${polygonCount === 1 ? "" : "s"}`}
+        </span>
         <button
           type="button"
           className="tb-btn"
           onClick={() => setDealModalOpen(true)}
-          title="Upload a shapefile or delete uploaded acreage polygons"
+          title="Upload shapefiles, toggle each on/off, or delete them"
         >
           Manage…
         </button>

@@ -139,11 +139,12 @@ export interface MapState {
   // /api/deals/polygons.geojson. Null = not yet loaded.
   dealPolygons: DealPolygonGeoJSON | null;
   setDealPolygons: (fc: DealPolygonGeoJSON | null) => void;
-  // Single show/hide toggle for all uploaded acreage polygons. Deal
-  // assignment was removed — polygons are just displayed, so one flag
-  // covers the whole layer. Defaults ON.
-  showDealPolygons: boolean;
-  setShowDealPolygons: (v: boolean) => void;
+  // Per-shapefile visibility. Keys are source_file names (the uploaded
+  // .zip filename, or NO_SOURCE_FILE for legacy rows). Absent or true =
+  // visible; the manage modal writes here and the Map tab filters
+  // acreage features by it.
+  dealVisibility: Record<string, boolean>;
+  setDealVisibility: (sourceFile: string, visible: boolean) => void;
 
   // ---- TC add-wells mode ----
   // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
@@ -254,8 +255,11 @@ export const useMapStore = create<MapState>((set) => ({
 
   dealPolygons: null,
   setDealPolygons: (dealPolygons) => set({ dealPolygons }),
-  showDealPolygons: true,
-  setShowDealPolygons: (showDealPolygons) => set({ showDealPolygons }),
+  dealVisibility: {},
+  setDealVisibility: (sourceFile, visible) =>
+    set((s) => ({
+      dealVisibility: { ...s.dealVisibility, [sourceFile]: visible },
+    })),
 
   tcAddWellsMode: null,
   setTcAddWellsMode: (tcAddWellsMode) => set({ tcAddWellsMode }),

@@ -3,13 +3,18 @@
 // Uploaded shapefiles are just displayed — there's no deal assignment.
 // The backend still returns deal_id/color/visibility_key on the GeoJSON
 // (nullable, unused here); the frontend renders every polygon with a
-// single ACREAGE_COLOR and one show/hide toggle.
+// single ACREAGE_COLOR and toggles visibility per source shapefile.
 
 import { apiFetch } from "./auth";
 
 // Shared fill/outline color for all uploaded acreage polygons. Kept in
 // one place so the Map tab, Review tab, and slide export agree.
 export const ACREAGE_COLOR = "#7c3aed";
+
+// Grouping/visibility key used for polygons whose source_file is null
+// (older rows). Shared so the manage modal's grouping and the map's
+// per-shapefile filter agree on the same bucket name.
+export const NO_SOURCE_FILE = "(no source file)";
 
 export interface DealPolygonRow {
   id: string;
@@ -25,6 +30,9 @@ export interface DealPolygonGeoJSONFeature {
   properties: {
     id: string;
     name: string;
+    // Uploaded shapefile this feature came from. Drives per-shapefile
+    // show/hide on the Map tab. Null for legacy rows without a filename.
+    source_file: string | null;
   };
 }
 

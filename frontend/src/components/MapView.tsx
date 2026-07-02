@@ -12,7 +12,11 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
-import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
+import {
+  ACREAGE_COLOR,
+  NO_SOURCE_FILE,
+  fetchDealPolygonGeoJSON,
+} from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
@@ -159,7 +163,7 @@ export function MapView() {
   const showSections = useMapStore((s) => s.showSections);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
-  const showDealPolygons = useMapStore((s) => s.showDealPolygons);
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
   const selectedApi10s = useMapStore((s) => s.selectedApi10s);
   const setSelection = useMapStore((s) => s.setSelection);
   const toggleApi10 = useMapStore((s) => s.toggleApi10);
@@ -600,16 +604,32 @@ export function MapView() {
     }
   }, [dealPolygons, styleLoaded]);
 
-  // Single show/hide toggle for all uploaded acreage polygons.
+  // Per-shapefile visibility — hide features whose source_file is
+  // toggled off in the manage modal. Missing/true = visible. Legacy
+  // rows with a null source_file fall into the NO_SOURCE_FILE bucket
+  // via coalesce so they can be toggled too.
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const vis = showDealPolygons ? "visible" : "none";
-    for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
-    }
-  }, [showDealPolygons, dealPolygons, styleLoaded]);
+    if (!map.getLayer(DEALS_FILL_LAYER)) return;
+    const hidden = Object.entries(dealVisibility)
+      .filter(([, v]) => !v)
+      .map(([k]) => k);
+    const filter: maplibregl.FilterSpecification =
+      hidden.length === 0
+        ? (["literal", true] as unknown as maplibregl.FilterSpecification)
+        : ([
+            "!",
+            [
+              "in",
+              ["coalesce", ["get", "source_file"], NO_SOURCE_FILE],
+              ["literal", hidden],
+            ],
+          ] as unknown as maplibregl.FilterSpecification);
+    map.setFilter(DEALS_FILL_LAYER, filter);
+    map.setFilter(DEALS_LINE_LAYER, filter);
+  }, [dealVisibility, dealPolygons, styleLoaded]);
 
   return (
     <div className="map-root">
