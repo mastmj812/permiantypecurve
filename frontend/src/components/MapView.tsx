@@ -12,7 +12,7 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
-import { fetchDealPolygonGeoJSON } from "../api/dealPolygons";
+import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
@@ -159,7 +159,7 @@ export function MapView() {
   const showSections = useMapStore((s) => s.showSections);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
-  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  const showDealPolygons = useMapStore((s) => s.showDealPolygons);
   const selectedApi10s = useMapStore((s) => s.selectedApi10s);
   const setSelection = useMapStore((s) => s.setSelection);
   const toggleApi10 = useMapStore((s) => s.toggleApi10);
@@ -551,20 +551,9 @@ export function MapView() {
       .then((fc) => {
         if (cancelled) return;
         useMapStore.getState().setDealPolygons(fc);
-        // Default visibility: all deals ON. Only initialize keys we
-        // haven't seen yet so user toggles aren't clobbered on a
-        // post-upload refetch.
-        const cur = useMapStore.getState().dealVisibility;
-        const next = { ...cur };
-        for (const f of fc.features) {
-          const k = f.properties.visibility_key;
-          if (next[k] === undefined) next[k] = true;
-        }
-        // setState in one shot rather than per-key to avoid N renders.
-        useMapStore.setState({ dealVisibility: next });
       })
       .catch((e) => {
-        console.warn("deal polygons fetch failed", e);
+        console.warn("acreage polygons fetch failed", e);
       });
     return () => {
       cancelled = true;
@@ -594,8 +583,8 @@ export function MapView() {
         type: "fill",
         source: DEALS_SOURCE_ID,
         paint: {
-          "fill-color": ["get", "color"],
-          "fill-opacity": 0.18,
+          "fill-color": ACREAGE_COLOR,
+          "fill-opacity": 0.15,
         },
       });
       map.addLayer({
@@ -603,7 +592,7 @@ export function MapView() {
         type: "line",
         source: DEALS_SOURCE_ID,
         paint: {
-          "line-color": ["get", "color"],
+          "line-color": ACREAGE_COLOR,
           "line-width": 1.6,
           "line-opacity": 0.95,
         },
@@ -611,29 +600,16 @@ export function MapView() {
     }
   }, [dealPolygons, styleLoaded]);
 
-  // Visibility filter — read the visibility_key off each feature and
-  // include only those whose store flag is true (default true if the
-  // key isn't in the map yet, e.g. the initial pre-fetch render).
+  // Single show/hide toggle for all uploaded acreage polygons.
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    if (!map.getLayer(DEALS_FILL_LAYER)) return;
-    const hidden = Object.entries(dealVisibility)
-      .filter(([, v]) => !v)
-      .map(([k]) => k);
-    // ["!", ["in", ["get", "visibility_key"], ["literal", [hidden...]]]]
-    // — show every feature except those whose key is in the hidden set.
-    const filter: maplibregl.FilterSpecification =
-      hidden.length === 0
-        ? (["literal", true] as unknown as maplibregl.FilterSpecification)
-        : ([
-            "!",
-            ["in", ["get", "visibility_key"], ["literal", hidden]],
-          ] as unknown as maplibregl.FilterSpecification);
-    map.setFilter(DEALS_FILL_LAYER, filter);
-    map.setFilter(DEALS_LINE_LAYER, filter);
-  }, [dealVisibility, dealPolygons, styleLoaded]);
+    const vis = showDealPolygons ? "visible" : "none";
+    for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, "visibility", vis);
+    }
+  }, [showDealPolygons, dealPolygons, styleLoaded]);
 
   return (
     <div className="map-root">

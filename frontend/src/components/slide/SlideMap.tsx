@@ -23,7 +23,7 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../../api/auth";
-import { fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
+import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
 import { DEFAULT_FILTER_SPEC } from "../../api/types";
 import { type WellDetailLite, tileUrlTemplate } from "../../api/wells";
 import { cohortLineFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
@@ -39,17 +39,17 @@ const SLIDE_FILTER_SPEC = {
 interface Props {
   api10s: string[];
   wellDetails: WellDetailLite[];
-  // When set, the slide map overlays only this deal's acreage
-  // polygons (filtered out of /api/deals/polygons.geojson). The
-  // PowerPoint export's map PNG is captured AFTER the polygon
-  // layer paints, so the deal's outline goes along into the deck.
-  dealId?: string | null;
-  // Per-toggle overlay control. Default both true to preserve the
+  // Per-toggle overlay control. Default all true to preserve the
   // existing slide appearance; the parent (TypeCurveSlidePage)
   // wires checkboxes that flip these and remounts the component
   // via React key so the captured snapshot reflects the choice.
+  // showDeals overlays ALL uploaded acreage polygons (no per-deal
+  // filtering); the slide still fit-bounds to the wells, not the
+  // acreage. The PowerPoint export's map PNG is captured AFTER the
+  // polygon layer paints, so the outline goes along into the deck.
   showBlocks?: boolean;
   showSections?: boolean;
+  showDeals?: boolean;
   width?: number;
   height?: number;
 }
@@ -162,25 +162,24 @@ async function loadBlocks(map: MlMap): Promise<void> {
   });
 }
 
-async function loadDealPolygons(map: MlMap, dealId: string): Promise<void> {
+async function loadDealPolygons(map: MlMap): Promise<void> {
   if (map.getSource(DEALS_SOURCE_ID)) return;
   try {
     const fc = await fetchDealPolygonGeoJSON();
-    const filtered = {
-      type: "FeatureCollection",
-      features: fc.features.filter((f) => f.properties.deal_id === dealId),
-    } as GeoJSON.FeatureCollection;
-    if (filtered.features.length === 0) return;
-    map.addSource(DEALS_SOURCE_ID, { type: "geojson", data: filtered });
+    if (fc.features.length === 0) return;
+    map.addSource(DEALS_SOURCE_ID, {
+      type: "geojson",
+      data: fc as unknown as GeoJSON.FeatureCollection,
+    });
     // Translucent fill + crisp outline so the wells and section grid
-    // remain readable underneath. Color comes from the feature
-    // property — same palette the Map tab uses.
+    // remain readable underneath. Single shared ACREAGE_COLOR — same
+    // as the Map and Review tabs.
     map.addLayer({
       id: DEALS_FILL_LAYER,
       type: "fill",
       source: DEALS_SOURCE_ID,
       paint: {
-        "fill-color": ["get", "color"],
+        "fill-color": ACREAGE_COLOR,
         "fill-opacity": 0.14,
       },
     });
@@ -189,13 +188,13 @@ async function loadDealPolygons(map: MlMap, dealId: string): Promise<void> {
       type: "line",
       source: DEALS_SOURCE_ID,
       paint: {
-        "line-color": ["get", "color"],
+        "line-color": ACREAGE_COLOR,
         "line-width": 2.2,
         "line-opacity": 0.95,
       },
     });
   } catch (e) {
-    console.warn("slide deal polygons load failed", e);
+    console.warn("slide acreage polygons load failed", e);
   }
 }
 
@@ -318,9 +317,9 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
 export function SlideMap({
   api10s,
   wellDetails,
-  dealId = null,
   showBlocks = true,
   showSections = true,
+  showDeals = true,
   width = 629,
   height = 418,
 }: Props) {
@@ -404,9 +403,7 @@ export function SlideMap({
       const overlayPromises: Array<Promise<unknown>> = [];
       if (showBlocks) overlayPromises.push(loadBlocks(map));
       if (showSections) overlayPromises.push(loadSections(map));
-      if (dealId) {
-        overlayPromises.push(loadDealPolygons(map, dealId));
-      }
+      if (showDeals) overlayPromises.push(loadDealPolygons(map));
       // Idle-listener fires even when no overlays loaded — the wells
       // still need to paint before we snapshot.
       if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
