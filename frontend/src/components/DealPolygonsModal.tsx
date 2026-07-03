@@ -11,6 +11,7 @@
 // mapStore.dealPolygons) reflects the change as soon as it lands.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 import {
   type DealPolygonRow,
@@ -103,7 +104,12 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
   }
 
-  return (
+  // Portal to <body>: this modal is rendered from inside .map-toolbar,
+  // which has a CSS transform. A transformed ancestor becomes the
+  // containing block for position:fixed descendants, which would trap
+  // the fixed backdrop inside the toolbar strip instead of covering the
+  // viewport. Portaling escapes the transform.
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal"
@@ -232,6 +238,7 @@ export function DealPolygonsModal({ onClose }: Props) {
           })}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
