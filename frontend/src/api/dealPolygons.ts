@@ -78,3 +78,14 @@ export async function deleteDealPolygon(id: string): Promise<void> {
   const r = await apiFetch(`/api/deals/polygons/${id}`, { method: "DELETE" });
   if (!r.ok) throw new Error(`delete deal polygon failed: ${r.status}`);
 }
+
+// Delete every polygon from one uploaded shapefile in a single call.
+export async function deleteShapefile(sourceFile: string): Promise<number> {
+  const r = await apiFetch(
+    `/api/deals/polygons/by-source-file?source_file=${encodeURIComponent(sourceFile)}`,
+    { method: "DELETE" },
+  );
+  if (!r.ok) throw new Error(`delete shapefile failed: ${r.status}`);
+  const body = (await r.json()) as { deleted: number };
+  return body.deleted;
+}

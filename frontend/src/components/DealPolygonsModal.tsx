@@ -17,6 +17,7 @@ import {
   type DealPolygonRow,
   NO_SOURCE_FILE,
   deleteDealPolygon,
+  deleteShapefile,
   fetchDealPolygonGeoJSON,
   fetchDealPolygons,
   uploadShapefile,
@@ -104,6 +105,23 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
   }
 
+  async function handleDeleteGroup(sourceFile: string, count: number) {
+    if (
+      !confirm(
+        `Delete all ${count} polygon${count === 1 ? "" : "s"} from "${sourceFile}"? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteShapefile(sourceFile);
+      await refresh();
+      await refreshStore();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   // Portal to <body>: this modal is rendered from inside .map-toolbar,
   // which has a CSS transform. A transformed ancestor becomes the
   // containing block for position:fixed descendants, which would trap
@@ -136,8 +154,9 @@ export function DealPolygonsModal({ onClose }: Props) {
             />
             <span className="muted" style={{ fontSize: 11 }}>
               Upload a .zip containing the shapefile components (.shp + .dbf +
-              .prj). Each feature becomes one polygon and is displayed on the
-              Map and Review tabs.
+              .prj). Each feature becomes one polygon, shown on the Map and
+              Review tabs. Re-uploading a .zip with the same name replaces its
+              polygons.
             </span>
           </div>
 
@@ -194,6 +213,17 @@ export function DealPolygonsModal({ onClose }: Props) {
                     {rows.length} polygon{rows.length === 1 ? "" : "s"}
                     {!visible && " · hidden"}
                   </span>
+                  {sourceFile !== NO_SOURCE_FILE && (
+                    <button
+                      type="button"
+                      className="link-btn"
+                      style={{ marginLeft: "auto" }}
+                      onClick={() => handleDeleteGroup(sourceFile, rows.length)}
+                      title="Delete every polygon from this shapefile"
+                    >
+                      delete shapefile
+                    </button>
+                  )}
                 </div>
                 <table className="deal-polygon-table">
                   <thead>
