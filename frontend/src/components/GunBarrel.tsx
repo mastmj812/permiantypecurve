@@ -12,17 +12,31 @@
 //
 // Pure SVG, no charting library — same approach as DeclineChart.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import type { WellDetailLite } from "../api/wells";
 import { colorForBlueox } from "../map/formations";
+import { COHORT_HALO_COLOR } from "../map/wellsLayers";
 
 export interface GunBarrelProps {
   wells: WellDetailLite[];
   // api10s of wells that will be added when the user commits. The
   // unchecked wells render at lowered opacity. Toggle via onToggle.
   selectedApi10s: Set<string>;
+  // api10s of wells ALREADY in the active cohort. These get a sky-blue
+  // halo behind the circle — the same "this well is in the cohort" cue
+  // the map paints on cohort sticks. Distinct from selectedApi10s
+  // (staging intent). Empty/undefined outside the modal.
+  cohortApi10s?: Set<string>;
   onToggle: (api10: string) => void;
+  // Rubber-band box select. Drag across empty chart background to select
+  // the enclosed wells. mode: plain drag replaces the selection, Shift
+  // adds, Alt removes. Omit to disable box select (e.g. reuse outside
+  // the modal). Individual circle clicks still toggle via onToggle.
+  onBoxSelect?: (
+    api10s: string[],
+    mode: "replace" | "add" | "subtract",
+  ) => void;
   // Shared hover state lifted into the InspectModal — lets the
   // production charts and the gun-barrel highlight the same well at
   // the same time. Both undefined when this component is reused
@@ -53,7 +67,9 @@ interface Projected {
 
 function projectWells(wells: WellDetailLite[]): {
   projected: Projected[];
-  axisLabel: string;
+  // Compass bearing (deg from N) of the +X axis BEFORE any user flip.
+  // The component turns this into a label and mirrors it when flipped.
+  axisBearingDeg: number;
 } {
   // Wells with no surface OR no bottomhole coordinates are dropped
   // entirely — we can't place them on the cross-section without a
@@ -65,7 +81,7 @@ function projectWells(wells: WellDetailLite[]): {
       w.bh_lat != null && w.bh_lon != null,
   );
   if (usable.length === 0) {
-    return { projected: [], axisLabel: "" };
+    return { projected: [], axisBearingDeg: 90 };
   }
 
   // Cohort centroid in lon/lat (mean of lateral midpoints).
@@ -94,11 +110,18 @@ function projectWells(wells: WellDetailLite[]): {
   const lateralLen = Math.hypot(mx, my) || 1;
   const lateralX = mx / lateralLen;
   const lateralY = my / lateralLen;
-  // Perpendicular vector (90° rotation to the left). Doesn't matter
-  // which sign we pick as long as we're consistent — the compass-rose
-  // glyph below tells the engineer which direction is +X.
-  const perpX = -lateralY;
-  const perpY = lateralX;
+  // Perpendicular vector (90° rotation). Canonicalize +X to point East
+  // — or South when the lateral runs E-W and the section is N-S — so the
+  // cross-section defaults to a West→East read. This matches the
+  // erebor/narvi "+offset = E/S" convention; the flip toggle in the
+  // component mirrors it when a given pad reads better the other way.
+  let perpX = -lateralY;
+  let perpY = lateralX;
+  const EPS = 1e-9;
+  if (perpX < -EPS || (Math.abs(perpX) <= EPS && perpY > 0)) {
+    perpX = -perpX;
+    perpY = -perpY;
+  }
 
   // Lat/lon → ft scaling at the cohort centroid latitude.
   const ftPerDegLon = Math.cos((cLat * Math.PI) / 180) * FT_PER_DEG_LAT;
@@ -131,13 +154,12 @@ function projectWells(wells: WellDetailLite[]): {
     };
   });
 
-  // Compass-rose label for +X. Convert perpendicular unit vector back
-  // to bearing degrees from north (0 = N, 90 = E).
+  // Compass bearing for +X. Convert perpendicular unit vector to
+  // bearing degrees from north (0 = N, 90 = E).
   const bearingRad = Math.atan2(perpX, perpY);
   const bearingDeg = ((bearingRad * 180) / Math.PI + 360) % 360;
-  const axisLabel = compassLabel(bearingDeg);
 
-  return { projected, axisLabel };
+  return { projected, axisBearingDeg: bearingDeg };
 }
 
 function compassLabel(deg: number): string {
@@ -156,17 +178,45 @@ function compassLabel(deg: number): string {
 export function GunBarrel({
   wells,
   selectedApi10s,
+  cohortApi10s,
   onToggle,
+  onBoxSelect,
   hoveredApi10 = null,
   onHover,
   width = 880,
   height = 320,
 }: GunBarrelProps) {
-  const { projected, axisLabel } = useMemo(() => projectWells(wells), [wells]);
+  const { projected, axisBearingDeg } = useMemo(
+    () => projectWells(wells),
+    [wells],
+  );
   // Local hover keeps the projected x/y for tooltip positioning. The
   // *which-well-is-hovered* truth lives at hoveredApi10 (the lifted
   // prop) so the production charts can react to the same hover.
   const [hover, setHover] = useState<Projected | null>(null);
+
+  // Rubber-band box select. svgRef converts client coords → svg-pixel
+  // coords (no viewBox, so 1 svg unit == 1 px); selBox holds the live
+  // drag rectangle in those coords (null when not dragging).
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [selBox, setSelBox] = useState<{
+    x0: number;
+    y0: number;
+    x1: number;
+    y1: number;
+  } | null>(null);
+
+  // Orientation flip. The projection canonicalizes +X to East (typical
+  // West→East read), but section geometry varies pad-to-pad and the
+  // engineer sometimes wants it mirrored. flip = true mirrors the
+  // x-axis: sgn negates every plotted offset and the axis label swaps
+  // to the opposite compass point. Same behavior shipped in erebor/narvi.
+  const [flip, setFlip] = useState<boolean>(false);
+  const sgn = flip ? -1 : 1;
+  // Right end of the axis is +X (== axisLabel); left end is its opposite.
+  const labelBearing = (axisBearingDeg + (flip ? 180 : 0)) % 360;
+  const axisLabel = compassLabel(labelBearing);
+  const leftLabel = compassLabel((labelBearing + 180) % 360);
 
   const plotArea = {
     x: PAD.left,
@@ -199,7 +249,10 @@ export function GunBarrel({
     );
   }
 
-  const offsets = projected.map((p) => p.offsetFt);
+  // Plot in display space: sgn folds the orientation flip into the
+  // offset up front so the auto-fit range, ticks, and circle positions
+  // all mirror together. Raw p.offsetFt stays canonical for tooltips.
+  const offsets = projected.map((p) => sgn * p.offsetFt);
   const tvds = projected.map((p) => p.tvd);
   const xMin0 = Math.min(...offsets);
   const xMax0 = Math.max(...offsets);
@@ -229,14 +282,77 @@ export function GunBarrel({
   const xTicks = niceTicks(xMin, xMax, 6);
   const yTicks = niceTicks(yMin, yMax, 5);
 
+  // Start a rubber-band box on mousedown over empty chart background.
+  // Mousedown on a well circle is left to that circle's onClick (toggle).
+  // Modifier at drag start fixes the mode for the whole drag.
+  function onSvgMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+    if (!onBoxSelect) return;
+    if ((e.target as Element).tagName === "circle") return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const startX = e.clientX - rect.left;
+    const startY = e.clientY - rect.top;
+    const mode: "replace" | "add" | "subtract" = e.shiftKey
+      ? "add"
+      : e.altKey
+        ? "subtract"
+        : "replace";
+    e.preventDefault();
+
+    const onMove = (ev: MouseEvent) => {
+      setSelBox({
+        x0: startX,
+        y0: startY,
+        x1: ev.clientX - rect.left,
+        y1: ev.clientY - rect.top,
+      });
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setSelBox(null);
+      const endX = ev.clientX - rect.left;
+      const endY = ev.clientY - rect.top;
+      // Ignore a click-sized drag on background so a stray click doesn't
+      // wipe the whole selection to empty (replace mode).
+      if (Math.abs(endX - startX) < 4 && Math.abs(endY - startY) < 4) return;
+      const xa = Math.min(startX, endX);
+      const xb = Math.max(startX, endX);
+      const ya = Math.min(startY, endY);
+      const yb = Math.max(startY, endY);
+      const hit: string[] = [];
+      for (const p of projected) {
+        const cx = xScale(sgn * p.offsetFt);
+        const cy = yScale(p.tvd);
+        if (cx >= xa && cx <= xb && cy >= ya && cy <= yb) hit.push(p.api10);
+      }
+      onBoxSelect(hit, mode);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   return (
-    <svg
-      width={width}
-      height={height}
-      className="gun-barrel-svg"
-      role="img"
-      aria-label="Gun-barrel cross-section of staged wells"
-    >
+    <div className="gun-barrel-wrap">
+      <button
+        type="button"
+        className="gun-barrel-flip-btn"
+        onClick={() => setFlip((f) => !f)}
+        title="Flip orientation — mirror the cross-section's x-axis"
+        aria-pressed={flip}
+      >
+        ⇋ {leftLabel}→{axisLabel}
+      </button>
+      <svg
+        ref={svgRef}
+        width={width}
+        height={height}
+        className="gun-barrel-svg"
+        role="img"
+        aria-label="Gun-barrel cross-section of staged wells"
+        onMouseDown={onSvgMouseDown}
+        style={{ cursor: onBoxSelect ? "crosshair" : undefined }}
+      >
       {/* Plot frame */}
       <rect
         x={plotArea.x}
@@ -292,6 +408,27 @@ export function GunBarrel({
         </g>
       ))}
 
+      {/* Cohort-membership halos — sky-blue disc under any well already
+          in the active cohort, matching the map's cohort stick halo.
+          Drawn before the well circles so they sit underneath. Held at a
+          steady opacity (it's a membership badge, not a selection/hover
+          cue), but dimmed for deselected wells so a ghosted circle isn't
+          crowned by a bright halo. */}
+      {cohortApi10s &&
+        projected.map((p) =>
+          cohortApi10s.has(p.api10) ? (
+            <circle
+              key={`halo-${p.api10}`}
+              cx={xScale(sgn * p.offsetFt)}
+              cy={yScale(p.tvd)}
+              r={WELL_RADIUS + 4}
+              fill={COHORT_HALO_COLOR}
+              opacity={selectedApi10s.has(p.api10) ? 0.5 : 0.2}
+              pointerEvents="none"
+            />
+          ) : null,
+        )}
+
       {/* Well circles. Hovered well stays at full opacity + thicker
           stroke; other selected wells fade slightly so the highlight
           reads. Deselected wells stay ghosted regardless of hover. */}
@@ -308,7 +445,7 @@ export function GunBarrel({
         return (
           <circle
             key={p.api10}
-            cx={xScale(p.offsetFt)}
+            cx={xScale(sgn * p.offsetFt)}
             cy={yScale(p.tvd)}
             r={WELL_RADIUS}
             className="gun-barrel-well-circle"
@@ -351,17 +488,33 @@ export function GunBarrel({
         TVD (ft)
       </text>
 
+      {/* Rubber-band selection rectangle while dragging. */}
+      {selBox && (
+        <rect
+          x={Math.min(selBox.x0, selBox.x1)}
+          y={Math.min(selBox.y0, selBox.y1)}
+          width={Math.abs(selBox.x1 - selBox.x0)}
+          height={Math.abs(selBox.y1 - selBox.y0)}
+          fill="rgba(37,99,235,0.10)"
+          stroke="#2563eb"
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          pointerEvents="none"
+        />
+      )}
+
       {/* Tooltip — rendered last so it sits on top of the well circles */}
       {hover && (
         <GunBarrelTooltip
           point={hover}
-          x={xScale(hover.offsetFt)}
+          x={xScale(sgn * hover.offsetFt)}
           y={yScale(hover.tvd)}
           chartWidth={width}
           chartHeight={height}
         />
       )}
-    </svg>
+      </svg>
+    </div>
   );
 }
 

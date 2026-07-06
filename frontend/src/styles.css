@@ -1285,8 +1285,29 @@ input[type="date"], input[type="number"], input[type="search"] {
   background: #f8fafc;
 }
 .inspect-modal-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: #475569;
+}
+.inspect-modal-linkbtn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.inspect-modal-linkbtn:disabled {
+  color: #cbd5e1;
+  cursor: default;
+  text-decoration: none;
+}
+.inspect-modal-hint {
+  color: #94a3b8;
+  font-size: 11px;
 }
 .inspect-modal-actions {
   display: flex;
@@ -1318,8 +1339,50 @@ input[type="date"], input[type="number"], input[type="search"] {
   background: #9ca3af;
   cursor: not-allowed;
 }
+.inspect-modal-actions .btn-danger {
+  background: #fff;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.inspect-modal-actions .btn-danger:hover:not(:disabled) {
+  background: #fef2f2;
+}
+.inspect-modal-actions .btn-danger:disabled {
+  color: #d1d5db;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+}
 
 /* ---------- gun-barrel ---------- */
+.gun-barrel-wrap {
+  position: relative;
+  display: inline-block;
+}
+.gun-barrel-flip-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.gun-barrel-flip-btn:hover {
+  background: #f1f5f9;
+}
+.gun-barrel-flip-btn[aria-pressed="true"] {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
 .gun-barrel-svg {
   display: block;
   background: #fafafa;

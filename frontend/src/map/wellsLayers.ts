@@ -96,8 +96,10 @@ export const WELLS_INTERACTIVE_LAYERS = [
 
 // ---------------- cohort halo layers ----------------
 // Matches the cohort-bar accent color so the bar and the map agree
-// visually on "this well is in the active cohort".
-const COHORT_HALO_COLOR = "#0ea5e9";
+// visually on "this well is in the active cohort". Exported so the
+// inspect modal's gun-barrel + production overlays can halo their
+// cohort-member wells with the exact same sky-blue.
+export const COHORT_HALO_COLOR = "#0ea5e9";
 
 // Filter-based: layers are always present, but their filter restricts
 // rendering to features whose api10 is in the active cohort. The
