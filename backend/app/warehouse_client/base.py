@@ -47,6 +47,13 @@ class WellHeader:
     name: str | None = None
     operator: str | None = None
     formation: str | None = None
+    # Blue Ox standardized formation code + its basin
+    # (curated.wells_enriched.formation_blueox / basin_blueox). Parallel to
+    # raw ``formation``; the app's basin-aware formation coloring/filtering
+    # keys on these. ``formation_blueox`` is NULL for unmapped wells;
+    # ``basin_blueox`` is 'delaware'/'midland' (NULL outside those basins).
+    formation_blueox: str | None = None
+    basin_blueox: str | None = None
     first_prod_date: date | None = None
     lateral_ft: float | None = None
     proppant_lbs: float | None = None
@@ -54,6 +61,9 @@ class WellHeader:
     tvd_ft: float | None = None
     county: str | None = None
     basin: str | None = None
+    # Permian sub-basin (Delaware / Midland / …) — drives the basin-aware
+    # terminal-Df in forecasting. From curated.wells_enriched.subbasin.
+    subbasin: str | None = None
     status: str = "UNKNOWN"
     sh_lat: float | None = None
     sh_lon: float | None = None
@@ -101,3 +111,23 @@ class ProductionRecord:
     rate_calday_bopd: float | None = None
     rate_calday_mcfd: float | None = None
     rate_calday_bwpd: float | None = None
+
+
+@dataclass(frozen=True)
+class NoviForecastRecord:
+    """One row from ``curated.production_forecast``, api10-keyed.
+
+    Novi's forecasted (PDP) monthly series. Mirrors ``ProductionRecord``'s
+    ``rate_calday_*`` naming so the local table and the curves overlay can
+    treat forecast and actual identically. ``cumulative_*`` are Novi's
+    running totals, carried for the optional cumulative overlay.
+    """
+
+    api10: str
+    prod_date: date
+    rate_calday_bopd: float | None = None
+    rate_calday_mcfd: float | None = None
+    rate_calday_bwpd: float | None = None
+    cumulative_oil_bbl: float | None = None
+    cumulative_gas_mcf: float | None = None
+    cumulative_water_bbl: float | None = None

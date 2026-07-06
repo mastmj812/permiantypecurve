@@ -10,7 +10,6 @@ circular import between `api.deals` and `api.type_curves`.
 
 from __future__ import annotations
 
-import math
 from typing import Any
 
 from sqlalchemy import select
@@ -57,40 +56,25 @@ PER_WELL_COL_FORMATS: dict[int, str] = {
 
 
 def eur_monthly_trapezoid(params: dict[str, Any] | None) -> float | None:
-    """Recompute a well's 50-yr EUR as a monthly trapezoid sum.
+    """Recompute a well's 50-yr EUR via the shared display convention.
 
-    Mirrors the frontend's ``eurFromArpsParams`` so the per-well EURs
-    in both exports match the Review tab and the slide /well-stats
-    endpoint byte-for-byte. The persisted ``forecasts.eur`` column was
-    written via scipy.integrate.quad and undershoots the discrete
-    monthly sum by ~3% on typical Permian fits, so using it here would
-    produce a workbook / slide that disagrees with the values an
-    engineer sees in the Review tab.
+    Thin wrapper over ``display_eur_from_params`` — a trapezoid over
+    the monthly ramp+Arps grid, ramp prefix included, mirroring the
+    frontend's ``eurFromForecastParams`` — so the per-well EURs in both
+    exports match the Review tab, the probit dots, and the slide
+    /well-stats endpoint. (The previous inline version was a left-
+    endpoint rectangle sum that dropped the ramp prefix: workbook EURs
+    ran ~1-3% high on the integration while losing the ramp volume the
+    stored ``forecasts.eur`` includes.) None when the core Arps params
+    are missing/non-finite — callers render an empty cell.
     """
-    if not params:
-        return None
-    required = ("qi", "Di", "b", "Df")
-    if not all(
-        k in params and isinstance(params[k], (int, float)) and math.isfinite(float(params[k]))
-        for k in required
-    ):
-        return None
-    # Lazy import — the fit_p50 module pulls in numpy / scipy which we
-    # don't want forced into the import graph for endpoints that never
-    # touch EUR math.
-    from app.type_curves.fit_p50 import evaluate_fit
+    # Lazy import — ramp_arps pulls in numpy / scipy, which we don't
+    # want forced into the import graph for endpoints that never touch
+    # EUR math.
+    from app.forecasting.ramp_arps import display_eur_from_params
 
     try:
-        fit = evaluate_fit(
-            qi=float(params["qi"]),
-            Di=float(params["Di"]),
-            b=float(params["b"]),
-            Df=float(params["Df"]),
-            qo=float(params["qi"]),  # per-well forecasts start at peak — no ramp prefix
-            peak_index=0,
-            n_months=600,
-        )
-        return sum(r * 30.4375 for r in fit["smoothed_rate"])
+        return display_eur_from_params(params)
     except Exception:
         return None
 
@@ -146,7 +130,7 @@ def per_well_rows(
             w.api10,
             w.name,
             w.operator,
-            w.formation,
+            w.formation_blueox,
             lat,
             bwpf,
             ppf,

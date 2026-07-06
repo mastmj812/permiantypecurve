@@ -10,13 +10,13 @@ Normalization basis is per-1000-lateral-ft for v1; the function is
 structured so per-proppant-lb or per-well can drop in via a different
 `normalize_by` value without changing the aggregation math.
 
-Alignment is peak-month: each well's t=0 is its own peak. Oil and gas
-share the oil peak; water aligns on its own (earlier) peak — same
-per-stream rule as forecasting (see orchestrator.detect_stream_peaks).
-Because water is sliced from an earlier month it can run longer than
-oil, so the per-stream arrays may differ in length; the panel is sized
-to the longest stream and shorter streams are NaN-padded in the tail.
-The loader (loader.load_well_series) prepares the per-stream slices.
+Alignment is peak-month: each well's t=0 is its own peak, and EVERY
+stream aligns on its own detected peak (gas commonly peaks after oil;
+water before) — same per-stream rule as forecasting (see
+orchestrator.detect_stream_peaks). Because streams are sliced from
+different months the per-stream arrays may differ in length; the panel
+is sized to the longest stream and shorter streams are NaN-padded in
+the tail. The loader (loader.load_well_series) prepares the slices.
 """
 
 from __future__ import annotations
@@ -26,17 +26,32 @@ from typing import Any, Literal
 
 import numpy as np
 
-# Standard percentiles surfaced everywhere downstream (chart bands,
-# implied EUR table, CSV export).
+# Standard percentile labels surfaced everywhere downstream (chart
+# bands, EUR table, CSV export).
+#
+# CONVENTION — SPE / PRMS reserves convention, NOT numpy's statistical
+# percentile: "P10" is the HIGH case (exceeded by only 10% of wells),
+# "P90" the LOW case (exceeded by 90%). P10 ≥ P50 ≥ P90. Numerically,
+# label Pxx maps to the (100 − xx)-th statistical percentile of the
+# cross-well distribution — see ``_SPE_NUMPY_PERCENTILES`` below.
+# Adopted 2026-06-10 (the tool previously used the statistical
+# orientation, i.e. p10 = low); saved type curves were flipped in
+# migration 0021 so persisted series JSONB matches this convention.
 PERCENTILES: tuple[int, ...] = (10, 25, 50, 75, 90)
 PERCENTILE_KEYS: tuple[str, ...] = tuple(f"p{p}" for p in PERCENTILES)
+# numpy percentile to evaluate for each SPE label, in PERCENTILES order:
+# P10 → 90th, P25 → 75th, P50 → 50th, P75 → 25th, P90 → 10th.
+_SPE_NUMPY_PERCENTILES: tuple[int, ...] = tuple(100 - p for p in PERCENTILES)
 
 # Mean number of days per calendar month — used to convert daily rates to
 # per-month volumes when computing implied EUR. Matches DAYS_PER_YEAR/12.
 DAYS_PER_MONTH: float = 365.0 / 12.0
 
 NormalizationBasis = Literal["per_lateral_ft", "per_proppant_lb", "per_well"]
-AlignmentMethod = Literal["peak_month", "first_prod_month"]
+# peak_ramp = peak-aligned with ramp lookback: every well's peak at the
+# cohort-median ramp length M, its own ramp in the months before. See
+# loader.load_wells_with_forecast.
+AlignmentMethod = Literal["peak_month", "first_prod_month", "peak_ramp"]
 
 
 @dataclass(frozen=True)
@@ -140,7 +155,10 @@ def _stream_panel(
             p75.append(None); p90.append(None); means.append(None)
             continue
         # `linear` interpolation for percentiles is the standard.
-        qs = np.percentile(usable, PERCENTILES, method="linear")
+        # SPE orientation: the "p10" series takes the 90th statistical
+        # percentile (high case), "p90" the 10th (low case) — see the
+        # PERCENTILES comment at the top of the module.
+        qs = np.percentile(usable, _SPE_NUMPY_PERCENTILES, method="linear")
         p10.append(float(qs[0])); p25.append(float(qs[1]))
         p50.append(float(qs[2])); p75.append(float(qs[3])); p90.append(float(qs[4]))
         means.append(float(np.mean(usable)))

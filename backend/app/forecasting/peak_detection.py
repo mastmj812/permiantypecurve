@@ -8,14 +8,13 @@ Rule (from the brief):
     rate spike (e.g. flush production from an offset frac in month 18)
     must NOT win.
 
-    Gas inherits oil's peak month — we don't detect a separate gas peak,
-    because gas tracks oil closely enough that a shared t=0 keeps the
-    forecasts and TC aggregation coherent. WATER, however, gets its own
-    peak: Permian flowback water peaks hard in month 0-1 and declines
-    immediately, months before oil ramps to its peak. Anchoring water on
-    the oil peak reads a low qi (the water peak has already decayed) and
-    a shallow Di (the steep early decline is upstream of the fit slice).
-    See app.forecasting.orchestrator.detect_stream_peaks for the wiring.
+    Every stream anchors on its OWN detected peak (since 2026-06-10;
+    gas previously inherited oil's). Water peaks hard in month 0-1
+    (flowback) months before oil; gas commonly peaks AFTER oil as the
+    GOR climbs — 39% of forecasted wells in this dataset, p90 +4
+    months. Anchoring a stream on the oil peak reads the wrong qi and
+    starts the fit slice on the wrong limb. See
+    app.forecasting.orchestrator.detect_stream_peaks for the wiring.
 
     ``detect_peak`` is stream-agnostic — pass the stream's rate column.
     ``detect_oil_peak`` is the oil-defaulted wrapper kept for callers
@@ -24,6 +23,7 @@ Rule (from the brief):
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -31,6 +31,8 @@ import pandas as pd
 
 PEAK_DETECTION_WINDOW_MONTHS: int = 3
 PEAK_DETECTION_WINDOW_LIMIT_MONTHS: int = 12
+# Default look-ahead for the onset "sustain" check (see onset_index_from_rates).
+ONSET_SUSTAIN_MONTHS: int = 2
 
 
 @dataclass(frozen=True)
@@ -38,6 +40,60 @@ class PeakResult:
     peak_month_date: date
     peak_rate: float  # rate_calday_bopd AT the peak month (not the rolling-max value)
     peak_index: int   # 0-based index into the sorted monthly series
+
+
+def onset_index_from_rates(
+    rates: Sequence[float | None],
+    *,
+    floor: float = 0.0,
+    sustain_months: int = ONSET_SUSTAIN_MONTHS,
+) -> int:
+    """Index of a stream's first PRODUCING month, given a chronological
+    rate list.
+
+    The onset is the first month at/above ``floor`` whose production is
+    *sustained* — at least one of the following ``sustain_months`` months
+    also clears the floor. That skips a lone early blip (one month above
+    the floor surrounded by zeros). This trims leading sub-floor months
+    (delayed water breakthrough, or simply unreported early months) so the
+    ramp prefix and type-curve timing reflect when the stream actually
+    started rather than the well's first-prod.
+
+    Returns 0 when there are no leading sub-floor months, the list is
+    empty, or nothing clears the floor (callers treat 0 as "starts at
+    first prod"). Pure / list-based so both the fitter and the TC loader
+    can share it.
+    """
+    n = len(rates)
+    for i in range(n):
+        v = rates[i]
+        if v is None or v < floor or v <= 0:
+            continue
+        # Sustain: at least one of the next `sustain_months` months also
+        # clears the floor. At the tail (no look-ahead) accept outright.
+        lookahead = [r for r in rates[i + 1 : i + 1 + sustain_months] if r is not None]
+        if not lookahead or any(r >= floor for r in lookahead):
+            return i
+    return 0
+
+
+def detect_onset(
+    monthly_df: pd.DataFrame,
+    *,
+    rate_column: str,
+    date_column: str = "prod_date",
+    floor: float = 0.0,
+    sustain_months: int = ONSET_SUSTAIN_MONTHS,
+) -> int:
+    """DataFrame wrapper over ``onset_index_from_rates`` — returns the
+    onset index for ``rate_column``. 0 for an empty frame / missing
+    column. The result is <= the stream's peak index by construction
+    (the peak is the series max, which is >= floor)."""
+    if monthly_df.empty or rate_column not in monthly_df.columns:
+        return 0
+    df = monthly_df.sort_values(date_column).reset_index(drop=True)
+    rates = [None if pd.isna(v) else float(v) for v in df[rate_column]]
+    return onset_index_from_rates(rates, floor=floor, sustain_months=sustain_months)
 
 
 def detect_peak(

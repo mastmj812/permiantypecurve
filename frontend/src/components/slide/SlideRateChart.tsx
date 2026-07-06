@@ -97,6 +97,12 @@ export function SlideRateChart({
     lateralByApi10,
     "history_rate_filtered",
     stream,
+    // peak_ramp bands peak at the fitted peak_index — keep that many
+    // months of real pre-peak ramp so the spaghetti registers with
+    // the bands. Other alignments keep the legacy peak-at-0 behavior.
+    current.alignment_method === "peak_ramp"
+      ? currentStream.fitted?.peak_index ?? 0
+      : 0,
   );
 
   return (

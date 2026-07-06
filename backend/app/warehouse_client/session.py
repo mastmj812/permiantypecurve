@@ -19,7 +19,7 @@ keep working until ``warehouse_client`` is wired into the orchestrator.
 from collections.abc import Iterator
 from functools import lru_cache
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -38,21 +38,49 @@ def _engine() -> Engine:
     """Build the warehouse engine on first use; cache process-wide."""
     if not settings.warehouse_database_url:
         raise RuntimeError(_NOT_CONFIGURED_MESSAGE)
-    return create_engine(
+    engine = create_engine(
         settings.warehouse_database_url,
         pool_pre_ping=True,
         pool_size=2,
         max_overflow=3,
         future=True,
         connect_args={
-            # Postgres GUC: every connection starts in read-only transaction
-            # mode. Writes raise ReadOnlySqlTransaction (SQLSTATE 25006).
-            "options": "-c default_transaction_read_only=on",
+            # SSL required by hosted Postgres (Supabase); harmless on local PG.
+            "sslmode": "require",
             # Fail fast if the warehouse is unreachable rather than hanging
             # on the default ~75s TCP timeout.
             "connect_timeout": 5,
+            # Keep long, quiet reads alive through a connection pooler.
+            "keepalives": 1,
+            "keepalives_idle": 30,
+            "keepalives_interval": 10,
+            "keepalives_count": 5,
         },
     )
+
+    @event.listens_for(engine, "connect")
+    def _warehouse_session_setup(dbapi_conn, _record):  # noqa: ANN001
+        # Apply per-session GUCs explicitly. We can't use libpq startup
+        # `options` for these because a transaction pooler (Supabase/pgbouncer)
+        # strips it; and we run them in autocommit so they persist for the
+        # connection's whole life regardless of later rollbacks:
+        #  - default_transaction_read_only: every txn is read-only — writes raise
+        #    ReadOnlySqlTransaction (SQLSTATE 25006). Safer than code discipline.
+        #  - statement_timeout=0: large curated.* reads (e.g. production_forecast,
+        #    ~17M rows) must not hit a hosted instance's short default timeout.
+        #  - search_path includes `extensions` so PostGIS types resolve (Supabase
+        #    installs PostGIS into the extensions schema).
+        prev = dbapi_conn.autocommit
+        dbapi_conn.autocommit = True
+        try:
+            with dbapi_conn.cursor() as cur:
+                cur.execute("SET default_transaction_read_only = on")
+                cur.execute("SET statement_timeout = 0")
+                cur.execute("SET search_path TO public, extensions")
+        finally:
+            dbapi_conn.autocommit = prev
+
+    return engine
 
 
 @lru_cache(maxsize=1)

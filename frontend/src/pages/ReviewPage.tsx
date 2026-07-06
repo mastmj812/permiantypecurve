@@ -404,7 +404,7 @@ export function ReviewPage() {
     return [...filtered].sort((a, b) => {
       const av = get(a), bv = get(b);
       if (typeof av === "string") return sign * av.localeCompare(bv as string);
-      return sign * ((av as number) - (bv as number));
+      return sign * ((av) - (bv as number));
     });
   }, [filtered, sortKey, sortDir, fitsByWellStream]);
 
@@ -541,6 +541,28 @@ export function ReviewPage() {
                   r.eur != null && r.well_lateral_ft
                     ? r.eur / r.well_lateral_ft
                     : null;
+                // Tiered highlight on the oil EUR cell when our value
+                // diverges from Novi's 50-yr oil EUR. Both are full
+                // model EURs, so the comparison is apples-to-apples.
+                const eurDivPct =
+                  r.eur != null &&
+                  r.well_novi_oil_eur != null &&
+                  r.well_novi_oil_eur !== 0
+                    ? Math.abs(r.eur - r.well_novi_oil_eur) /
+                      Math.abs(r.well_novi_oil_eur)
+                    : null;
+                const eurDivClass =
+                  eurDivPct == null
+                    ? ""
+                    : eurDivPct > 0.3
+                      ? "eur-diverge-strong"
+                      : eurDivPct > 0.15
+                        ? "eur-diverge-mild"
+                        : "";
+                const eurDivTitle =
+                  eurDivPct == null
+                    ? undefined
+                    : `App vs Novi oil EUR: ${(eurDivPct * 100).toFixed(0)}% gap`;
                 return (
                   <tr
                     key={r.api10}
@@ -572,7 +594,9 @@ export function ReviewPage() {
                     <td>{r.well_operator ?? "—"}</td>
                     <td>{r.well_first_prod_date ?? "—"}</td>
                     <td>{fmtInt(r.well_lateral_ft)}</td>
-                    <td>{fmtVol(r.eur)}</td>
+                    <td className={eurDivClass} title={eurDivTitle}>
+                      {fmtVol(r.eur)}
+                    </td>
                     <td>{fmtVol(r.well_novi_oil_eur)}</td>
                     <td>{eurPerFt != null ? eurPerFt.toFixed(1) : "—"}</td>
                     <td>{r.fit_r2 != null ? r.fit_r2.toFixed(3) : "—"}</td>
@@ -739,6 +763,16 @@ export function ReviewPage() {
           disabled={includedCount === 0}
           title="Open the Type curve page with the included set"
           onClick={() => {
+            // Snapshot the EXACT well list this button's count promises:
+            // the formation/outlier-FILTERED rows minus exclusions.
+            // TypeCurvePage aggregates this snapshot — previously it
+            // used the full forecastApi10s scope, so a filtered Review
+            // ("Aggregate 45") silently built the TC from all 120.
+            useMapStore.getState().setTypeCurveApi10s(
+              filtered
+                .filter((r) => !excluded.has(r.api10))
+                .map((r) => r.api10),
+            );
             // One-shot trigger — TypeCurvePage consumes this to fire
             // the compute. Without it, tab nav back to TC would
             // re-fire the compute on every visit.
@@ -828,7 +862,9 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     updated_at: new Date(0).toISOString(),
     well_name: w.name,
     well_operator: w.operator,
-    well_formation: w.formation,
+    // Standardized formation to match the /forecasts list + edit paths,
+    // which surface formation_blueox as `well_formation`.
+    well_formation: w.formation_blueox,
     well_lateral_ft: w.lateral_ft,
     well_vintage_year: w.vintage_year,
     well_first_prod_date: w.first_prod_date,

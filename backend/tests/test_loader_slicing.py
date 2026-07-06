@@ -1,8 +1,9 @@
 """Per-stream slice-start logic for the observed TC overlay.
 
-Pins the rule that under peak_month alignment water slices from its own
-peak while oil/gas slice from the oil peak — the observed-overlay half of
-the water re-alignment fix. Pure-function tests; the DB-coupled
+Pins the rule that under peak_month alignment EVERY stream slices from
+its own peak (gas commonly peaks after oil; water before), falling back
+to the oil peak for streams without a stored peak (rows that pre-date
+per-stream peaks). Pure-function tests; the DB-coupled
 load_well_series is exercised end-to-end manually.
 """
 
@@ -22,33 +23,38 @@ def test_first_prod_alignment_starts_all_streams_at_first_prod() -> None:
         alignment="first_prod_month",
         first_prod_date=fp,
         oil_peak_date=date(2023, 4, 1),
+        gas_peak_date=date(2023, 6, 1),
         water_peak_date=date(2023, 2, 1),
     )
     assert starts == {"oil": fp, "gas": fp, "water": fp}
 
 
-def test_peak_month_alignment_water_uses_own_peak() -> None:
+def test_peak_month_alignment_each_stream_uses_own_peak() -> None:
     oil_peak = date(2023, 4, 1)
+    gas_peak = date(2023, 7, 1)  # rising GOR: gas peaks after oil
     water_peak = date(2023, 2, 1)
     starts = _stream_slice_starts(
         alignment="peak_month",
         first_prod_date=date(2023, 1, 1),
         oil_peak_date=oil_peak,
+        gas_peak_date=gas_peak,
         water_peak_date=water_peak,
     )
     assert starts["oil"] == oil_peak
-    assert starts["gas"] == oil_peak
+    assert starts["gas"] == gas_peak
     assert starts["water"] == water_peak
 
 
-def test_peak_month_water_falls_back_to_oil_peak_when_missing() -> None:
+def test_peak_month_streams_fall_back_to_oil_peak_when_missing() -> None:
     oil_peak = date(2023, 4, 1)
     starts = _stream_slice_starts(
         alignment="peak_month",
         first_prod_date=date(2023, 1, 1),
         oil_peak_date=oil_peak,
+        gas_peak_date=None,
         water_peak_date=None,
     )
+    assert starts["gas"] == oil_peak
     assert starts["water"] == oil_peak
 
 

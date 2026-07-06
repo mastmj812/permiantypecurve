@@ -10,7 +10,7 @@
 
 import type { ExpressionSpecification, LayerSpecification } from "maplibre-gl";
 
-import { formationMatchPairs, OTHER_COLOR } from "./formations";
+import { blueoxColorExpression } from "./formations";
 
 export const WELLS_SOURCE_ID = "wells";
 export const WELLS_POINTS_LAYER = "wells-points";
@@ -26,17 +26,12 @@ export const WELLS_LINES_SOLID_COHORT_LAYER = "wells-lines-solid-cohort";
 export const POINTS_MAXZOOM = 9;     // exclusive — switch to lines at 9
 export const LINES_MINZOOM = 9;
 
-// Cast via `unknown` because TS can't statically prove the spread of
-// formationMatchPairs() satisfies MapLibre's recursive
-// ExpressionSpecification union — but at runtime MapLibre validates
-// the JSON and we already encode the (input, output) pair convention
-// the spec requires.
-const FORMATION_COLOR_EXPR: ExpressionSpecification = [
-  "match",
-  ["get", "formation"],
-  ...formationMatchPairs(),
-  OTHER_COLOR,
-] as unknown as ExpressionSpecification;
+// Basin-aware color: a nested MapLibre `match` (outer basin_blueox, inner
+// formation_blueox code → color). Cast via `unknown` because TS can't statically
+// prove the nested match satisfies MapLibre's recursive ExpressionSpecification
+// union — MapLibre validates the JSON at runtime.
+const FORMATION_COLOR_EXPR: ExpressionSpecification =
+  blueoxColorExpression() as unknown as ExpressionSpecification;
 
 // `feature-state.selected === true` → bright yellow halo; else formation color.
 const SELECTED_COLOR_EXPR: ExpressionSpecification = [
@@ -101,8 +96,10 @@ export const WELLS_INTERACTIVE_LAYERS = [
 
 // ---------------- cohort halo layers ----------------
 // Matches the cohort-bar accent color so the bar and the map agree
-// visually on "this well is in the active cohort".
-const COHORT_HALO_COLOR = "#0ea5e9";
+// visually on "this well is in the active cohort". Exported so the
+// inspect modal's gun-barrel + production overlays can halo their
+// cohort-member wells with the exact same sky-blue.
+export const COHORT_HALO_COLOR = "#0ea5e9";
 
 // Filter-based: layers are always present, but their filter restricts
 // rendering to features whose api10 is in the active cohort. The

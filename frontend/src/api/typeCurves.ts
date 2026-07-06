@@ -3,7 +3,9 @@
 import { apiFetch } from "./auth";
 
 export type NormalizationBasis = "per_lateral_ft" | "per_proppant_lb" | "per_well";
-export type AlignmentMethod = "peak_month" | "first_prod_month";
+// peak_ramp = peak-aligned with ramp lookback: every well's peak sits
+// at the cohort-median ramp length, its own ramp in the months before.
+export type AlignmentMethod = "peak_month" | "first_prod_month" | "peak_ramp";
 
 export interface FittedTypeCurve {
   model_type: string;
@@ -136,6 +138,9 @@ export async function saveTypeCurve(args: {
   // Optional per-stream override of the fitted curve. Server re-evaluates
   // these and bakes them into the saved series.
   fit_overrides?: Record<string, FitOverride> | null;
+  // Versions only: atomically move the parent's deal assignment onto
+  // the new version (parent is unassigned in the same transaction).
+  take_over_deal?: boolean;
 }): Promise<TypeCurveRow> {
   const path = args.version_of
     ? `/api/type-curves/${args.version_of}/versions`
@@ -152,6 +157,7 @@ export async function saveTypeCurve(args: {
       alignment_method: args.alignment_method ?? "first_prod_month",
       n_months: args.n_months ?? null,
       fit_overrides: args.fit_overrides ?? null,
+      take_over_deal: args.take_over_deal ?? false,
     }),
   });
   if (!r.ok) throw new Error(`save failed: ${r.status} ${await r.text()}`);
@@ -197,6 +203,9 @@ export async function patchTypeCurve(
     // Explicit-null-vs-omitted matters here: pass `null` to un-assign,
     // omit the key entirely to leave the current deal_id alone.
     deal_id?: string | null;
+    // In-place alignment change — marks the curve stale; follow with
+    // reaggregateTypeCurve to rebuild the series under it.
+    alignment_method?: AlignmentMethod;
   },
 ): Promise<TypeCurveRow> {
   const r = await apiFetch(`/api/type-curves/${id}`, {

@@ -70,6 +70,8 @@ export interface WellDetail {
   api10: string;
   operator: string | null;
   formation: string | null;
+  formation_blueox: string | null;
+  basin_blueox: string | null;
   first_prod_date: string | null;
   vintage_year: number | null;
   lateral_ft: number | null;

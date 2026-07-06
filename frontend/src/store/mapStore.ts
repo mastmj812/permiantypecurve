@@ -26,6 +26,16 @@ export interface MapState {
   // api10s carried across nav from map → forecast page
   forecastApi10s: string[];
   setForecastApi10s: (api10s: string[]) => void;
+  // Snapshot of the EXACT well list the "Aggregate N into type curve"
+  // button promised — the Review page's formation/outlier-FILTERED rows
+  // minus exclusions, captured at click time. TypeCurvePage aggregates
+  // this list when present. Without it, the TC page fell back to the
+  // full forecastApi10s scope, silently building the curve from a
+  // different (larger) well set than the button's count implied.
+  // Cleared whenever a new forecast batch is set (a stale snapshot must
+  // not override a fresh scope) — null means "use forecastApi10s".
+  typeCurveApi10s: string[] | null;
+  setTypeCurveApi10s: (api10s: string[] | null) => void;
   // Short-history cutoff (months post-peak) applied when the batch
   // autoforecast fires. Lives in the map store so the user sets it
   // BEFORE clicking Forecast — otherwise the field would only appear
@@ -124,17 +134,17 @@ export interface MapState {
   showWellsticks: boolean;
   setShowWellsticks: (v: boolean) => void;
 
-  // ---- deal-acreage polygons ----
+  // ---- acreage polygons (uploaded shapefiles) ----
   // GeoJSON FeatureCollection cached after a fetch from
   // /api/deals/polygons.geojson. Null = not yet loaded.
   dealPolygons: DealPolygonGeoJSON | null;
   setDealPolygons: (fc: DealPolygonGeoJSON | null) => void;
-  // Per-deal visibility. Keys are deal_id strings, plus "_unlinked"
-  // for polygons that haven't been assigned to a deal yet. Defaults
-  // to all-true on first load — per the user's design choice
-  // "default ON". Missing key = visible.
+  // Per-shapefile visibility. Keys are source_file names (the uploaded
+  // .zip filename, or NO_SOURCE_FILE for legacy rows). Absent or true =
+  // visible; the manage modal writes here and the Map tab filters
+  // acreage features by it.
   dealVisibility: Record<string, boolean>;
-  setDealVisibility: (key: string, visible: boolean) => void;
+  setDealVisibility: (sourceFile: string, visible: boolean) => void;
 
   // ---- TC add-wells mode ----
   // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
@@ -159,7 +169,13 @@ export const useMapStore = create<MapState>((set) => ({
   currentPage: "map",
   setCurrentPage: (currentPage) => set({ currentPage }),
   forecastApi10s: [],
-  setForecastApi10s: (forecastApi10s) => set({ forecastApi10s }),
+  // A new forecast batch invalidates any Review-page aggregate
+  // snapshot — otherwise a stale typeCurveApi10s from the previous
+  // batch would silently override the fresh scope on the TC page.
+  setForecastApi10s: (forecastApi10s) =>
+    set({ forecastApi10s, typeCurveApi10s: null }),
+  typeCurveApi10s: null,
+  setTypeCurveApi10s: (typeCurveApi10s) => set({ typeCurveApi10s }),
   forecastCutoffMonths: 6,
   setForecastCutoffMonths: (forecastCutoffMonths) =>
     set({ forecastCutoffMonths }),
@@ -240,8 +256,10 @@ export const useMapStore = create<MapState>((set) => ({
   dealPolygons: null,
   setDealPolygons: (dealPolygons) => set({ dealPolygons }),
   dealVisibility: {},
-  setDealVisibility: (key, visible) =>
-    set((s) => ({ dealVisibility: { ...s.dealVisibility, [key]: visible } })),
+  setDealVisibility: (sourceFile, visible) =>
+    set((s) => ({
+      dealVisibility: { ...s.dealVisibility, [sourceFile]: visible },
+    })),
 
   tcAddWellsMode: null,
   setTcAddWellsMode: (tcAddWellsMode) => set({ tcAddWellsMode }),

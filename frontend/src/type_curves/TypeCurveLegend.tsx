@@ -43,7 +43,7 @@ export function TypeCurveLegend({ showCompare = false, compareName }: Props) {
         </div>
         <div className="legend-item">
           <span className="band-sample" style={{ background: "#bfdbfe", opacity: 0.55 }} />
-          P10 – P90 (90% band)
+          P10 – P90 (80% band; P10 = high case, SPE)
         </div>
       </div>
 

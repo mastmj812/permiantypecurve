@@ -30,6 +30,12 @@ export function buildAlignedWellHistories(
   lateralByApi10: Map<string, number | null>,
   field: CurvesField,
   plotStream: Stream = "oil",
+  // peak_ramp alignment: keep this many months of REAL pre-peak
+  // history in front of the peak, so each well's peak lands at chart
+  // month `lookbackMonths` — the same index the curve's bands peak at
+  // (the fitted peak_index). Wells with shorter ramps front-pad with
+  // nulls. 0 = legacy behavior (peak at month 0).
+  lookbackMonths: number = 0,
 ): Array<{ api10: string; rate: Array<number | null> }> {
   const out: Array<{ api10: string; rate: Array<number | null> }> = [];
   for (const wc of curves) {
@@ -55,14 +61,20 @@ export function buildAlignedWellHistories(
     // into the "month-0 starts at zero" convention of the slide chart.
     // Subtract the cum value at the peak so the well's cum trace starts
     // at 0 at peak month and grows from there.
+    // Window start: peak minus the lookback. Negative start months
+    // (well has less pre-peak history than the lookback) render as
+    // leading nulls so the peak still lands at month `lookbackMonths`.
+    const start = peakIdx - lookbackMonths;
     const isCumField =
       field === "history_cum" || field === "history_cum_filtered";
     const baseline = isCumField
       ? (() => {
-          // Walk forward from peakIdx to find the first non-null cum
-          // value — the filtered cum nulls out downtime months, so
-          // source[peakIdx] itself could be null.
-          for (let k = peakIdx; k < source.length; k++) {
+          // First non-null cum at/after the window start — the
+          // filtered cum nulls out downtime months, so the boundary
+          // value itself could be null. With a lookback the cum then
+          // starts at 0 at the window start (ramp volume included),
+          // matching the band cum convention.
+          for (let k = Math.max(0, start); k < source.length; k++) {
             const v = source[k];
             if (v != null && Number.isFinite(v)) return v as number;
           }
@@ -77,8 +89,8 @@ export function buildAlignedWellHistories(
     const scale = lat && lat > 0 ? 10000 / lat : 1;
 
     const aligned: Array<number | null> = [];
-    for (let i = peakIdx; i < source.length; i++) {
-      const v = source[i];
+    for (let i = start; i < source.length; i++) {
+      const v = i >= 0 ? source[i] : null;
       if (v == null || !Number.isFinite(v)) {
         aligned.push(null);
         continue;

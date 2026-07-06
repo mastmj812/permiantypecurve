@@ -22,6 +22,12 @@ class NormalizationBasis(str, enum.Enum):
 class AlignmentMethod(str, enum.Enum):
     PEAK_MONTH = "peak_month"
     FIRST_PROD_MONTH = "first_prod_month"
+    # Peak-aligned with ramp lookback: every well's peak sits at the
+    # cohort-median ramp length M, with its own ramp occupying the
+    # months before. Decline statistics are peak-synchronized (no
+    # staggered-peak smearing of qi/Di) while the panel still carries
+    # real ramp months for economics / facility planning.
+    PEAK_RAMP = "peak_ramp"
 
 
 class TypeCurve(Base):

@@ -19,6 +19,7 @@ from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import (
     DI_NOMINAL_HI_PER_YEAR,
     _bounds_and_p0,
+    _di_at_bound,
     _stream_di_hi,
     detect_at_bound,
     fit_rate_cum,
@@ -80,12 +81,17 @@ def test_water_qi_underfit_triggers_rate_time_fallback() -> None:
     peak = detect_peak(df, rate_column="rate_calday_bwpd")
     assert peak is not None
 
-    primary = fit_rate_cum(df, peak=peak, stream="water")
+    # Peak-anchored qi (the default) makes a qi under-pick impossible, so
+    # this fallback path is only reachable with anchoring off. Exercise it
+    # in isolation with anchoring disabled — it's still the fallback for
+    # callers that opt out of qi-anchoring.
+    cfg = ForecastConfig(qi_anchor_lo_frac=None, qi_anchor_hi_frac=None)
+    primary = fit_rate_cum(df, peak=peak, stream="water", config=cfg)
     # The cum fit smooths the peak away: qi lands well under the observed
     # peak (this is the precondition for the fallback to fire).
     assert primary.qi < 0.6 * peak.peak_rate
 
-    rescued = fit_with_fallback(df, peak=peak, stream="water")
+    rescued = fit_with_fallback(df, peak=peak, stream="water", config=cfg)
     assert rescued.fit_method == "rate_time_fallback"
     # Rate-time recovers far more of the peak than the cum fit did.
     assert rescued.qi > primary.qi
@@ -131,6 +137,34 @@ def test_bound_badge_note_reports_the_passed_cap() -> None:
     )
     assert at_bound is True
     assert "Di at upper bound (12.0)" in note
+
+
+def test_di_at_bound_respects_stream_cap() -> None:
+    # The fallback trigger must judge "pinned" against the SAME cap the
+    # stream's fit ran with — water's 12.0, not the oil-tuned 4.0. With
+    # the oil cap hardcoded, every water fit with Di in (3.92, 11.76)
+    # read as pinned and needlessly fired (or wrongly adopted) the
+    # rate-time fallback.
+    assert _di_at_bound(6.0) is True  # oil cap: 6.0 > 4.0 → pinned
+    assert _di_at_bound(6.0, di_hi=12.0) is False  # water: mid-band
+    assert _di_at_bound(11.9, di_hi=12.0) is True  # water: at its cap
+    assert _di_at_bound(0.505, di_hi=12.0) is True  # lower bound, shared
+    assert _di_at_bound(None, di_hi=12.0) is False
+
+
+def test_mid_band_water_di_does_not_trigger_fallback() -> None:
+    # Harmonic-shaped water decline with nominal Di ≈ 6/yr — steeper
+    # than the oil cap (4.0) but comfortably inside the water cap (12.0).
+    # The cum fit recovers it directly; the Di-at-bound trigger must NOT
+    # fire (pre-fix it did, judging Di=6 against the oil cap).
+    rates = [800.0 / (1.0 + 6.0 * (i / 12.0)) for i in range(36)]
+    df = _water_frame(rates)
+    peak = detect_peak(df, rate_column="rate_calday_bwpd")
+    assert peak is not None
+    result = fit_with_fallback(df, peak=peak, stream="water")
+    assert result.fit_method == "rate_cum"
+    assert result.di_initial is not None
+    assert 4.2 < result.di_initial < 11.5
 
 
 def test_clean_water_decline_keeps_cum_fit() -> None:

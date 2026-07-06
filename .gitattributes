@@ -1,0 +1,5 @@
+# Shell scripts run inside Linux containers (bind-mounted for hot reload).
+# Force LF regardless of core.autocrlf so Windows checkouts don't hand the
+# container CRLF line endings, which break bash (`set: pipefail: invalid
+# option name`) and hang the backend on start.
+*.sh text eol=lf

@@ -4,7 +4,7 @@
 // then commits the remainder into the active cohort via "Add N to
 // cohort". Cancel/Esc walks away without mutating the cohort.
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchWellDetails, type WellDetailLite } from "../api/wells";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
@@ -19,6 +19,7 @@ export interface InspectModalProps {
 export function InspectModal({ api10s, onClose }: InspectModalProps) {
   const cohort = useCohortStore(activeCohort);
   const addApi10s = useCohortStore((s) => s.addApi10s);
+  const removeApi10s = useCohortStore((s) => s.removeApi10s);
 
   const [wells, setWells] = useState<WellDetailLite[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -33,6 +34,55 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   // in lockstep: hovering a circle bolds the corresponding line (and
   // vice versa). Null when nothing is hovered.
   const [hoveredApi10, setHoveredApi10] = useState<string | null>(null);
+
+  // Drag state — same free-floating convention as ForecastDetailModal
+  // (and the erebor/narvi gunbarrel windows): grab the header to move
+  // the panel aside and see the wells on the map behind it. Position
+  // is a translate offset from the initial centered render.
+  const [dragPos, setDragPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const dragOriginRef = useRef<{
+    mouseX: number;
+    mouseY: number;
+    startX: number;
+    startY: number;
+  } | null>(null);
+
+  const onDragHandleMouseDown = useCallback(
+    (e: React.MouseEvent<HTMLElement>) => {
+      // Only the header background starts a drag — ignore the close
+      // button (and any future header controls) so clicks still work.
+      const target = e.target as HTMLElement;
+      if (target.closest("button") || target.closest("input")) return;
+      dragOriginRef.current = {
+        mouseX: e.clientX,
+        mouseY: e.clientY,
+        startX: dragPos.x,
+        startY: dragPos.y,
+      };
+      e.preventDefault();
+    },
+    [dragPos.x, dragPos.y],
+  );
+
+  useEffect(() => {
+    function onMove(e: MouseEvent) {
+      const o = dragOriginRef.current;
+      if (!o) return;
+      setDragPos({
+        x: o.startX + (e.clientX - o.mouseX),
+        y: o.startY + (e.clientY - o.mouseY),
+      });
+    }
+    function onUp() {
+      dragOriginRef.current = null;
+    }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
   // ESC closes, same convention as ForecastDetailModal. Skip when
   // focus is in an input so we don't fight inputs in nested controls.
@@ -84,6 +134,14 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     return m;
   }, [wells]);
 
+  // api10s already in the active cohort — drives the sky-blue membership
+  // halo in the gun-barrel + production overlays, so a staged well that's
+  // already a cohort member reads at a glance (same cue as the map).
+  const cohortApi10s = useMemo(
+    () => new Set(cohort?.api10s ?? []),
+    [cohort?.api10s],
+  );
+
   function toggle(api10: string) {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -93,27 +151,65 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     });
   }
 
+  // Box-select handoff from the gun-barrel. replace = only the boxed
+  // wells; add/subtract = union/difference with the current selection.
+  const boxSelect = useCallback(
+    (list: string[], mode: "replace" | "add" | "subtract") => {
+      setSelected((prev) => {
+        if (mode === "replace") return new Set(list);
+        const next = new Set(prev);
+        if (mode === "add") for (const a of list) next.add(a);
+        else for (const a of list) next.delete(a);
+        return next;
+      });
+    },
+    [],
+  );
+
+  const selectAll = useCallback(() => setSelected(new Set(api10s)), [api10s]);
+  const selectNone = useCallback(() => setSelected(new Set()), []);
+
   function commit() {
     if (!cohort) return;
     addApi10s(cohort.id, Array.from(selected));
     onClose();
   }
 
+  // Remove only the selected wells that are actually in the cohort — a
+  // selected well that was never a member is a no-op, so the button
+  // count reflects what will really change.
+  const selectedInCohort = useMemo(() => {
+    if (!cohort) return [];
+    const members = new Set(cohort.api10s);
+    return Array.from(selected).filter((a) => members.has(a));
+  }, [cohort, selected]);
+
+  function removeFromCohort() {
+    if (!cohort || selectedInCohort.length === 0) return;
+    removeApi10s(cohort.id, selectedInCohort);
+    onClose();
+  }
+
   const selectedCount = selected.size;
   const totalCount = api10s.length;
   const hasCohort = cohort != null;
+  const removeCount = selectedInCohort.length;
 
   return (
-    <div
-      className="modal-backdrop"
-      onClick={(e) => {
-        // Backdrop click closes; clicks inside the modal body bubble
-        // up to here too, so guard on currentTarget.
-        if (e.target === e.currentTarget) onClose();
-      }}
-    >
-      <div className="modal inspect-modal" role="dialog" aria-modal="true">
-        <div className="inspect-modal-header">
+    // Floating (no backdrop) so the panel can be dragged aside while the
+    // map/selection stays visible and interactive behind it — matching
+    // ForecastDetailModal. Close via ✕ / Cancel / Esc.
+    <div className="modal-floating-wrap">
+      <div
+        className="modal inspect-modal modal-floating"
+        role="dialog"
+        aria-modal="true"
+        style={{ transform: `translate(${dragPos.x}px, ${dragPos.y}px)` }}
+      >
+        <div
+          className="inspect-modal-header modal-drag-handle"
+          onMouseDown={onDragHandleMouseDown}
+        >
           <div className="inspect-modal-title">
             Inspect — {totalCount} well{totalCount === 1 ? "" : "s"} from staging
             {cohort && (
@@ -145,9 +241,11 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                 <GunBarrel
                   wells={wells}
                   selectedApi10s={selected}
+                  cohortApi10s={cohortApi10s}
                   hoveredApi10={hoveredApi10}
                   onHover={setHoveredApi10}
                   onToggle={toggle}
+                  onBoxSelect={boxSelect}
                 />
               </div>
               <div className="inspect-modal-section">
@@ -155,6 +253,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                   api10s={api10s}
                   wellsByApi10={wellsByApi10}
                   selectedApi10s={selected}
+                  cohortApi10s={cohortApi10s}
                   hoveredApi10={hoveredApi10}
                   onHover={setHoveredApi10}
                 />
@@ -166,6 +265,25 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
         <div className="inspect-modal-footer">
           <div className="inspect-modal-count">
             {selectedCount} of {totalCount} selected
+            <button
+              type="button"
+              className="inspect-modal-linkbtn"
+              onClick={selectAll}
+              disabled={selectedCount === totalCount}
+            >
+              all
+            </button>
+            <button
+              type="button"
+              className="inspect-modal-linkbtn"
+              onClick={selectNone}
+              disabled={selectedCount === 0}
+            >
+              none
+            </button>
+            <span className="inspect-modal-hint">
+              drag to box-select · shift add · alt remove
+            </span>
           </div>
           <div className="inspect-modal-actions">
             <button
@@ -174,6 +292,23 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
               onClick={onClose}
             >
               Cancel
+            </button>
+            <button
+              type="button"
+              className="btn btn-danger"
+              disabled={!hasCohort || removeCount === 0}
+              onClick={removeFromCohort}
+              title={
+                !hasCohort
+                  ? "Create a cohort first"
+                  : removeCount === 0
+                    ? "None of the selected wells are in the cohort"
+                    : `Remove ${removeCount} well${
+                        removeCount === 1 ? "" : "s"
+                      } from ${cohort?.name ?? "the cohort"}`
+              }
+            >
+              Remove {removeCount} from cohort
             </button>
             <button
               type="button"

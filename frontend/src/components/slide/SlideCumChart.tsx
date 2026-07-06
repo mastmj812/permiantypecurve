@@ -7,7 +7,7 @@
 //
 // Cumulative arrays aren't persisted on the saved type curve — we
 // integrate the percentile rate arrays here, matching TypeCurvePage's
-// own cum chart math (DAYS_PER_MONTH = 30.4375).
+// own cum chart math (DAYS_PER_MONTH = 365/12, the backend convention).
 
 import type { Stream, WellCurvesResponse } from "../../api/forecasts";
 import type { StreamSeries, TypeCurveRow } from "../../api/typeCurves";
@@ -17,7 +17,7 @@ import { buildAlignedWellHistories } from "./slideUtils";
 
 const CUM_X_MONTHS = 36;
 const PER_10K_FACTOR = 10;
-const DAYS_PER_MONTH = 30.4375;
+const DAYS_PER_MONTH = 365 / 12;
 
 interface Props {
   current: TypeCurveRow;
@@ -124,6 +124,11 @@ export function SlideCumChart({
     lateralByApi10,
     "history_cum_filtered",
     stream,
+    // peak_ramp: same lookback as the rate slide so the cum spaghetti
+    // includes the ramp volume and registers with the band cum.
+    current.alignment_method === "peak_ramp"
+      ? currentStream.fitted?.peak_index ?? 0
+      : 0,
   );
 
   return (

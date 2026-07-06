@@ -13,7 +13,12 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from app.forecasting.peak_detection import detect_oil_peak, detect_peak
+from app.forecasting.peak_detection import (
+    detect_oil_peak,
+    detect_onset,
+    detect_peak,
+    onset_index_from_rates,
+)
 
 
 def _make(rates: list[float], start: date = date(2023, 1, 1)) -> pd.DataFrame:
@@ -130,6 +135,48 @@ def test_detect_oil_peak_is_detect_peak_with_oil_default() -> None:
     rates = [200, 600, 800, 750, 600, 500, 400, 300]
     df = _make(rates)
     assert detect_oil_peak(df) == detect_peak(df, rate_column="rate_calday_bopd")
+
+
+def test_onset_trims_leading_zero_months() -> None:
+    # Real motivating well 4249534197: 5 leading zero water months, then
+    # water starts at idx 5 and is sustained. Onset must be idx 5.
+    rates = [0, 0, 0, 0, 0, 746, 1231, 1012, 1569, 927]
+    assert onset_index_from_rates(rates, floor=10.0) == 5
+
+
+def test_onset_zero_when_producing_from_month_zero() -> None:
+    rates = [800, 600, 500, 400, 300]
+    assert onset_index_from_rates(rates, floor=10.0) == 0
+
+
+def test_onset_skips_lone_early_blip() -> None:
+    # A single spurious 50 at idx 1, surrounded by zeros, must NOT anchor
+    # onset — real sustained production starts at idx 4.
+    rates = [0, 50, 0, 0, 600, 700, 650]
+    assert onset_index_from_rates(rates, floor=10.0) == 4
+
+
+def test_onset_all_zero_returns_zero() -> None:
+    assert onset_index_from_rates([0, 0, 0, 0], floor=10.0) == 0
+
+
+def test_onset_respects_floor() -> None:
+    # Sub-floor (< 10) leading months are trimmed even when non-zero.
+    rates = [3, 5, 8, 200, 400, 380]
+    assert onset_index_from_rates(rates, floor=10.0) == 3
+
+
+def test_onset_last_month_no_lookahead_accepts() -> None:
+    # Production only in the final month: no look-ahead, accept outright.
+    rates = [0, 0, 0, 500]
+    assert onset_index_from_rates(rates, floor=10.0) == 3
+
+
+def test_detect_onset_dataframe_wrapper() -> None:
+    months = [date(2023, i + 1, 1) for i in range(8)]
+    water = [0, 0, 0, 0, 0, 746, 1231, 1012]
+    df = pd.DataFrame({"prod_date": months, "rate_calday_bwpd": water})
+    assert detect_onset(df, rate_column="rate_calday_bwpd", floor=10.0) == 5
 
 
 def test_unsorted_input_is_handled() -> None:

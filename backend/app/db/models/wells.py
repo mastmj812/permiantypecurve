@@ -51,6 +51,12 @@ class Well(Base):
 
     operator: Mapped[str | None] = mapped_column(String(255), index=True)
     formation: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Blue Ox standardized formation code (curated.wells_enriched.formation_blueox)
+    # + its basin (delaware/midland). Parallel to raw `formation`; the app's
+    # formation coloring/filtering keys on these. Indexed for filter queries.
+    # NULL where unmapped / outside Delaware-Midland.
+    formation_blueox: Mapped[str | None] = mapped_column(String(64), index=True)
+    basin_blueox: Mapped[str | None] = mapped_column(String(16), index=True)
     first_prod_date: Mapped[date | None] = mapped_column(Date, index=True)
     # vintage_year is derived from first_prod_date so it stays in lockstep —
     # used by the map's "first prod date" filter and vintage histograms.
@@ -76,6 +82,10 @@ class Well(Base):
 
     county: Mapped[str | None] = mapped_column(String(64), index=True)
     basin: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Permian sub-basin (Delaware / Midland / Central Basin Platform /
+    # …) from curated.wells_enriched.subbasin. Drives the basin-aware
+    # terminal-Df assumption in forecasting (Midland = 0.06, else 0.08).
+    subbasin: Mapped[str | None] = mapped_column(String(40), index=True)
     status: Mapped[WellStatus] = mapped_column(
         pg_enum(WellStatus, name="well_status"),
         default=WellStatus.UNKNOWN,

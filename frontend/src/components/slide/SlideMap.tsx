@@ -2,11 +2,13 @@
 //
 // Slimmer than the main MapView — no toolbar, no drawing, no popups,
 // no cohort/selection state. Just the basemap + the cohort wells
-// rendered in green, fit-bounded, then snapshotted to a PNG so the
-// browser print step captures it reliably (live MapLibre canvases
-// print as a black rectangle without `preserveDrawingBuffer`, and even
-// then they sometimes blank out — the snapshot+swap trick sidesteps
-// both pitfalls).
+// rendered in green, fit-bounded to the cohort, and INTERACTIVE: the
+// engineer can drag / scroll-zoom to frame the shot before exporting.
+// A hidden <img> is refreshed with a canvas snapshot on every map
+// "idle", so whatever is on screen at export time is exactly what the
+// PPTX capture (which reads the img src) and the browser print path
+// (which swaps img for canvas via @media print CSS — live MapLibre
+// canvases print as a black rectangle) both pick up.
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, {
@@ -21,7 +23,7 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../../api/auth";
-import { fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
+import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
 import { DEFAULT_FILTER_SPEC } from "../../api/types";
 import { type WellDetailLite, tileUrlTemplate } from "../../api/wells";
 import { cohortLineFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
@@ -37,17 +39,17 @@ const SLIDE_FILTER_SPEC = {
 interface Props {
   api10s: string[];
   wellDetails: WellDetailLite[];
-  // When set, the slide map overlays only this deal's acreage
-  // polygons (filtered out of /api/deals/polygons.geojson). The
-  // PowerPoint export's map PNG is captured AFTER the polygon
-  // layer paints, so the deal's outline goes along into the deck.
-  dealId?: string | null;
-  // Per-toggle overlay control. Default both true to preserve the
+  // Per-toggle overlay control. Default all true to preserve the
   // existing slide appearance; the parent (TypeCurveSlidePage)
   // wires checkboxes that flip these and remounts the component
   // via React key so the captured snapshot reflects the choice.
+  // showDeals overlays ALL uploaded acreage polygons (no per-deal
+  // filtering); the slide still fit-bounds to the wells, not the
+  // acreage. The PowerPoint export's map PNG is captured AFTER the
+  // polygon layer paints, so the outline goes along into the deck.
   showBlocks?: boolean;
   showSections?: boolean;
+  showDeals?: boolean;
   width?: number;
   height?: number;
 }
@@ -133,12 +135,21 @@ async function loadBlocks(map: MlMap): Promise<void> {
     source: BLOCKS_SOURCE_ID,
     layout: {
       "text-field": BLOCK_LABEL_EXPR,
-      "text-size": 16,
+      // Zoom-scaled: a wide cohort fit-bounds to z~9-10 where the old
+      // hard-coded 16px read enormous on the slide. ["zoom"] must be
+      // the OUTERMOST expression (nesting it inside case/match
+      // silently kills the layer — see project MapLibre gotchas).
+      "text-size": [
+        "interpolate", ["linear"], ["zoom"],
+        7, 8,
+        9, 10,
+        11, 13,
+        13, 16,
+      ],
       // protomaps' font CDN only ships Regular + Italic — requesting
       // "Noto Sans Bold" 404s on glyph fetch and silently kills the
-      // entire block layer's render. We lean on the 2x size
-      // differential vs sections (8pt) and a thicker halo for
-      // emphasis instead.
+      // entire block layer's render. We lean on the size differential
+      // vs sections and a thicker halo for emphasis instead.
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
@@ -146,30 +157,29 @@ async function loadBlocks(map: MlMap): Promise<void> {
     paint: {
       "text-color": "#000000",
       "text-halo-color": "rgba(255,255,255,1.0)",
-      "text-halo-width": 2.5,
+      "text-halo-width": 2.0,
     },
   });
 }
 
-async function loadDealPolygons(map: MlMap, dealId: string): Promise<void> {
+async function loadDealPolygons(map: MlMap): Promise<void> {
   if (map.getSource(DEALS_SOURCE_ID)) return;
   try {
     const fc = await fetchDealPolygonGeoJSON();
-    const filtered = {
-      type: "FeatureCollection",
-      features: fc.features.filter((f) => f.properties.deal_id === dealId),
-    } as GeoJSON.FeatureCollection;
-    if (filtered.features.length === 0) return;
-    map.addSource(DEALS_SOURCE_ID, { type: "geojson", data: filtered });
+    if (fc.features.length === 0) return;
+    map.addSource(DEALS_SOURCE_ID, {
+      type: "geojson",
+      data: fc as unknown as GeoJSON.FeatureCollection,
+    });
     // Translucent fill + crisp outline so the wells and section grid
-    // remain readable underneath. Color comes from the feature
-    // property — same palette the Map tab uses.
+    // remain readable underneath. Single shared ACREAGE_COLOR — same
+    // as the Map and Review tabs.
     map.addLayer({
       id: DEALS_FILL_LAYER,
       type: "fill",
       source: DEALS_SOURCE_ID,
       paint: {
-        "fill-color": ["get", "color"],
+        "fill-color": ACREAGE_COLOR,
         "fill-opacity": 0.14,
       },
     });
@@ -178,13 +188,13 @@ async function loadDealPolygons(map: MlMap, dealId: string): Promise<void> {
       type: "line",
       source: DEALS_SOURCE_ID,
       paint: {
-        "line-color": ["get", "color"],
+        "line-color": ACREAGE_COLOR,
         "line-width": 2.2,
         "line-opacity": 0.95,
       },
     });
   } catch (e) {
-    console.warn("slide deal polygons load failed", e);
+    console.warn("slide acreage polygons load failed", e);
   }
 }
 
@@ -217,9 +227,18 @@ async function loadSections(map: MlMap): Promise<void> {
     id: SECTIONS_LABEL_LAYER,
     type: "symbol",
     source: SECTIONS_SOURCE_ID,
+    // Section labels are unreadable confetti below ~z11 (a 1-sq-mi
+    // grid at county extent). The lines stay at every zoom for grid
+    // context; the numbers only appear once the user zooms in far
+    // enough for them to resolve.
+    minzoom: 11,
     layout: {
       "text-field": SECTION_LABEL_EXPR,
-      "text-size": 8,
+      "text-size": [
+        "interpolate", ["linear"], ["zoom"],
+        11, 7,
+        13, 9,
+      ],
       "text-font": ["Noto Sans Regular"],
       "text-allow-overlap": false,
       "symbol-placement": "point",
@@ -292,15 +311,16 @@ function cohortBounds(details: WellDetailLite[]): maplibregl.LngLatBounds | null
   return b;
 }
 
-// Default ~6.93" × 4.34" at 96 px/in to match the export's
-// slide-level map placement (right side, full chart-stack height).
+// Default ~6.55" × 4.36" at 96 px/in to match the export's
+// slide-level map placement (right column, right-aligned to mirror
+// the chart column's left margin, full chart-stack height).
 export function SlideMap({
   api10s,
   wellDetails,
-  dealId = null,
   showBlocks = true,
   showSections = true,
-  width = 665,
+  showDeals = true,
+  width = 629,
   height = 418,
 }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -366,11 +386,12 @@ export function SlideMap({
       };
       map.addLayer(solidLayer);
 
-      // Fit to the cohort — 12% padding so the wells aren't crammed
-      // against the edge of the snapshot.
+      // Fit to the cohort — modest padding so the autozoom lands as
+      // tight as the spread allows; the user can drag/scroll-zoom to
+      // reframe before exporting (every idle refreshes the capture).
       const b = cohortBounds(wellDetails);
       if (b && !b.isEmpty()) {
-        map.fitBounds(b, { padding: 40, duration: 0, maxZoom: 13 });
+        map.fitBounds(b, { padding: 24, duration: 0, maxZoom: 13 });
       }
 
       // Kick off the overlay fetches in parallel; allSettled so a
@@ -382,9 +403,7 @@ export function SlideMap({
       const overlayPromises: Array<Promise<unknown>> = [];
       if (showBlocks) overlayPromises.push(loadBlocks(map));
       if (showSections) overlayPromises.push(loadSections(map));
-      if (dealId) {
-        overlayPromises.push(loadDealPolygons(map, dealId));
-      }
+      if (showDeals) overlayPromises.push(loadDealPolygons(map));
       // Idle-listener fires even when no overlays loaded — the wells
       // still need to paint before we snapshot.
       if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
@@ -406,7 +425,11 @@ export function SlideMap({
         for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
           moveToTop(id);
         }
-        map.once("idle", () => {
+        // Refresh the capture img on EVERY idle from here on — the
+        // map stays live and interactive, so each pan/scroll-zoom the
+        // user makes re-snapshots once the tiles settle. The PPTX
+        // export and the print path always read the latest view.
+        const refresh = () => {
           try {
             const url = map.getCanvas().toDataURL("image/png");
             setSnapshot(url);
@@ -416,10 +439,12 @@ export function SlideMap({
             // it does so the developer sees the cause of a blank map.
             console.error("slide map snapshot failed", e);
           }
-        });
+        };
+        map.on("idle", refresh);
         // Nudge the renderer in case the map was already idle when the
-        // overlay sources got added — without this, `once("idle")` can
-        // sit waiting forever if the new sources don't trigger a redraw.
+        // overlay sources got added — without this the first "idle"
+        // can sit waiting forever if the new sources don't trigger a
+        // redraw.
         map.triggerRepaint();
       });
     };
@@ -439,13 +464,15 @@ export function SlideMap({
 
   return (
     <div className="slide-map" style={{ width, height }}>
-      {/* Keep the map div mounted underneath; once we have a snapshot,
-          paint the img on top. We can't unmount the map div because
-          MapLibre relies on the container for its lifecycle. */}
+      {/* The live canvas stays visible AND interactive — drag /
+          scroll-zoom to frame the shot. The img below carries the
+          latest idle-time snapshot: hidden on screen (CSS), it's what
+          the PPTX capture reads (img.src) and what @media print swaps
+          in (live MapLibre canvases print as a black rectangle). */}
       <div
         ref={containerRef}
         className="slide-map-canvas"
-        style={{ width, height, visibility: snapshot ? "hidden" : "visible" }}
+        style={{ width, height }}
       />
       {snapshot && (
         <img

@@ -1,0 +1,49 @@
+# CI: run the backend test suite (incl. the real-well golden baselines —
+# the tripwire for silent numeric drift) and the frontend typecheck +
+# unit tests on every push/PR. The suite is pure-function (no database
+# required), so this stays fast and dependency-light.
+#
+# eslint is deliberately NOT in CI yet: the repo carries known lint debt
+# (maplibre typing false-positives) that would make the job permanently
+# red. Add `npm run lint` once that debt is cleared.
+name: ci
+
+on:
+  push:
+    branches: ["main", "novi-forecast-overlay"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/constraints.txt
+      # constraints.txt pins the exact versions the dev image runs —
+      # CI must test the same scipy/numpy the fits use, or a green CI
+      # says nothing about the numbers the tool produces.
+      - run: pip install -e ".[dev]" -c constraints.txt
+      - run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

@@ -46,8 +46,13 @@ from app.db.models import (
     Well,
 )
 from app.db.session import SessionLocal
+from app.ingest.novi_forecast import (
+    delete_novi_forecast_for_api10s,
+    upsert_novi_forecast_records,
+)
 from app.ingest.production import upsert_production_records
 from app.ingest.wells import upsert_well_headers
+from app.warehouse_client.novi_forecast import fetch_novi_forecast_for_api10s
 from app.warehouse_client.production import fetch_production_for_api10s
 from app.warehouse_client.session import _engine as _warehouse_engine
 from app.warehouse_client.wells import fetch_well_headers
@@ -70,6 +75,11 @@ DEFAULT_HORIZONTAL_ONLY: bool = True
 # Single scope key for SyncJob / SyncWatermark — one sync per run, one
 # scope (the entire Permian).
 SCOPE_KEY: str = "env_region=PERMIAN"
+# Distinct watermark scope for the Novi-forecast phase so it doesn't
+# clobber the actual-production watermark (both ride SyncEntity.PRODUCTION
+# — there's no dedicated enum value, mirroring the forecast-batch jobs
+# which tag kind via metadata to avoid an enum migration).
+NOVI_FORECAST_SCOPE_KEY: str = "env_region=PERMIAN;kind=novi_forecast"
 
 T = TypeVar("T")
 
@@ -159,7 +169,7 @@ def sync_permian(
     caller wants only the well headers refreshed (e.g. nightly map
     refresh without per-month delta), pass ``pull_production=False``.
     """
-    counts = {"headers": 0, "production": 0}
+    counts = {"headers": 0, "production": 0, "novi_forecast": 0}
 
     wh_engine = _warehouse_engine()
 
@@ -216,6 +226,43 @@ def sync_permian(
                     session,
                     SyncEntity.PRODUCTION,
                     SCOPE_KEY,
+                    datetime.now(timezone.utc),
+                )
+
+            # ---- 3. Novi forecast (PDP) ----
+            # Parallel to production: same api10 batch, separate job +
+            # watermark scope. Rides SyncEntity.PRODUCTION with a
+            # kind=novi_forecast metadata tag (no dedicated enum value).
+            with _job(
+                session,
+                SyncEntity.PRODUCTION,
+                NOVI_FORECAST_SCOPE_KEY,
+                metadata={"kind": "novi_forecast"},
+            ) as job:
+                with Session(wh_engine) as wh:
+                    # Vintage rule: wipe the refresh scope first so the
+                    # table holds exactly ONE Novi vintage per well —
+                    # upsert alone leaves the previous vintage's early
+                    # months behind when the new snapshot starts later,
+                    # and the overlay then renders a stitched
+                    # two-vintage series with a cum discontinuity.
+                    # Tradeoff: a crash between this delete and the
+                    # inserts leaves those wells with no Novi rows
+                    # until the next successful sync — visibly absent
+                    # beats subtly wrong, and a re-run repairs it.
+                    delete_novi_forecast_for_api10s(session, api10s)
+                    fc_iter = fetch_novi_forecast_for_api10s(wh, api10s)
+                    total = 0
+                    for batch in _batched(fc_iter, 1000):
+                        total += upsert_novi_forecast_records(session, batch)
+                        job.items_upserted = total
+                        job.items_seen = total
+                        session.commit()
+                    counts["novi_forecast"] = total
+                _watermark_set(
+                    session,
+                    SyncEntity.PRODUCTION,
+                    NOVI_FORECAST_SCOPE_KEY,
                     datetime.now(timezone.utc),
                 )
 

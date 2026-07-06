@@ -33,6 +33,8 @@ the TC layer was using. The TC module re-imports from here.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -42,6 +44,10 @@ from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
 from app.forecasting.models import modified_hyperbolic
 
 _DAYS_PER_MONTH = DAYS_PER_YEAR / 12.0
+
+# Monthly grid length for the display-convention EUR: 600 months = the
+# 50-yr default horizon. Matches the frontend's FULL_FORECAST_N_MONTHS.
+DISPLAY_EUR_N_MONTHS: int = 600
 
 
 # ---------------------------------------------------------------------
@@ -225,6 +231,112 @@ def compute_total_eur(
     return (
         compute_ramp_eur(qo=float(qo), qi=float(qi), peak_index=int(peak_index_months))
         + arps_eur
+    )
+
+
+def trapezoid_eur(rates: Sequence[float | None]) -> float:
+    """Trapezoid integral of a monthly rate grid → volume units.
+
+    ``rates[i]`` = q(t = i months). Month i's volume is the average of
+    its two endpoint rates × the month length (DAYS_PER_YEAR / 12); the
+    final month is flat-extrapolated. This is THE display-side
+    integration rule: the deal xlsx/pptx well rows, the TC well-stats
+    endpoint, the per-percentile export EURs, and the frontend's
+    ``arps.ts::eurFromArpsParams`` (its TS mirror) all route through it
+    so every recompute-from-params surface shows the same number.
+    Non-finite / None samples are skipped.
+    """
+    cum = 0.0
+    n = len(rates)
+    for i in range(n):
+        a = rates[i]
+        if a is None or not math.isfinite(float(a)):
+            continue
+        a_f = float(a)
+        nxt = rates[i + 1] if i + 1 < n else None
+        b_f = (
+            float(nxt)
+            if nxt is not None and math.isfinite(float(nxt))
+            else a_f
+        )
+        cum += (a_f + b_f) / 2.0 * _DAYS_PER_MONTH
+    return cum
+
+
+def compute_display_eur(
+    *,
+    qi: float,
+    Di: float,
+    b: float,
+    Df: float,
+    qo: float | None = None,
+    peak_index_months: int | None = None,
+    n_months: int = DISPLAY_EUR_N_MONTHS,
+) -> float:
+    """Display-convention EUR: trapezoid over the monthly ramp+Arps grid.
+
+    The canonical *stored* EUR (``forecasts.eur``) is the closed-form /
+    quad integral from ``compute_total_eur``; this discrete version
+    differs from it only by quadrature error (<0.1% on Permian fits)
+    and exists so every on-the-fly recompute (exports, well-stats,
+    frontend probit dots) is identical to the others. The ramp prefix
+    is included when ``qo`` / ``peak_index_months`` are supplied — the
+    same evaluator that draws the chart curves builds the grid.
+    """
+    rates = build_ramp_arps_rate(
+        n_months=n_months,
+        qo=qo if qo is not None else qi,
+        qi=qi,
+        peak_index=int(peak_index_months or 0),
+        Di=Di,
+        b=b,
+        Df=Df,
+    )
+    return trapezoid_eur(rates)
+
+
+def display_eur_from_params(
+    params: dict[str, Any] | None,
+    *,
+    n_months: int = DISPLAY_EUR_N_MONTHS,
+) -> float | None:
+    """``compute_display_eur`` from a ``forecasts.params``-shaped dict.
+
+    Mirrors the frontend's ``eurFromForecastParams``: returns None when
+    any core Arps param (qi/Di/b/Df) is missing or non-finite — the
+    caller should fall back to the stored ``eur`` in that case. The
+    optional ramp prefix (``qo`` / ``peak_index_months``) is honored
+    when present and finite, dropped otherwise.
+    """
+    if not params:
+        return None
+    try:
+        qi, Di, b, Df = (float(params[k]) for k in ("qi", "Di", "b", "Df"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (qi, Di, b, Df)):
+        return None
+
+    def _opt(key: str) -> float | None:
+        v = params.get(key)
+        if v is None:
+            return None
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if math.isfinite(f) else None
+
+    qo = _opt("qo")
+    pim = _opt("peak_index_months")
+    return compute_display_eur(
+        qi=qi,
+        Di=Di,
+        b=b,
+        Df=Df,
+        qo=qo,
+        peak_index_months=int(pim) if pim is not None else None,
+        n_months=n_months,
     )
 
 

@@ -95,7 +95,9 @@ def test_shape_to_wkt_closes_open_ring() -> None:
     wkt = _shape_to_wkt(_MockShape())  # type: ignore[arg-type]
     assert wkt is not None
     # The helper closes the ring → the trailing point repeats the first.
-    assert wkt.endswith("0.0 0.0))")
+    # Three closing parens: ring, polygon, MULTIPOLYGON (the helper
+    # always emits MULTIPOLYGON — see the simple-square test above).
+    assert wkt.endswith("0.0 0.0)))")
 
 
 def test_parse_shapefile_zip_roundtrip() -> None:

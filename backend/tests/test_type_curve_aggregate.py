@@ -90,6 +90,27 @@ def test_median_picked_correctly_across_5_wells_with_known_spread() -> None:
     assert agg.streams["oil"].well_count == [5] * 6
 
 
+def test_spe_percentile_orientation_p10_is_high_case() -> None:
+    # SPE / PRMS reserves convention: P10 = HIGH case (exceeded by only
+    # 10% of wells), P90 = LOW case. Five wells at 10/20/30/40/50
+    # per-1000ft normalized → linear-interpolated statistical
+    # percentiles: 90th = 46 (→ P10), 75th = 40 (→ P25), median = 30,
+    # 25th = 20 (→ P75), 10th = 14 (→ P90).
+    wells = [
+        _well(str(i), flat_oil=r * 100.0, n=3)
+        for i, r in enumerate([1, 2, 3, 4, 5])
+    ]
+    agg = aggregate(wells)
+    s = agg.streams["oil"]
+    for j in range(3):
+        assert s.p10[j] == pytest.approx(46.0)
+        assert s.p25[j] == pytest.approx(40.0)
+        assert s.p50[j] == pytest.approx(30.0)
+        assert s.p75[j] == pytest.approx(20.0)
+        assert s.p90[j] == pytest.approx(14.0)
+        assert s.p10[j] >= s.p50[j] >= s.p90[j]
+
+
 def test_well_count_tapers_with_staggered_history() -> None:
     # Three wells: 12 / 6 / 3 months of oil history.
     # Months 0-2: 3 wells. Months 3-5: 2 wells. Months 6-11: 1 well.

@@ -37,7 +37,11 @@ from app.type_curves.aggregate import (
     aggregate,
     serialize_aggregate,
 )
-from app.type_curves.loader import load_well_series, load_wells_with_forecast
+from app.type_curves.loader import (
+    cohort_ramp_anchors,
+    load_well_series,
+    load_wells_with_forecast,
+)
 
 # Forecast-aggregation horizon. 50 years × 12 months. Picks up the same
 # horizon the per-well fit_p50_series + frontend FULL_FORECAST_N_MONTHS
@@ -91,6 +95,12 @@ class SaveRequest(BaseModel):
     # streams[<stream>].fitted is replaced with a re-evaluation of these
     # params and marked manual_override=True. Keys: "oil" / "gas" / "water".
     fit_overrides: dict[str, FitOverride] | None = None
+    # Versions-endpoint only: when true and the parent curve is assigned
+    # to a deal, the new version atomically takes the parent's deal slot
+    # (version gets parent.deal_id, parent is unassigned) in the same
+    # transaction — so a deal export can never see both curves at once.
+    # Ignored on the plain create endpoint.
+    take_over_deal: bool = False
 
 
 class TypeCurvePreviewRequest(BaseModel):
@@ -259,6 +269,10 @@ class PatchRequest(BaseModel):
     # null un-assigns, omission leaves the current deal_id untouched.
     # The PATCH handler distinguishes these via `model_fields_set`.
     deal_id: uuid.UUID | None = None
+    # In-place alignment change (e.g. moving an unshared curve onto
+    # peak_ramp without versioning). Sets is_stale — the saved series
+    # still reflects the OLD alignment until /reaggregate rebuilds it.
+    alignment_method: str | None = None
 
 
 # ============================ helpers ============================
@@ -271,9 +285,21 @@ def _validate_basis(basis: str) -> AggBasis:
 
 
 def _validate_alignment(method: str) -> AggAlign:
-    if method not in ("peak_month", "first_prod_month"):
+    if method not in ("peak_month", "first_prod_month", "peak_ramp"):
         raise HTTPException(status_code=400, detail=f"invalid alignment_method: {method}")
     return method  # type: ignore[return-value]
+
+
+def _month_col_label(alignment: str) -> str:
+    """Month-axis column name for the CSV exports — tells the
+    downstream consumer what month 1 means."""
+    if alignment == "first_prod_month":
+        return "month_since_first_prod"
+    if alignment == "peak_ramp":
+        # Month 1 is the start of the cohort ramp; the peak sits at the
+        # cohort-median ramp length (the fitted peak_index).
+        return "month_peak_aligned_ramp"
+    return "month_since_peak"
 
 
 def _apply_fit_overrides(
@@ -381,14 +407,25 @@ def _compute(
     """
     validated_alignment = _validate_alignment(alignment)
     validated_basis = _validate_basis(basis)
+    resolver_tc = tc if tc is not None else _empty_tc_for_resolver()
+
+    # peak_ramp: compute the common peak index M (per stream) ONCE and
+    # hand the same dict to both loaders so the forecast bands and the
+    # observed QC overlay share the exact alignment.
+    anchors = (
+        cohort_ramp_anchors(session, resolver_tc, api10s)
+        if validated_alignment == "peak_ramp"
+        else None
+    )
 
     # --- canonical forecast-based aggregation ---
     forecast_wells = load_wells_with_forecast(
         session,
-        tc if tc is not None else _empty_tc_for_resolver(),
+        resolver_tc,
         api10s,
         alignment=validated_alignment,
         n_months=_FORECAST_N_MONTHS,
+        ramp_anchors=anchors,
     )
     if not forecast_wells:
         raise HTTPException(
@@ -438,7 +475,7 @@ def _compute(
 
     # --- empirical observed-only aggregation ---
     observed_wells = load_well_series(
-        session, api10s, alignment=validated_alignment
+        session, api10s, alignment=validated_alignment, ramp_anchors=anchors
     )
     if observed_wells:
         observed_agg = aggregate(
@@ -600,9 +637,18 @@ def save_as_new_version(
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     row = _persist(session, payload=payload, req=req, version_of=parent.id)
+    took_over_deal = False
+    if req.take_over_deal and parent.deal_id is not None:
+        # Deal-slot handoff: the version replaces its parent in the
+        # deal in one transaction, so an export can never include both.
+        row.deal_id = parent.deal_id
+        parent.deal_id = None
+        session.commit()
+        session.refresh(row)
+        took_over_deal = True
     log.info(
         "type_curve_versioned", id=str(row.id), parent=str(parent.id),
-        n_wells=len(req.included_api10s),
+        n_wells=len(req.included_api10s), took_over_deal=took_over_deal,
     )
     return TypeCurveRow.from_orm_row(row)
 
@@ -679,6 +725,14 @@ def patch_type_curve(
         if req.deal_id is not None and session.get(Deal, req.deal_id) is None:
             raise HTTPException(status_code=404, detail="deal not found")
         row.deal_id = req.deal_id
+    if req.alignment_method is not None:
+        validated = _validate_alignment(req.alignment_method)
+        if AlignmentMethod(validated) != row.alignment_method:
+            row.alignment_method = AlignmentMethod(validated)
+            # The persisted series was aggregated under the OLD
+            # alignment — flag it so the workspace banner / the
+            # update-in-place flow knows a /reaggregate is required.
+            row.is_stale = True
     session.commit()
     session.refresh(row)
     return TypeCurveRow.from_orm_row(row)
@@ -700,10 +754,13 @@ def delete_type_curve(
 
 
 # Days-per-month constant for monthly→cum conversion in the forecast
-# export. Matches the convention used by the per-well fit code
-# (`fit_p50.py::_DAYS_PER_MONTH`) so the exported cum matches the EUR
-# values in metadata.csv to within rounding.
-_DAYS_PER_MONTH = 30.4375
+# export. DAYS_PER_YEAR / 12 — the SAME convention as the fit / EUR
+# math (eur.DAYS_PER_YEAR = 365) and the shared display-EUR helper
+# (ramp_arps.trapezoid_eur), so the exported cum column converges to
+# the metadata sheet's EUR row exactly. (This used to be 30.4375 —
+# 365.25/12 — while the fit math used 365/12; a 0.07% systematic drift
+# between the export cums and every other surface.)
+_DAYS_PER_MONTH = 365.0 / 12.0
 
 # Horizon for the fitted-forecast CSV. 50 years × 12 months = 600 rows.
 # Matches the brief's `DEFAULT_FORECAST_HORIZON_YEARS` and the per-
@@ -757,35 +814,22 @@ def _fitted_eur_per_1000ft(
 ) -> dict[str, float | None]:
     """50-yr trapezoid integral of each percentile's fitted Arps rate.
 
-    Mirrors the frontend's ``eurFromArpsParams`` helper so the export
-    metadata sheet reports the same number the Type Curve UI's EUR
-    table shows. Raw integral — no economic-limit cutoff (this tool is
-    technical-only; economics happens downstream).
-
-    Trapezoid rule: month K's volume = (rate at start + rate at end)/2
-    * dt, last month flat-extrapolated. Closes the small systematic
-    bias (~0.2% on Permian fits) the right-endpoint rectangle rule had
-    against the closed-form ``compute_eur``.
+    Routes through the shared ``ramp_arps.trapezoid_eur`` (the same
+    rule the frontend's ``eurFromArpsParams``, the deal-deck well rows,
+    and the well-stats endpoint use) so the export metadata sheet
+    reports the same number the Type Curve UI's EUR table shows. Raw
+    integral — no economic-limit cutoff (this tool is technical-only;
+    economics happens downstream).
 
     None for any percentile whose underlying series couldn't be fit.
     """
+    from app.forecasting.ramp_arps import trapezoid_eur
+
     rates_by_pct = _evaluate_fitted_rates(stream_data)
-    out: dict[str, float | None] = {}
-    for key, rates in rates_by_pct.items():
-        if rates is None:
-            out[key] = None
-            continue
-        cum = 0.0
-        n = len(rates)
-        for i in range(n):
-            a = rates[i]
-            if a is None or not math.isfinite(a):
-                continue
-            nxt = rates[i + 1] if i + 1 < n else None
-            b = float(nxt) if (nxt is not None and math.isfinite(nxt)) else float(a)
-            cum += (float(a) + b) / 2.0 * _DAYS_PER_MONTH
-        out[key] = cum
-    return out
+    return {
+        key: (trapezoid_eur(rates) if rates is not None else None)
+        for key, rates in rates_by_pct.items()
+    }
 
 
 def _evaluate_fitted_rates(
@@ -848,9 +892,7 @@ def _forecast_csv(
     """
     rates_by_pct = _evaluate_fitted_rates(stream_data)
 
-    month_col = (
-        "month_since_first_prod" if alignment == "first_prod_month" else "month_since_peak"
-    )
+    month_col = _month_col_label(alignment)
     buf = io.StringIO()
     writer = csv.writer(buf)
     # Columns are bare ``{pct}_{rate|cum}`` — stream is implied by the
@@ -897,9 +939,7 @@ def _stream_csv(
 ) -> bytes:
     # Column name reflects the alignment so downstream consumers know
     # whether month 1 is peak month or first-prod month.
-    month_col = (
-        "month_since_first_prod" if alignment == "first_prod_month" else "month_since_peak"
-    )
+    month_col = _month_col_label(alignment)
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow([
@@ -945,6 +985,10 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
         ),
     ])
     writer.writerow(["alignment_method", tc.alignment_method.value])
+    # SPE / PRMS orientation: p10 columns = HIGH case, p90 = LOW case.
+    writer.writerow(
+        ["percentile_convention", "SPE (P10 = high case, P90 = low case)"]
+    )
     writer.writerow(["created_at", tc.created_at.isoformat()])
     writer.writerow(["version_of", str(tc.version_of) if tc.version_of else ""])
     writer.writerow(["n_wells", len(tc.included_api10s or [])])
@@ -1018,10 +1062,11 @@ def get_type_curve_well_stats(
     that matches included_api10s exactly.
 
     EUR is recomputed on the fly from the RESOLVED oil forecast
-    (TC override → global → none) using the same monthly trapezoid
-    that the Review tab's ``eurFromArpsParams`` uses: evaluate the
-    modified-hyperbolic fit out to 600 monthly samples and trapezoid-
-    integrate. Routing through ``resolve_forecast`` keeps the probit
+    (TC override → global → none) via the shared
+    ``ramp_arps.display_eur_from_params`` — the same monthly-trapezoid
+    convention the Review tab's ``eurFromArpsParams``, the deal-deck
+    well rows, and the per-percentile export EURs use, ramp prefix
+    included. Routing through ``resolve_forecast`` keeps the probit
     dots aligned with what the workspace shows for each well — a TC
     override edited via the workspace flows through to the deck.
     Falls back to the stored ``forecasts.eur`` column when params are
@@ -1030,12 +1075,8 @@ def get_type_curve_well_stats(
     via ``scipy.integrate.quad`` (continuous integral); the trapezoid
     agrees with it to <0.1% on Permian fits.
     """
-    from app.type_curves.fit_p50 import evaluate_fit
+    from app.forecasting.ramp_arps import display_eur_from_params
     from app.type_curves.overrides import resolve_forecast
-
-    # Same constant the frontend uses (frontend/src/forecasts/arps.ts).
-    DAYS_PER_MONTH = 30.4375
-    N_MONTHS = 600
 
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
@@ -1077,44 +1118,16 @@ def get_type_curve_well_stats(
 
         if payload:
             params = payload.get("params") or {}
-            required = ("qi", "Di", "b", "Df")
-            if all(
-                k in params
-                and isinstance(params[k], (int, float))
-                and math.isfinite(float(params[k]))
-                for k in required
-            ):
-                try:
-                    fit = evaluate_fit(
-                        qi=float(params["qi"]),
-                        Di=float(params["Di"]),
-                        b=float(params["b"]),
-                        Df=float(params["Df"]),
-                        # Per-well forecasts start at peak — no ramp prefix.
-                        qo=float(params["qi"]),
-                        peak_index=0,
-                        n_months=N_MONTHS,
-                    )
-                    # Trapezoid: month K's volume = (rate at start of
-                    # month + rate at end of month) / 2 * dt, last
-                    # month flat-extrapolated. Mirrors the frontend's
-                    # eurFromArpsParams to within numerical noise.
-                    smoothed = fit["smoothed_rate"]
-                    n = len(smoothed)
-                    eur = 0.0
-                    for i in range(n):
-                        rate_i = float(smoothed[i])
-                        if not math.isfinite(rate_i):
-                            continue
-                        nxt = smoothed[i + 1] if i + 1 < n else rate_i
-                        nxt_f = (
-                            float(nxt)
-                            if math.isfinite(float(nxt))
-                            else rate_i
-                        )
-                        eur += (rate_i + nxt_f) / 2.0 * DAYS_PER_MONTH
-                except Exception:
-                    eur = None
+            try:
+                # Ramp-aware: post-migration-0013 fits carry qo /
+                # peak_index_months in params and the stored eur
+                # includes the ramp volume — dropping the ramp here
+                # (the old qo=qi / peak_index=0 shortcut) understated
+                # ramp-fit wells by the ramp volume vs every other
+                # surface.
+                eur = display_eur_from_params(params)
+            except Exception:
+                eur = None
             if eur is None:
                 # Last-ditch fallback: stored eur on the payload (override
                 # payloads carry it, global rows project it through).
@@ -1172,7 +1185,7 @@ def get_type_curve_workspace_wells(
             Well.api10,
             Well.name,
             Well.operator,
-            Well.formation,
+            Well.formation_blueox.label("formation"),
             Well.lateral_ft,
             Well.first_prod_date,
             Well.county,

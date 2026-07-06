@@ -51,6 +51,7 @@ export function TypeCurveSlidePage({
   // visible in the preview.
   const [showBlocks, setShowBlocks] = useState(true);
   const [showSections, setShowSections] = useState(true);
+  const [showDeals, setShowDeals] = useState(true);
 
   useEffect(() => {
     // Remove the app's default body margin / background so the slide
@@ -151,10 +152,11 @@ export function TypeCurveSlidePage({
   const api10s = data.curve.included_api10s ?? [];
   // Map dimensions match the placement in PowerPoint so the captured
   // PNG aspect matches the picture box and PowerPoint doesn't have
-  // to stretch / letterbox.
-  //   probit off → 6.93" × 4.34" (~665 × 418 px)
+  // to stretch / letterbox. The right column is right-aligned on the
+  // slide (mirrors the chart column's left margin).
+  //   probit off → 6.55" × 4.36" (~629 × 418 px)
   //   probit on  → 5.42" × 2.16" (~520 × 207 px)
-  const mapWidth = includeProbit ? 520 : 665;
+  const mapWidth = includeProbit ? 520 : 629;
   const mapHeight = includeProbit ? 207 : 418;
 
   // Reusable per-stream panel block. Used for the visible oil section
@@ -176,12 +178,12 @@ export function TypeCurveSlidePage({
               with the new overlay set — captureSlideComposite reads
               the rendered IMG, which is what the PPTX picks up. */}
           <SlideMap
-            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}`}
+            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}-d${showDeals ? 1 : 0}`}
             api10s={api10s}
             wellDetails={data.wellDetails}
-            dealId={data.curve.deal_id ?? null}
             showBlocks={showBlocks}
             showSections={showSections}
+            showDeals={showDeals}
             width={mapWidth}
             height={mapHeight}
           />
@@ -242,6 +244,18 @@ export function TypeCurveSlidePage({
           />
           Sections
         </label>
+        <label className="chk-inline">
+          <input
+            type="checkbox"
+            checked={showDeals}
+            onChange={(e) => setShowDeals(e.target.checked)}
+          />
+          Acreage
+        </label>
+        <span className="muted" style={{ fontSize: 11 }}>
+          — the map is live: drag / scroll-zoom to frame it; the export
+          captures the current view
+        </span>
       </div>
       {/* Visible (oil) section. The PPTX export captures rate/cum
           (+ optional probit) from this section AND from the off-

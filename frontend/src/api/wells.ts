@@ -63,7 +63,13 @@ export interface WellstickFeatureCollection {
   features: Array<{
     type: "Feature";
     geometry: { type: "LineString"; coordinates: [number, number][] };
-    properties: { api10: string; formation: string | null; operator: string | null };
+    properties: {
+      api10: string;
+      formation: string | null;
+      formation_blueox: string | null;
+      basin_blueox: string | null;
+      operator: string | null;
+    };
   }>;
 }
 
@@ -84,6 +90,8 @@ export interface WellDetailLite {
   api10: string;
   name: string | null;
   formation: string | null;
+  formation_blueox: string | null;
+  basin_blueox: string | null;
   operator: string | null;
   lateral_ft: number | null;
   tvd_ft: number | null;

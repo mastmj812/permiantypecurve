@@ -17,6 +17,7 @@ import {
   type WellCurvesResponse,
 } from "../api/forecasts";
 import { colorForFormation } from "../map/formations";
+import { COHORT_HALO_COLOR } from "../map/wellsLayers";
 
 export interface InspectProductionChartsProps {
   api10s: string[];
@@ -29,6 +30,10 @@ export interface InspectProductionChartsProps {
   // views agree on what "unselected" looks like. Optional so this
   // component still renders standalone outside the inspect modal.
   selectedApi10s?: Set<string>;
+  // api10s ALREADY in the active cohort — each gets a sky-blue halo
+  // stroke under its line, mirroring the gun-barrel circle halo and the
+  // map's cohort sticks. Empty/undefined outside the modal.
+  cohortApi10s?: Set<string>;
   // Lifted hover state — when set, the matching polyline bolds up
   // (and the gun-barrel circle bolds too via the same prop on the
   // sibling component).
@@ -53,6 +58,7 @@ export function InspectProductionCharts({
   api10s,
   wellsByApi10,
   selectedApi10s,
+  cohortApi10s,
   hoveredApi10 = null,
   onHover,
 }: InspectProductionChartsProps) {
@@ -127,7 +133,9 @@ export function InspectProductionCharts({
       );
       out.push({
         api10,
-        formation: meta?.formation ?? null,
+        // formation_blueox code drives the series color (colorForFormation
+        // resolves codes); raw formation stays available on the bundle.
+        formation: meta?.formation_blueox ?? null,
         rate,
         cum,
       });
@@ -201,6 +209,7 @@ export function InspectProductionCharts({
           series={wellsWithData}
           accessor={(s) => s.rate}
           selectedApi10s={selectedApi10s}
+          cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
           onHover={onHover}
         />
@@ -210,6 +219,7 @@ export function InspectProductionCharts({
           series={wellsWithData}
           accessor={(s) => s.cum}
           selectedApi10s={selectedApi10s}
+          cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
           onHover={onHover}
         />
@@ -226,6 +236,7 @@ function OverlayChart({
   series,
   accessor,
   selectedApi10s,
+  cohortApi10s,
   hoveredApi10 = null,
   onHover,
   width = 430,
@@ -236,6 +247,7 @@ function OverlayChart({
   series: WellSeries[];
   accessor: (s: WellSeries) => Array<number | null>;
   selectedApi10s?: Set<string>;
+  cohortApi10s?: Set<string>;
   hoveredApi10?: string | null;
   onHover?: (api10: string | null) => void;
   width?: number;
@@ -383,6 +395,14 @@ function OverlayChart({
               ? 0.25
               : 0.85;
           const strokeWidth = isSelected && isHovered ? 2.5 : 1.25;
+          // Cohort members get a wider sky-blue halo stroke under their
+          // line — the line-overlay analog of the gun-barrel circle halo
+          // and the map's cohort sticks. Dimmed for deselected wells so
+          // a ghosted line isn't wrapped in a bright halo.
+          const inCohort = cohortApi10s?.has(s.api10) ?? false;
+          const points = segments.map((seg) =>
+            seg.map(([x, y]) => `${xScale(x)},${yScale(y)}`).join(" "),
+          );
           return (
             <g
               key={s.api10}
@@ -390,16 +410,27 @@ function OverlayChart({
               onMouseEnter={() => onHover?.(s.api10)}
               onMouseLeave={() => onHover?.(null)}
             >
-              {segments.map((seg, idx) => (
+              {inCohort &&
+                points.map((pts, idx) => (
+                  <polyline
+                    key={`halo-${s.api10}-${idx}`}
+                    fill="none"
+                    stroke={COHORT_HALO_COLOR}
+                    strokeWidth={strokeWidth + 4}
+                    strokeOpacity={isSelected ? 0.5 : 0.15}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    points={pts}
+                  />
+                ))}
+              {points.map((pts, idx) => (
                 <polyline
                   key={`${s.api10}-${idx}`}
                   fill="none"
                   stroke={color}
                   strokeWidth={strokeWidth}
                   strokeOpacity={strokeOpacity}
-                  points={seg
-                    .map(([x, y]) => `${xScale(x)},${yScale(y)}`)
-                    .join(" ")}
+                  points={pts}
                 />
               ))}
             </g>

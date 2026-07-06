@@ -5,7 +5,10 @@
 // for technical type-curve / decline generation — economics is done
 // downstream on the exported workbook.
 
-export const DAYS_PER_MONTH = 30.4375;
+// 365/12 — matches the backend's DAYS_PER_YEAR / 12 convention used by
+// the fit/EUR math and ramp_arps.trapezoid_eur. (Was 30.4375 = 365.25/12,
+// a 0.07% drift vs every backend-computed EUR.)
+export const DAYS_PER_MONTH = 365 / 12;
 export const FULL_FORECAST_N_MONTHS = 600;
 
 export interface RampArpsParams {

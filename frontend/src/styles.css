@@ -236,15 +236,20 @@ body {
   inset: 0;
   background: rgba(15, 23, 42, 0.55);
   display: flex;
-  align-items: center;
-  justify-content: center;
+  /* Center via the child's `margin: auto` rather than align/justify so a
+     modal taller than the viewport stays fully scrollable — align-items:
+     center clips the overflow above the top edge, out of scroll reach.
+     The backdrop itself scrolls (overflow-y) as the final fallback. */
+  padding: 24px;
+  overflow-y: auto;
   z-index: 100;
 }
 .modal {
   background: #fff;
   border-radius: 8px;
   max-width: 1180px;
-  width: calc(100% - 48px);
+  width: 100%;
+  margin: auto;
   max-height: calc(100vh - 48px);
   overflow-y: auto;
   box-shadow: 0 20px 40px rgba(0, 0, 0, 0.25);
@@ -276,6 +281,14 @@ body {
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid #e5e7eb;
+  /* Stay put while a long modal body scrolls so the title + close
+     button remain reachable. */
+  position: sticky;
+  top: 0;
+  background: #fff;
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+  z-index: 1;
 }
 .modal-body { padding: 14px 16px; }
 .modal-toolbar {
@@ -291,6 +304,25 @@ body {
   margin-bottom: 16px;
 }
 .decline-chart { background: #fff; border: 1px solid #e5e7eb; border-radius: 4px; }
+
+/* Modal chart legend — Actual / App forecast / Novi forecast swatches.
+   Color identifies the line (dark = actual, red = app, blue = Novi); the
+   chart itself renders the dashed style. Swatch color is set inline. */
+.chart-legend {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #374151;
+}
+.chart-legend-item { display: inline-flex; align-items: center; gap: 6px; }
+.chart-legend-swatch {
+  display: inline-block;
+  width: 18px;
+  height: 3px;
+  border-radius: 1px;
+}
 
 .param-editor {
   border: 1px solid #e5e7eb;
@@ -401,6 +433,14 @@ body {
 .row-pending-transfer td { background: #eff6ff; }
 .row-pending-transfer.row-outlier td { background: #fef3c7; }
 .row-pending-transfer.row-excluded td { background: #f3f4f6; opacity: 0.6; }
+
+/* Tiered highlight on the oil EUR cell when our autoforecast EUR
+   diverges from Novi's. Cell-level (not row-level) so it flags the
+   specific number; `td.` prefix keeps it at the same specificity as the
+   row-tint rules above and, being later in source order, wins on
+   outlier rows. mild = amber (matches outlier yellow), strong = red. */
+td.eur-diverge-mild { background: #fef3c7; }
+td.eur-diverge-strong { background: #fecaca; }
 
 /* ---------- type curve page ---------- */
 .type-curve-main {
@@ -1245,8 +1285,29 @@ input[type="date"], input[type="number"], input[type="search"] {
   background: #f8fafc;
 }
 .inspect-modal-count {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 12px;
   color: #475569;
+}
+.inspect-modal-linkbtn {
+  border: none;
+  background: none;
+  padding: 0;
+  color: #2563eb;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.inspect-modal-linkbtn:disabled {
+  color: #cbd5e1;
+  cursor: default;
+  text-decoration: none;
+}
+.inspect-modal-hint {
+  color: #94a3b8;
+  font-size: 11px;
 }
 .inspect-modal-actions {
   display: flex;
@@ -1278,8 +1339,50 @@ input[type="date"], input[type="number"], input[type="search"] {
   background: #9ca3af;
   cursor: not-allowed;
 }
+.inspect-modal-actions .btn-danger {
+  background: #fff;
+  color: #b91c1c;
+  border-color: #fca5a5;
+}
+.inspect-modal-actions .btn-danger:hover:not(:disabled) {
+  background: #fef2f2;
+}
+.inspect-modal-actions .btn-danger:disabled {
+  color: #d1d5db;
+  border-color: #e5e7eb;
+  cursor: not-allowed;
+}
 
 /* ---------- gun-barrel ---------- */
+.gun-barrel-wrap {
+  position: relative;
+  display: inline-block;
+}
+.gun-barrel-flip-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.gun-barrel-flip-btn:hover {
+  background: #f1f5f9;
+}
+.gun-barrel-flip-btn[aria-pressed="true"] {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+  color: #4338ca;
+}
 .gun-barrel-svg {
   display: block;
   background: #fafafa;
@@ -1462,12 +1565,15 @@ input[type="date"], input[type="number"], input[type="search"] {
    what the PPTX export places on the slide so the preview is
    WYSIWYG. The export sends each panel as a separate picture
    placed at exact inch dimensions, so chart sizes don't depend on
-   the composite aspect surviving a picture-frame scale. */
+   the composite aspect surviving a picture-frame scale.
+   justify-content: space-between right-aligns the right column,
+   matching the export's mirrored-margin placement. */
 .slide-grid {
   display: grid;
   grid-template-columns: auto auto;
   grid-template-rows: auto auto;
   gap: 12px;
+  justify-content: space-between;
 }
 .slide-panel-map {
   grid-row: 1 / span 2;
@@ -1495,7 +1601,10 @@ input[type="date"], input[type="number"], input[type="search"] {
 }
 
 /* Map cell: position relative so the snapshot <img> overlays cleanly
-   on the live canvas underneath. */
+   on the live canvas underneath. The live canvas is what the user
+   sees and pans/zooms; the snapshot img (refreshed on every map idle)
+   is hidden on screen and exists for the PPTX capture (reads img.src)
+   and the print swap below. */
 .slide-map {
   position: relative;
 }
@@ -1504,6 +1613,7 @@ input[type="date"], input[type="number"], input[type="search"] {
 }
 .slide-map-img {
   pointer-events: none;
+  display: none;
 }
 
 /* Probit "no data" fallback panel — same border treatment as the
@@ -1534,6 +1644,14 @@ input[type="date"], input[type="number"], input[type="search"] {
   .slide-panel {
     break-inside: avoid;
     border-color: #d1d5db;
+  }
+  /* Print swap: hide the live MapLibre canvas (prints as a black
+     rectangle), show the latest snapshot img instead. */
+  .slide-map-canvas {
+    display: none;
+  }
+  .slide-map-img {
+    display: block;
   }
   /* Force-print background colors on the table — without this most
      browsers strip the blue header for ink-saving. */

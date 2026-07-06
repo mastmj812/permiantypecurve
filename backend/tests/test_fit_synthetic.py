@@ -24,6 +24,13 @@ from app.forecasting.cumulative import (
 from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import fit_rate_cum, fit_rate_time
 from app.forecasting.peak_detection import PeakResult
+from app.forecasting.types import ForecastConfig
+
+# These tests verify the UNCONSTRAINED fitter recovers known params from
+# clean data. Disable peak-anchoring of qi (a real-data heuristic that
+# caps qi near the month-averaged peak — on a clean synthetic curve the
+# instantaneous qi legitimately sits a few % above that monthly average).
+_UNCONSTRAINED = ForecastConfig(qi_anchor_lo_frac=None, qi_anchor_hi_frac=None)
 
 
 def _synthetic_monthly(
@@ -77,7 +84,7 @@ def test_fit_recovers_exponential_params() -> None:
     truth = {"qi": 1000.0, "Di": 0.85}
     df = _synthetic_monthly(cum_fn=cum_exponential, params=truth, months=36)
     peak = _peak_at_month_zero(df)
-    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil")
+    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.fit_r2 > 0.999
     assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.02)
     assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.02)
@@ -97,7 +104,7 @@ def test_fit_recovers_hyperbolic_params() -> None:
     truth = {"qi": 800.0, "Di": 0.9, "b": 1.2}
     df = _synthetic_monthly(cum_fn=cum_hyperbolic, params=truth, months=48)
     peak = _peak_at_month_zero(df)
-    r = fit_rate_cum(df, model_type="arps_hyperbolic", peak=peak, stream="oil")
+    r = fit_rate_cum(df, model_type="arps_hyperbolic", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.fit_r2 > 0.999
     # qi is anchored at t=0 so it's the most identifiable of the three.
     assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.10)
@@ -114,7 +121,7 @@ def test_fit_recovers_modified_hyperbolic_params() -> None:
         months=60,
     )
     peak = _peak_at_month_zero(df)
-    r = fit_rate_cum(df, model_type="modified_hyperbolic", peak=peak, stream="oil")
+    r = fit_rate_cum(df, model_type="modified_hyperbolic", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.fit_r2 > 0.999
     assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.05)
     assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.1)
@@ -126,7 +133,7 @@ def test_rate_time_fit_also_recovers_hyperbolic_params() -> None:
     truth = {"qi": 800.0, "Di": 0.9, "b": 1.2}
     df = _synthetic_monthly(cum_fn=cum_hyperbolic, params=truth, months=48)
     peak = _peak_at_month_zero(df)
-    r = fit_rate_time(df, model_type="arps_hyperbolic", peak=peak, stream="oil")
+    r = fit_rate_time(df, model_type="arps_hyperbolic", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.fit_r2 > 0.99
     assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.1)
     assert r.params["b"] == pytest.approx(truth["b"], abs=0.2)
@@ -136,7 +143,7 @@ def test_insufficient_history_flag_set_below_min_post_peak_months() -> None:
     truth = {"qi": 1000.0, "Di": 0.85}
     df = _synthetic_monthly(cum_fn=cum_exponential, params=truth, months=4)
     peak = _peak_at_month_zero(df)
-    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil")
+    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.insufficient_history is True
 
 
@@ -144,5 +151,5 @@ def test_sufficient_history_flag_unset_at_six_months() -> None:
     truth = {"qi": 1000.0, "Di": 0.85}
     df = _synthetic_monthly(cum_fn=cum_exponential, params=truth, months=6)
     peak = _peak_at_month_zero(df)
-    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil")
+    r = fit_rate_cum(df, model_type="arps_exponential", peak=peak, stream="oil", config=_UNCONSTRAINED)
     assert r.insufficient_history is False

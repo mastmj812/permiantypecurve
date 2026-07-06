@@ -1,20 +1,25 @@
-// Admin modal for deal-acreage polygons. Upload a shapefile (.zip),
-// assign each parsed polygon to a Deal via dropdown, or delete.
+// Admin modal for acreage polygons. Upload a shapefile (.zip) to
+// display it on the map, delete polygons, and toggle each uploaded
+// shapefile on/off. There's no deal assignment — acreage is just shown.
+//
+// Polygons are grouped by their source shapefile. Each group has a
+// show/hide checkbox wired to mapStore.dealVisibility (keyed by
+// source_file), which the Map tab reads to filter the acreage layer.
 //
 // State source of truth is the backend; this component re-fetches
-// after every mutation so the per-deal toggles in MapToolbar (which
-// read from mapStore.dealPolygons) reflect the change as soon as it
-// lands.
+// after every mutation so the map (which reads from
+// mapStore.dealPolygons) reflects the change as soon as it lands.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
-import { type DealSummary, listDeals } from "../api/deals";
 import {
   type DealPolygonRow,
+  NO_SOURCE_FILE,
   deleteDealPolygon,
+  deleteShapefile,
   fetchDealPolygonGeoJSON,
   fetchDealPolygons,
-  patchDealPolygon,
   uploadShapefile,
 } from "../api/dealPolygons";
 import { useMapStore } from "../store/mapStore";
@@ -25,11 +30,26 @@ interface Props {
 
 export function DealPolygonsModal({ onClose }: Props) {
   const [polygons, setPolygons] = useState<DealPolygonRow[]>([]);
-  const [deals, setDeals] = useState<DealSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  const setDealVisibility = useMapStore((s) => s.setDealVisibility);
+
+  // Group polygons by their source shapefile so each upload gets one
+  // visibility toggle. Preserves first-seen order.
+  const groups = useMemo(() => {
+    const m = new Map<string, DealPolygonRow[]>();
+    for (const p of polygons) {
+      const key = p.source_file ?? NO_SOURCE_FILE;
+      const arr = m.get(key);
+      if (arr) arr.push(p);
+      else m.set(key, [p]);
+    }
+    return Array.from(m.entries());
+  }, [polygons]);
 
   const refreshStore = useCallback(async () => {
     // Push the latest GeoJSON into the store so MapView re-renders.
@@ -37,7 +57,7 @@ export function DealPolygonsModal({ onClose }: Props) {
       const fc = await fetchDealPolygonGeoJSON();
       useMapStore.getState().setDealPolygons(fc);
     } catch (e) {
-      console.warn("failed to refresh deal polygons in store", e);
+      console.warn("failed to refresh acreage polygons in store", e);
     }
   }, []);
 
@@ -45,9 +65,8 @@ export function DealPolygonsModal({ onClose }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const [polys, dealList] = await Promise.all([fetchDealPolygons(), listDeals()]);
+      const polys = await fetchDealPolygons();
       setPolygons(polys);
-      setDeals(dealList);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -75,16 +94,6 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
   }
 
-  async function handleAssign(polygonId: string, dealId: string | null) {
-    try {
-      await patchDealPolygon(polygonId, dealId);
-      await refresh();
-      await refreshStore();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
   async function handleDelete(polygonId: string) {
     if (!confirm("Delete this polygon? This cannot be undone.")) return;
     try {
@@ -96,7 +105,29 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
   }
 
-  return (
+  async function handleDeleteGroup(sourceFile: string, count: number) {
+    if (
+      !confirm(
+        `Delete all ${count} polygon${count === 1 ? "" : "s"} from "${sourceFile}"? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      await deleteShapefile(sourceFile);
+      await refresh();
+      await refreshStore();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  // Portal to <body>: this modal is rendered from inside .map-toolbar,
+  // which has a CSS transform. A transformed ancestor becomes the
+  // containing block for position:fixed descendants, which would trap
+  // the fixed backdrop inside the toolbar strip instead of covering the
+  // viewport. Portaling escapes the transform.
+  return createPortal(
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="modal"
@@ -104,7 +135,7 @@ export function DealPolygonsModal({ onClose }: Props) {
         style={{ maxWidth: 960 }}
       >
         <header className="modal-header">
-          <strong>Deal acreage polygons</strong>
+          <strong>Acreage polygons</strong>
           <button type="button" className="link-btn" onClick={onClose}>
             close
           </button>
@@ -123,7 +154,9 @@ export function DealPolygonsModal({ onClose }: Props) {
             />
             <span className="muted" style={{ fontSize: 11 }}>
               Upload a .zip containing the shapefile components (.shp + .dbf +
-              .prj). Each feature becomes one row; assign to a deal below.
+              .prj). Each feature becomes one polygon, shown on the Map and
+              Review tabs. Re-uploading a .zip with the same name replaces its
+              polygons.
             </span>
           </div>
 
@@ -134,75 +167,108 @@ export function DealPolygonsModal({ onClose }: Props) {
           )}
           {loading && <p className="muted">loading…</p>}
 
-          <table className="deal-polygon-table">
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Source file</th>
-                <th>Attributes</th>
-                <th>Deal</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {polygons.map((p) => (
-                <tr key={p.id}>
-                  <td>{p.name}</td>
-                  <td>
-                    <span className="muted" style={{ fontSize: 11 }}>
-                      {p.source_file ?? "—"}
-                    </span>
-                  </td>
-                  <td>
-                    <pre
-                      style={{
-                        margin: 0,
-                        fontSize: 10,
-                        maxWidth: 280,
-                        maxHeight: 80,
-                        overflow: "auto",
-                      }}
-                    >
-                      {JSON.stringify(p.attributes, null, 0)}
-                    </pre>
-                  </td>
-                  <td>
-                    <select
-                      value={p.deal_id ?? ""}
+          {!loading && groups.length === 0 && (
+            <p className="muted" style={{ textAlign: "center" }}>
+              No polygons yet — upload a shapefile to get started.
+            </p>
+          )}
+
+          {groups.map(([sourceFile, rows]) => {
+            // Absent key = visible (default on); the map reads the same
+            // store slice and filters this shapefile out when unchecked.
+            const visible = dealVisibility[sourceFile] !== false;
+            return (
+              <div
+                key={sourceFile}
+                style={{
+                  marginBottom: 14,
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 10px",
+                    background: "#fafafa",
+                    borderBottom: "1px solid #f3f4f6",
+                  }}
+                >
+                  <label
+                    className="chk-inline"
+                    title="Show / hide this shapefile on the map"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={visible}
                       onChange={(e) =>
-                        handleAssign(p.id, e.target.value || null)
+                        setDealVisibility(sourceFile, e.target.checked)
                       }
-                    >
-                      <option value="">— Unassigned —</option>
-                      {deals.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.name}
-                        </option>
-                      ))}
-                    </select>
-                  </td>
-                  <td>
+                    />
+                    <strong>{sourceFile}</strong>
+                  </label>
+                  <span className="muted" style={{ fontSize: 11 }}>
+                    {rows.length} polygon{rows.length === 1 ? "" : "s"}
+                    {!visible && " · hidden"}
+                  </span>
+                  {sourceFile !== NO_SOURCE_FILE && (
                     <button
                       type="button"
                       className="link-btn"
-                      onClick={() => handleDelete(p.id)}
+                      style={{ marginLeft: "auto" }}
+                      onClick={() => handleDeleteGroup(sourceFile, rows.length)}
+                      title="Delete every polygon from this shapefile"
                     >
-                      delete
+                      delete shapefile
                     </button>
-                  </td>
-                </tr>
-              ))}
-              {polygons.length === 0 && !loading && (
-                <tr>
-                  <td colSpan={5} className="muted" style={{ textAlign: "center" }}>
-                    No polygons yet — upload a shapefile to get started.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+                  )}
+                </div>
+                <table className="deal-polygon-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Attributes</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map((p) => (
+                      <tr key={p.id}>
+                        <td>{p.name}</td>
+                        <td>
+                          <pre
+                            style={{
+                              margin: 0,
+                              fontSize: 10,
+                              maxWidth: 320,
+                              maxHeight: 80,
+                              overflow: "auto",
+                            }}
+                          >
+                            {JSON.stringify(p.attributes, null, 0)}
+                          </pre>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="link-btn"
+                            onClick={() => handleDelete(p.id)}
+                          >
+                            delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

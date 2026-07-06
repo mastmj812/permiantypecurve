@@ -29,6 +29,8 @@ class WellDetail(BaseModel):
     api10: str
     operator: str | None
     formation: str | None
+    formation_blueox: str | None = None
+    basin_blueox: str | None = None
     first_prod_date: date | None
     vintage_year: int | None
     lateral_ft: float | None
@@ -60,6 +62,8 @@ class WellDetailLite(BaseModel):
     api10: str
     name: str | None
     formation: str | None
+    formation_blueox: str | None = None
+    basin_blueox: str | None = None
     operator: str | None
     lateral_ft: float | None
     tvd_ft: float | None
@@ -96,6 +100,8 @@ def wellsticks_geojson(
         select(
             Well.api10,
             Well.formation,
+            Well.formation_blueox,
+            Well.basin_blueox,
             Well.operator,
             func.ST_AsGeoJSON(Well.wellstick).label("geom"),
         ).where(Well.api10.in_(ids), Well.wellstick.is_not(None))
@@ -107,6 +113,8 @@ def wellsticks_geojson(
             "properties": {
                 "api10": r.api10,
                 "formation": r.formation,
+                "formation_blueox": r.formation_blueox,
+                "basin_blueox": r.basin_blueox,
                 "operator": r.operator,
             },
         }
@@ -135,6 +143,8 @@ def well_details(
             Well.api10,
             Well.name,
             Well.formation,
+            Well.formation_blueox,
+            Well.basin_blueox,
             Well.operator,
             Well.lateral_ft,
             Well.tvd_ft,
@@ -153,6 +163,8 @@ def well_details(
             api10=r.api10,
             name=r.name,
             formation=r.formation,
+            formation_blueox=r.formation_blueox,
+            basin_blueox=r.basin_blueox,
             operator=r.operator,
             lateral_ft=float(r.lateral_ft) if r.lateral_ft is not None else None,
             tvd_ft=float(r.tvd_ft) if r.tvd_ft is not None else None,
@@ -179,6 +191,8 @@ def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDeta
             Well.api10,
             Well.operator,
             Well.formation,
+            Well.formation_blueox,
+            Well.basin_blueox,
             Well.first_prod_date,
             Well.vintage_year,
             Well.lateral_ft,
@@ -202,6 +216,8 @@ def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDeta
         api10=row.api10,
         operator=row.operator,
         formation=row.formation,
+        formation_blueox=row.formation_blueox,
+        basin_blueox=row.basin_blueox,
         first_prod_date=row.first_prod_date,
         vintage_year=row.vintage_year,
         lateral_ft=row.lateral_ft,
@@ -301,9 +317,13 @@ def filter_facets(
     bounds don't jitter as the user filters.
     """
     # --- universe of values (independent of filters) ---
+    # Facet universe + counts use the standardized formation_blueox codes
+    # (the filter dimension; raw `formation` is retained elsewhere for display).
     all_formations: list[str] = [
         v for (v,) in session.execute(
-            select(Well.formation).where(Well.formation.isnot(None)).distinct()
+            select(Well.formation_blueox)
+            .where(Well.formation_blueox.isnot(None))
+            .distinct()
         ).all()
     ]
     all_counties: list[str] = [
@@ -322,7 +342,7 @@ def filter_facets(
         return {r[0]: int(r[1]) for r in session.execute(stmt).all() if r[0] is not None}
 
     formations_count = _counts_under(
-        _facet_clauses_excluding(spec, exclude_attr="formations"), Well.formation
+        _facet_clauses_excluding(spec, exclude_attr="formations"), Well.formation_blueox
     )
     statuses_count = _counts_under(
         _facet_clauses_excluding(spec, exclude_attr="statuses"), Well.status

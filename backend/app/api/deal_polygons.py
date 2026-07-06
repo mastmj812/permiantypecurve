@@ -260,6 +260,21 @@ async def upload_shapefile(
     # silently emitting bogus coordinates.
     effective_src_epsg = source_epsg if source_epsg is not None else 4326
 
+    # Override semantics: re-uploading a shapefile with the same filename
+    # replaces its previous features instead of stacking duplicates. Runs
+    # in the same transaction as the inserts below, so a parse/insert
+    # failure rolls the delete back too.
+    replaced = 0
+    if file.filename:
+        replaced = (
+            session.execute(
+                delete(DealPolygon).where(
+                    DealPolygon.source_file == file.filename
+                )
+            ).rowcount
+            or 0
+        )
+
     # ST_Transform is a no-op when src_epsg == 4326, so one SQL covers
     # both branches. ST_Multi normalizes any POLYGON output back to
     # MULTIPOLYGON so the geom column's type constraint is satisfied
@@ -290,6 +305,7 @@ async def upload_shapefile(
     log.info(
         "deal_polygons_uploaded",
         count=len(polygon_ids),
+        replaced=replaced,
         source_epsg=source_epsg,
         filename=file.filename,
     )
@@ -336,14 +352,15 @@ def list_polygons_geojson(
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     """FeatureCollection for the Map tab + SlideMap. Properties carry
-    the visibility key (deal_id / "_unlinked") and the assigned deal's
-    color so the frontend filter expression can read them directly."""
+    the source_file (the uploaded shapefile) so the frontend can filter
+    per-shapefile visibility, plus legacy deal fields the map ignores."""
     rows = session.execute(
         select(
             DealPolygon.id,
             DealPolygon.deal_id,
             Deal.name.label("deal_name"),
             DealPolygon.name,
+            DealPolygon.source_file,
             func.ST_AsGeoJSON(DealPolygon.geom).label("geom_json"),
         ).outerjoin(Deal, Deal.id == DealPolygon.deal_id)
     ).all()
@@ -362,13 +379,16 @@ def list_polygons_geojson(
                 "geometry": geometry,
                 "properties": {
                     "id": str(r.id),
+                    "name": r.name,
+                    # The uploaded shapefile this feature came from —
+                    # drives per-shapefile show/hide on the Map tab.
+                    "source_file": r.source_file,
+                    # Legacy deal fields, retained for back-compat with
+                    # any consumer that still reads them; the map no
+                    # longer uses deal assignment.
                     "deal_id": str(r.deal_id) if r.deal_id else None,
                     "deal_name": r.deal_name,
-                    "name": r.name,
                     "color": _color_for_deal(r.deal_id),
-                    # Single key the MapView filter expression reads —
-                    # keeps the filter logic identical for linked and
-                    # unlinked polygons.
                     "visibility_key": str(r.deal_id) if r.deal_id else "_unlinked",
                 },
             }
@@ -403,6 +423,26 @@ def patch_polygon(
         attributes=poly.attributes or {},
         source_file=poly.source_file,
     )
+
+
+# Registered BEFORE the /{polygon_id} route so "by-source-file" isn't
+# captured as a UUID path param (which would 422 before reaching here).
+@router.delete("/by-source-file", status_code=200)
+def delete_by_source_file(
+    source_file: str,
+    session: Session = Depends(get_session),
+) -> dict[str, int]:
+    """Delete every polygon from one uploaded shapefile (matched by
+    source_file). Powers the manage modal's per-group 'delete shapefile'
+    action so the user can clear a whole upload in one click."""
+    deleted = (
+        session.execute(
+            delete(DealPolygon).where(DealPolygon.source_file == source_file)
+        ).rowcount
+        or 0
+    )
+    session.commit()
+    return {"deleted": deleted}
 
 
 @router.delete("/{polygon_id}", status_code=204)

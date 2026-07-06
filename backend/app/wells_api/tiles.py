@@ -61,7 +61,9 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
     # for psycopg — it adapts Python lists to Postgres arrays, but the
     # array element type needs to be pinned for the ANY() comparison.
     if spec.formations:
-        parts.append("w.formation = ANY((:formations)::TEXT[])")
+        # formations carries standardized formation_blueox codes (basin-aware
+        # facet universe), so filter on that column. Raw formation is retained.
+        parts.append("w.formation_blueox = ANY((:formations)::TEXT[])")
         params["formations"] = list(spec.formations)
     if spec.operators:
         parts.append("w.operator = ANY((:operators)::TEXT[])")
@@ -107,6 +109,8 @@ mvtgeom AS (
     w.api10,
     w.name,
     w.formation,
+    w.formation_blueox,
+    w.basin_blueox,
     w.operator,
     w.status::text AS status,
     w.lateral_ft,
@@ -144,6 +148,8 @@ mvtgeom AS (
     w.api10,
     w.name,
     w.formation,
+    w.formation_blueox,
+    w.basin_blueox,
     w.operator,
     w.status::text AS status,
     w.lateral_ft,

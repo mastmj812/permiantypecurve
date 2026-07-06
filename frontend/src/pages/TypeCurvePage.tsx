@@ -18,6 +18,7 @@ import {
   fetchTypeCurve,
   listTypeCurves,
   patchTypeCurve,
+  reaggregateTypeCurve,
   previewTypeCurveFit,
   saveTypeCurve,
 } from "../api/typeCurves";
@@ -33,6 +34,7 @@ import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 import { effectiveDecline, nominalDecline } from "../api/forecasts";
+import { navigateHash } from "../navigation";
 import { useMapStore } from "../store/mapStore";
 
 type Stream = "oil" | "gas" | "water";
@@ -62,6 +64,11 @@ interface TypeCurvePageProps {
 
 export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}) {
   const forecastApi10s = useMapStore((s) => s.forecastApi10s);
+  // The Review page's Aggregate button snapshots its filtered+included
+  // list here so the TC is built from exactly the wells the button
+  // counted. Null (other nav paths / fresh batch) falls back to the
+  // full forecast scope — the legacy behavior.
+  const typeCurveApi10s = useMapStore((s) => s.typeCurveApi10s);
   const excluded = useMapStore((s) => s.excludedApi10s);
   // Cohort-handoff prefill: when the user reached this page via the
   // cohort bar's Forecast button, these are populated. The save form
@@ -70,9 +77,16 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const activeCohortName = useMapStore((s) => s.activeCohortName);
   const activeCohortDealId = useMapStore((s) => s.activeCohortDealId);
 
+  // Snapshots (the Review Aggregate button, or a loaded saved curve)
+  // are AUTHORITATIVE membership: the Aggregate button already applied
+  // the exclusion set when it built the snapshot, and a loaded curve's
+  // list must round-trip into its versions untouched. Re-applying the
+  // live exclusion set on top would let a stale Review un-tick
+  // silently shrink a version's membership. Only the legacy
+  // forecast-scope fallback still filters by exclusions.
   const included = useMemo(
-    () => forecastApi10s.filter((a) => !excluded.has(a)),
-    [forecastApi10s, excluded],
+    () => typeCurveApi10s ?? forecastApi10s.filter((a) => !excluded.has(a)),
+    [typeCurveApi10s, forecastApi10s, excluded],
   );
 
   // Trigger-gated compute, mirroring the Forecast/Review pattern. The
@@ -101,11 +115,24 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // alignment unchanged" guard below doesn't spuriously fire on
   // first mount when there's a persisted result.
   const [alignment, setAlignment] = useState<AlignmentMethod>(
-    persistedAgg?.alignment_method ?? "first_prod_month",
+    persistedAgg?.alignment_method ?? "peak_ramp",
   );
   const [saveName, setSaveName] = useState("");
   const [saveNotes, setSaveNotes] = useState("");
   const [versionOf, setVersionOf] = useState<string | null>(null);
+  // Save-as-version: hand the parent's deal slot to the new version
+  // (checked by default — replacing the published curve is the usual
+  // intent; the parent stays in the library as the historical record).
+  const [takeOverDeal, setTakeOverDeal] = useState(true);
+  // Alignment for the NEW version / in-place rebuild. Independent of
+  // the loaded curve's (fixed) alignment so a re-version can move to
+  // the recommended method — defaults to peak_ramp.
+  const [versionAlignment, setVersionAlignment] =
+    useState<AlignmentMethod>("peak_ramp");
+  // Update-in-place (unshared curves): rebuild the saved series under
+  // the chosen alignment without creating a version.
+  const [inPlaceBusy, setInPlaceBusy] = useState(false);
+  const [inPlaceError, setInPlaceError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -266,6 +293,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       // recompute. Falls through.
     } else {
       setTcTriggerPending(false);
+      // Fresh Aggregate from Review: the new working set has no
+      // implicit parent. Clear any version-of default left behind by
+      // a previously loaded curve so Save doesn't silently create a
+      // version of an unrelated curve.
+      setVersionOf(null);
     }
     setComputing(true);
     setSelectedSaved(null);
@@ -304,17 +336,29 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   }
 
   async function onSave() {
-    if (!saveName.trim() || included.length === 0) return;
+    // With a saved curve loaded, the save is ALWAYS a new version of
+    // it, built from ITS exact membership — independent of any
+    // workspace state a stale session might hold. The server
+    // recomputes the aggregation from the current per-well forecasts;
+    // the loaded curve itself is never modified.
+    const wells = selectedSaved ? selectedSaved.included_api10s : included;
+    const parent = selectedSaved ? selectedSaved.id : versionOf;
+    if (!saveName.trim() || wells.length === 0) return;
     setSaving(true);
     setSaveError(null);
     try {
       const saved = await saveTypeCurve({
         name: saveName.trim(),
         notes: saveNotes.trim() || null,
-        included_api10s: included,
-        alignment_method: alignment,
-        version_of: versionOf,
+        included_api10s: wells,
+        // Version saves carry their own alignment choice (the loaded
+        // curve's alignment is fixed; the new version can move to the
+        // recommended method).
+        alignment_method: selectedSaved ? versionAlignment : alignment,
+        version_of: parent,
         fit_overrides: collectOverrides(),
+        take_over_deal:
+          !!selectedSaved && selectedSaved.deal_id != null && takeOverDeal,
       });
       // Auto-assign to the handoff deal if the cohort had one preset.
       // Verifies the deal still exists in case the user deleted it
@@ -326,7 +370,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       setSaveName("");
       setSaveNotes("");
       setVersionOf(null);
-      await refreshLibrary();
+      // Refresh deals too — a version save can move the parent's deal
+      // slot (take_over_deal), and the cohort-handoff path assigns the
+      // new curve to a deal; either changes the deals panel's counts.
+      await Promise.all([refreshLibrary(), refreshDeals()]);
       setSelectedSaved(final);
       setAgg(final.series);
       clearTweakState();
@@ -399,7 +446,83 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     setAlignment(row.alignment_method);
     setEditedNotes(row.notes ?? "");
     setUpdateError(null);
+    // Hydrate the workspace scope from the loaded curve so a
+    // subsequent Save-as-version carries EXACTLY this curve's
+    // membership. Without this, the save form kept whatever well list
+    // the workspace last held (a different cohort, or nothing), and a
+    // "version" could silently have different wells than its parent.
+    useMapStore.getState().setTypeCurveApi10s(row.included_api10s);
+    // Default the save form to versioning the curve being viewed —
+    // the natural intent of load → tweak → save. Cleared again when a
+    // fresh Aggregate arrives from Review (see the compute effect);
+    // the dropdown stays editable for the standalone-save case.
+    setVersionOf(row.id);
+    setTakeOverDeal(true);
+    // Start at the PARENT's alignment so what's on screen always
+    // matches what Save would produce; switching the dropdown fires a
+    // live preview (see onVersionAlignmentChange) before any save.
+    setVersionAlignment(row.alignment_method);
     clearTweakState();
+  }
+
+  // Changing the new version's alignment previews the re-aggregation
+  // in the main charts — same behavior as the pre-save flow, so the
+  // engineer sees the peak_ramp (or other) fit BEFORE committing. The
+  // saved curve itself is untouched; picking the parent's own
+  // alignment back restores its stored series. The preview is
+  // override-blind (global forecasts only), exactly like the version
+  // save, so preview === what Save will persist.
+  // Rebuild the loaded curve IN PLACE: persist the chosen alignment
+  // (when changed), re-aggregate the saved series from the current
+  // per-well forecasts (override-aware — reaggregate resolves this
+  // curve's per-well overrides, unlike the version save), and reload.
+  // No version row is created; the previous series is gone. Meant for
+  // curves that haven't been shared yet.
+  async function onUpdateInPlace() {
+    if (!selectedSaved) return;
+    setInPlaceBusy(true);
+    setInPlaceError(null);
+    try {
+      if (versionAlignment !== selectedSaved.alignment_method) {
+        await patchTypeCurve(selectedSaved.id, {
+          alignment_method: versionAlignment,
+        });
+      }
+      const updated = await reaggregateTypeCurve(selectedSaved.id);
+      setSelectedSaved(updated);
+      setAgg(updated.series);
+      await refreshLibrary();
+      clearTweakState();
+    } catch (e) {
+      setInPlaceError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInPlaceBusy(false);
+    }
+  }
+
+  const alignPreviewSeq = useRef(0);
+  function onVersionAlignmentChange(next: AlignmentMethod) {
+    setVersionAlignment(next);
+    if (!selectedSaved) return;
+    const seq = ++alignPreviewSeq.current;
+    if (next === selectedSaved.alignment_method) {
+      setAgg(selectedSaved.series);
+      return;
+    }
+    setComputing(true);
+    computeTypeCurve({
+      api10s: selectedSaved.included_api10s,
+      alignment_method: next,
+    })
+      .then((p) => {
+        if (seq === alignPreviewSeq.current) setAgg(p);
+      })
+      .catch((e) => {
+        console.error("version alignment preview failed", e);
+      })
+      .finally(() => {
+        if (seq === alignPreviewSeq.current) setComputing(false);
+      });
   }
 
   // Preload the requested curve when arriving via the
@@ -637,7 +760,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Cartesian"
                 width={380}
                 xMaxMonths={dataWindowMonths}
@@ -649,7 +772,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="log"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Semi-log (rate)"
                 width={380}
                 xMaxMonths={dataWindowMonths}
@@ -662,7 +785,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="log"
                   yLabel={units.rate}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Full forecast — semi-log (rate)"
                   width={380}
                   smoothedOverride={previewFullSmoothed[stream]}
@@ -681,7 +804,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
-                xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                 title="Early time (first 12 months)"
                 xMaxMonths={12}
                 xTickStep={1}
@@ -695,7 +818,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="linear"
                   yLabel={units.cum}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Cumulative (data window)"
                   width={380}
                   xMaxMonths={dataWindowMonths}
@@ -709,7 +832,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   compareLabel={compareWith?.name}
                   yAxisType="linear"
                   yLabel={units.cum}
-                  xLabel={xAxisLabel(selectedSaved?.alignment_method ?? alignment)}
+                  xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Full forecast — cumulative"
                   width={380}
                   smoothedOverride={cumPreviewFullSmoothed}
@@ -967,12 +1090,121 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             }
             style={{ width: "100%" }}
           >
+            <option value="peak_ramp">
+              Peak-aligned + ramp (recommended)
+            </option>
             <option value="first_prod_month">
               First-prod month (incl. ramp-up)
             </option>
             <option value="peak_month">Peak month (decline-only)</option>
           </select>
         </section>
+
+        {selectedSaved && (
+          <section className="filter-section">
+            <h3>Update this curve</h3>
+            <p className="muted" style={{ margin: "4px 0 8px" }}>
+              Rebuilds from the current per-well forecasts (
+              {selectedSaved.included_api10s.length} wells). Pick the
+              alignment — the charts preview it live when it differs
+              from the saved one — then rebuild in place or save as a
+              new version.
+            </p>
+            <label className="chk-inline">alignment:</label>
+            <select
+              value={versionAlignment}
+              onChange={(e) =>
+                onVersionAlignmentChange(e.target.value as AlignmentMethod)
+              }
+              style={{ width: "100%", marginBottom: 6 }}
+            >
+              <option value="peak_ramp">
+                Peak-aligned + ramp (recommended)
+              </option>
+              <option value="first_prod_month">
+                First-prod month (incl. ramp-up)
+              </option>
+              <option value="peak_month">Peak month (decline-only)</option>
+            </select>
+            {versionAlignment !== selectedSaved.alignment_method &&
+              agg?.alignment_method === versionAlignment && (
+                <p className="muted" style={{ margin: "2px 0 6px" }}>
+                  charts are previewing the new version (
+                  {alignmentLabel(versionAlignment)}); the saved curve
+                  keeps {alignmentLabel(selectedSaved.alignment_method)}{" "}
+                  until you save
+                </p>
+              )}
+            <p className="muted" style={{ margin: "10px 0 4px" }}>
+              <strong>Rebuild in place</strong> — overwrites this
+              curve&apos;s saved series under the alignment above; no
+              new version is created. For curves that haven&apos;t
+              been shared. Honors this curve&apos;s per-well
+              overrides.
+            </p>
+            {inPlaceError && (
+              <div className="alert alert-error" style={{ marginTop: 4 }}>
+                {inPlaceError}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={inPlaceBusy || saving}
+              onClick={onUpdateInPlace}
+            >
+              {inPlaceBusy
+                ? "rebuilding…"
+                : `rebuild ${selectedSaved.name} in place`}
+            </button>
+
+            <p className="muted" style={{ margin: "14px 0 4px" }}>
+              <strong>…or save as a new version</strong> — keeps the
+              loaded curve untouched as the historical record.
+            </p>
+            <input
+              type="text"
+              placeholder={`${selectedSaved.name}_v2`}
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+            />
+            <textarea
+              placeholder="notes (optional)"
+              value={saveNotes}
+              onChange={(e) => setSaveNotes(e.target.value)}
+              rows={3}
+              style={{ width: "100%", marginTop: 6 }}
+            />
+            {selectedSaved.deal_id && (
+              <label className="chk-inline" style={{ marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  checked={takeOverDeal}
+                  onChange={(e) => setTakeOverDeal(e.target.checked)}
+                />{" "}
+                replace {selectedSaved.name} in deal{" "}
+                {deals.find((d) => d.id === selectedSaved.deal_id)?.name ??
+                  "(unknown)"}
+              </label>
+            )}
+            {saveError && (
+              <div className="alert alert-error" style={{ marginTop: 8 }}>
+                {saveError}
+              </div>
+            )}
+            <button
+              type="button"
+              className="btn-primary"
+              disabled={!saveName.trim() || saving}
+              onClick={onSave}
+              style={{ marginTop: 8 }}
+            >
+              {saving
+                ? "saving…"
+                : `save new version (${selectedSaved.included_api10s.length} wells)`}
+            </button>
+          </section>
+        )}
 
         {!selectedSaved && (
           <section className="filter-section">
@@ -1048,6 +1280,29 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               label="Wells"
               value={selectedSaved.included_api10s.length.toString()}
             />
+            <button
+              type="button"
+              className="link-btn"
+              style={{ fontSize: 11, textAlign: "left" }}
+              title="Open these wells in the Review tab to QC the global forecasts (probit, Novi divergence, per-well fits) before saving a new version. No re-fit runs — Review only fits on the map-tab Forecast button."
+              onClick={() => {
+                const st = useMapStore.getState();
+                // Make this curve's wells the Review tab's working
+                // set. Review fetches existing forecasts for whatever
+                // forecastApi10s holds — previously only the map-tab
+                // Forecast flow ever set it, so a loaded curve's wells
+                // couldn't be QC'd there at all.
+                st.setForecastApi10s(selectedSaved.included_api10s);
+                // A #/type-curves/{id} detail hash (left by the
+                // workspace back-nav) FORCES the TC tab in App's
+                // routing — clear it or this page switch is silently
+                // swallowed.
+                navigateHash("");
+                st.setCurrentPage("review");
+              }}
+            >
+              review {selectedSaved.included_api10s.length} forecasts in Review tab →
+            </button>
             <Stat
               label="Normalization"
               value={normalizationLabel(selectedSaved.normalization_basis)}
@@ -1268,6 +1523,7 @@ function normalizationLabel(basis: string): string {
 
 function alignmentLabel(method: string): string {
   switch (method) {
+    case "peak_ramp": return "Peak-aligned + ramp";
     case "first_prod_month": return "First-prod month (incl. ramp-up)";
     case "peak_month": return "Peak month (decline-only)";
     default: return method;
@@ -1275,9 +1531,11 @@ function alignmentLabel(method: string): string {
 }
 
 function xAxisLabel(method: string): string {
-  return method === "first_prod_month"
-    ? "Months since first prod"
-    : "Months since peak";
+  switch (method) {
+    case "first_prod_month": return "Months since first prod";
+    case "peak_ramp": return "Months (peak-aligned, ramp lookback)";
+    default: return "Months since peak";
+  }
 }
 
 function fmtEur(v: number | null | undefined): string {
@@ -1310,10 +1568,10 @@ function fitSignature(row: TypeCurveRow): string {
 
 // Average days per month for cum integration. The aggregated percentile
 // rates are calendar-day rates (e.g. BOPD averaged across the month),
-// so monthly volume = rate × days_per_month. Using the long-run average
-// (365.25 / 12) keeps the cum from drifting against the per-well calday
-// totals the backend would compute for an EUR.
-const DAYS_PER_MONTH = 30.4375;
+// so monthly volume = rate × days_per_month. 365/12 matches the
+// backend's DAYS_PER_YEAR / 12 convention (fit/EUR math, export cums)
+// so cums computed on either side of the API agree exactly.
+const DAYS_PER_MONTH = 365 / 12;
 
 // Horizon for the full-forecast charts in the right column. 50 yr × 12 mo
 // matches the backend's per-percentile evaluation horizon and the CSV

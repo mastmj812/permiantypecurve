@@ -19,6 +19,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { type ForecastRow } from "../api/forecasts";
 import { getStoredToken } from "../api/auth";
+import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
 import { fetchWellsticks, type WellstickFeatureCollection } from "../api/wells";
 
 const SOURCE_ID = "review-wellsticks";
@@ -42,6 +43,13 @@ const SECTIONS_FILL_LAYER = "review-sections-fill";
 const SECTIONS_LINE_LAYER = "review-sections-line";
 const SECTIONS_LABEL_LAYER = "review-sections-label";
 const SECTIONS_MIN_ZOOM = 11;
+
+// Uploaded acreage polygons — always-on context layer, same as the
+// Map tab. Fetched once from /api/deals/polygons.geojson and rendered
+// in the shared ACREAGE_COLOR at every zoom.
+const DEALS_SOURCE_ID = "review-deal-polygons";
+const DEALS_FILL_LAYER = "review-deal-polygons-fill";
+const DEALS_LINE_LAYER = "review-deal-polygons-line";
 
 // Same label-key fallback chain MapView uses — OTLS GLO export columns
 // vary in casing across vintages.
@@ -393,7 +401,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
     } else {
       map.setFilter(LAYER_ID, [
         "==",
-        ["get", "formation"],
+        ["get", "formation_blueox"],
         formationFilter,
       ]);
     }
@@ -523,6 +531,48 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
         console.error(e);
         setSectionsError(String(e));
       });
+  }, [styleLoaded]);
+
+  // -------------- Acreage polygons (uploaded shapefiles) --------------
+  // Always-on overlay mirroring the Map tab. Fetch once on first
+  // styleLoaded; a missing/empty set is a no-op. Rendered in the shared
+  // ACREAGE_COLOR so the Review map matches the Map tab.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map || map.getSource(DEALS_SOURCE_ID)) return;
+    let cancelled = false;
+    fetchDealPolygonGeoJSON()
+      .then((fc) => {
+        if (cancelled || map.getSource(DEALS_SOURCE_ID)) return;
+        if (!fc.features.length) return;
+        map.addSource(DEALS_SOURCE_ID, {
+          type: "geojson",
+          data: fc as unknown as GeoJSON.FeatureCollection,
+        });
+        map.addLayer({
+          id: DEALS_FILL_LAYER,
+          type: "fill",
+          source: DEALS_SOURCE_ID,
+          paint: { "fill-color": ACREAGE_COLOR, "fill-opacity": 0.15 },
+        });
+        map.addLayer({
+          id: DEALS_LINE_LAYER,
+          type: "line",
+          source: DEALS_SOURCE_ID,
+          paint: {
+            "line-color": ACREAGE_COLOR,
+            "line-width": 1.6,
+            "line-opacity": 0.95,
+          },
+        });
+      })
+      .catch((e) => {
+        console.warn("review acreage polygons fetch failed", e);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [styleLoaded]);
 
   // -------------- fit bounds once data arrives --------------
@@ -697,7 +747,9 @@ function buildReviewPopupHtml(p: Record<string, unknown>): string {
       <div class="mtt-name">${headline}</div>
       ${sub}
       <table class="mtt-table">
-        <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
+        <tr><td>Formation</td><td>${escHtml(p.formation_blueox)}${
+          p.formation ? ` <span class="muted">(${escHtml(p.formation)})</span>` : ""
+        }</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.well_vintage_year)}</td></tr>
         <tr><td>Lateral</td><td>${fmtIntHtml(p.well_lateral_ft)} ft</td></tr>

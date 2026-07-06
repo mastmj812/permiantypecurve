@@ -12,7 +12,11 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
-import { fetchDealPolygonGeoJSON } from "../api/dealPolygons";
+import {
+  ACREAGE_COLOR,
+  NO_SOURCE_FILE,
+  fetchDealPolygonGeoJSON,
+} from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
 import {
@@ -140,6 +144,11 @@ export function MapView() {
   // One reusable popup for hover info — avoids flicker from creating /
   // destroying a Popup per mousemove. Cleaned up implicitly by map.remove().
   const popupRef = useRef<maplibregl.Popup | null>(null);
+  // Monotonic sequence for click-selection summaries. Two quick clicks
+  // overlap their summaryForApi10s requests; without this guard the
+  // slower (older) response can resolve last and reset the selection
+  // to the older set — a well visibly highlights then silently drops.
+  const clickSeqRef = useRef(0);
   const [tilesMissing, setTilesMissing] = useState(false);
   const [blocksError, setBlocksError] = useState<string | null>(null);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
@@ -241,8 +250,19 @@ export function MapView() {
           if (!api10) return;
           toggleApi10(api10);
           const nextSet = new Set(useMapStore.getState().selectedApi10s);
-          const summary = await summaryForApi10s(Array.from(nextSet));
-          setSelection(Array.from(nextSet), summary);
+          const seq = ++clickSeqRef.current;
+          try {
+            const summary = await summaryForApi10s(Array.from(nextSet));
+            // A newer click superseded this request — drop the stale
+            // result instead of resetting the selection to nextSet.
+            if (seq !== clickSeqRef.current) return;
+            setSelection(Array.from(nextSet), summary);
+          } catch (e) {
+            // toggleApi10 already updated the store, so the highlight
+            // stays consistent with what the user clicked — only the
+            // drawer summary stats may be stale.
+            console.error("click selection summary failed", e);
+          }
         },
       });
       drawer.install();
@@ -535,20 +555,9 @@ export function MapView() {
       .then((fc) => {
         if (cancelled) return;
         useMapStore.getState().setDealPolygons(fc);
-        // Default visibility: all deals ON. Only initialize keys we
-        // haven't seen yet so user toggles aren't clobbered on a
-        // post-upload refetch.
-        const cur = useMapStore.getState().dealVisibility;
-        const next = { ...cur };
-        for (const f of fc.features) {
-          const k = f.properties.visibility_key;
-          if (next[k] === undefined) next[k] = true;
-        }
-        // setState in one shot rather than per-key to avoid N renders.
-        useMapStore.setState({ dealVisibility: next });
       })
       .catch((e) => {
-        console.warn("deal polygons fetch failed", e);
+        console.warn("acreage polygons fetch failed", e);
       });
     return () => {
       cancelled = true;
@@ -578,8 +587,8 @@ export function MapView() {
         type: "fill",
         source: DEALS_SOURCE_ID,
         paint: {
-          "fill-color": ["get", "color"],
-          "fill-opacity": 0.18,
+          "fill-color": ACREAGE_COLOR,
+          "fill-opacity": 0.15,
         },
       });
       map.addLayer({
@@ -587,7 +596,7 @@ export function MapView() {
         type: "line",
         source: DEALS_SOURCE_ID,
         paint: {
-          "line-color": ["get", "color"],
+          "line-color": ACREAGE_COLOR,
           "line-width": 1.6,
           "line-opacity": 0.95,
         },
@@ -595,9 +604,10 @@ export function MapView() {
     }
   }, [dealPolygons, styleLoaded]);
 
-  // Visibility filter — read the visibility_key off each feature and
-  // include only those whose store flag is true (default true if the
-  // key isn't in the map yet, e.g. the initial pre-fetch render).
+  // Per-shapefile visibility — hide features whose source_file is
+  // toggled off in the manage modal. Missing/true = visible. Legacy
+  // rows with a null source_file fall into the NO_SOURCE_FILE bucket
+  // via coalesce so they can be toggled too.
   useEffect(() => {
     if (!styleLoaded) return;
     const map = mapRef.current;
@@ -606,14 +616,16 @@ export function MapView() {
     const hidden = Object.entries(dealVisibility)
       .filter(([, v]) => !v)
       .map(([k]) => k);
-    // ["!", ["in", ["get", "visibility_key"], ["literal", [hidden...]]]]
-    // — show every feature except those whose key is in the hidden set.
     const filter: maplibregl.FilterSpecification =
       hidden.length === 0
         ? (["literal", true] as unknown as maplibregl.FilterSpecification)
         : ([
             "!",
-            ["in", ["get", "visibility_key"], ["literal", hidden]],
+            [
+              "in",
+              ["coalesce", ["get", "source_file"], NO_SOURCE_FILE],
+              ["literal", hidden],
+            ],
           ] as unknown as maplibregl.FilterSpecification);
     map.setFilter(DEALS_FILL_LAYER, filter);
     map.setFilter(DEALS_LINE_LAYER, filter);
@@ -683,7 +695,9 @@ function buildWellPopupHtml(p: Record<string, unknown>): string {
       <div class="mtt-name">${headline}</div>
       <table class="mtt-table">
         ${api10Row}
-        <tr><td>Formation</td><td>${escHtml(p.formation)}</td></tr>
+        <tr><td>Formation</td><td>${escHtml(p.formation_blueox)}${
+          p.formation ? ` <span class="muted">(${escHtml(p.formation)})</span>` : ""
+        }</td></tr>
         <tr><td>Operator</td><td>${escHtml(p.operator)}</td></tr>
         <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.vintage_year)}</td></tr>
