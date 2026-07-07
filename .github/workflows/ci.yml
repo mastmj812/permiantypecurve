@@ -1,11 +1,14 @@
-# CI: run the backend test suite (incl. the real-well golden baselines —
-# the tripwire for silent numeric drift) and the frontend typecheck +
-# unit tests on every push/PR. The suite is pure-function (no database
-# required), so this stays fast and dependency-light.
+# CI: run the backend test suite (incl. the real-well golden baselines +
+# the money test — tripwires for silent numeric drift) and the frontend
+# typecheck + unit tests on every push/PR. The suite is pure-function (no
+# database required), so this stays fast and dependency-light.
 #
-# eslint is deliberately NOT in CI yet: the repo carries known lint debt
-# (maplibre typing false-positives) that would make the job permanently
-# red. Add `npm run lint` once that debt is cleared.
+# eslint runs as a NON-BLOCKING `lint` job (continue-on-error): the repo
+# carries known lint debt (83 errors / 12 warnings, incl. maplibre
+# no-unnecessary-type-assertion false-positives that --fix breaks), tracked
+# in https://github.com/mastmj812/permiantypecurve/issues/2. It's visible on
+# every run but doesn't block merges. Drop continue-on-error once that debt
+# is cleared to make lint a required check.
 name: ci
 
 on:
@@ -47,3 +50,21 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  # Non-blocking: surfaces eslint debt on every run without turning trunk red.
+  # Tracked in issue #2; drop continue-on-error to make it required once clear.
+  lint:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
