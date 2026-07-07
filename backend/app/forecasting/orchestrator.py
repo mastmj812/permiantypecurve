@@ -385,13 +385,96 @@ def stream_rate_at_first_prod(monthly: pd.DataFrame, stream: str) -> float | Non
     return float(val)
 
 
+class ManualOverrideGuardError(RuntimeError):
+    """A bulk refit was asked to run over forecast rows in the ambiguous
+    ``manual_override=True, locked=False`` state.
+
+    Such a row carries an engineer's edit (``manual_override``) that was never
+    locked. ``_persist`` only protects ``locked`` rows, so a blind bulk refit
+    would silently overwrite the edited params AND reset ``manual_override`` to
+    False — losing both the value and its provenance. The remedy is to triage
+    first (lock the keepers, clear ``manual_override`` on the rest); this guard
+    refuses the refit until that ambiguous set is empty so the loss can never
+    recur.
+    """
+
+    def __init__(self, at_risk: list[tuple[str, str]]) -> None:
+        self.at_risk = at_risk
+        n = len(at_risk)
+        sample = ", ".join(f"{a}/{s}" for a, s in at_risk[:5])
+        more = "" if n <= 5 else f" (+{n - 5} more)"
+        super().__init__(
+            f"Refusing bulk refit: {n} forecast row(s) are manual_override=True "
+            f"and locked=False and would be silently overwritten. Lock the "
+            f"keepers and clear manual_override on the rest (triage), then "
+            f"retry. At risk: {sample}{more}."
+        )
+
+
+def at_risk_forecasts(forecasts: Iterable[Forecast]) -> list[Forecast]:
+    """Pure predicate for the rows a bulk refit would silently overwrite:
+    ``manual_override=True`` and ``locked=False``.
+
+    ``locked`` rows are already protected by ``_persist``; an unlocked manual
+    edit is the ambiguous "bomb" state. Kept as a pure function (mirroring the
+    SQL in ``find_at_risk_rows``) so the guard's rule is unit-testable without
+    a database, matching this repo's DB-free test style."""
+    return [f for f in forecasts if f.manual_override and not f.locked]
+
+
+def find_at_risk_rows(
+    session: Session, api10s: Iterable[str] | None = None
+) -> list[tuple[str, str]]:
+    """``(api10, stream)`` for every forecast in the ambiguous
+    ``manual_override=True, locked=False`` state, optionally scoped to
+    ``api10s``.
+
+    Authoritative SQL mirror of ``at_risk_forecasts``, used by the bulk-refit
+    guard and the dry-run. An empty list means a bulk refit is safe."""
+    stmt = select(Forecast.api10, Forecast.stream).where(
+        Forecast.manual_override.is_(True),
+        Forecast.locked.is_(False),
+    )
+    if api10s is not None:
+        stmt = stmt.where(Forecast.api10.in_(list(api10s)))
+    out: list[tuple[str, str]] = []
+    for row in session.execute(stmt).all():
+        api10 = row[0]
+        stream = row[1]
+        out.append((api10, stream.value if isinstance(stream, Stream) else str(stream)))
+    return out
+
+
+def bulk_refit_dry_run(
+    session: Session, api10s: Iterable[str] | None = None
+) -> list[tuple[str, str]]:
+    """Report the ``(api10, stream)`` rows a bulk refit would refuse to touch —
+    the ambiguous ``manual_override=True, locked=False`` set — WITHOUT fitting
+    or persisting anything. An empty list means a bulk refit is safe. This is
+    the operational counterpart to the guard in ``forecast_wells``."""
+    return find_at_risk_rows(session, api10s)
+
+
 def forecast_wells(
     session: Session,
     api10s: Iterable[str],
     *,
     config: ForecastConfig | None = None,
 ) -> dict[str, dict[str, ForecastResult | None]]:
-    """Bulk-forecast helper for the batch endpoint."""
+    """Bulk-forecast helper for the batch endpoint.
+
+    Guard: refuses to run if any target row is in the ambiguous
+    ``manual_override=True, locked=False`` state (raises
+    ``ManualOverrideGuardError``). ``_persist`` protects ``locked`` rows but
+    overwrites unlocked manual edits, so a blind bulk refit would silently
+    wipe them — the guard forces those rows to be triaged (locked or cleared)
+    first. ``reset_forecast_flags --refit`` clears the flags before calling
+    this, so that sanctioned path passes cleanly; the batch API refit is the
+    path this actually protects."""
+    api10s = list(api10s)
+    at_risk = find_at_risk_rows(session, api10s)
+    if at_risk:
+        raise ManualOverrideGuardError(at_risk)
     results: dict[str, dict[str, ForecastResult | None]] = {}
     for api10 in api10s:
         results[api10] = forecast_well(session, api10, config=config)
