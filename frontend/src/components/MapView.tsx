@@ -19,6 +19,7 @@ import {
 } from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { DrawingController } from "../map/drawing";
+import { latestWins } from "../map/sequenced";
 import {
   WELLS_INTERACTIVE_LAYERS,
   WELLS_LINES_SOLID_COHORT_LAYER,
@@ -218,25 +219,36 @@ export function MapView() {
       map.addLayer(wellsLinesSolidCohortLayer);
       map.addLayer(wellsLinesSolidLayer);
 
+      // Lasso and box selections share one selection channel, so a
+      // single latest-wins runner guards both: if the user draws again
+      // before the previous spatial request resolves, the older (slower)
+      // response is dropped instead of clobbering the fresh selection.
+      // (onClick has its own equivalent guard via clickSeqRef.)
+      const runSpatialSelect = latestWins<
+        Awaited<ReturnType<typeof selectWellsSpatial>>
+      >((r) => setSelection(r.api10s, r.summary));
+
       const drawer = new DrawingController(map, {
         onPolygon: async (polygon) => {
           try {
-            const r = await selectWellsSpatial({
-              polygon,
-              filters: useMapStore.getState().filters,
-            });
-            setSelection(r.api10s, r.summary);
+            await runSpatialSelect(() =>
+              selectWellsSpatial({
+                polygon,
+                filters: useMapStore.getState().filters,
+              }),
+            );
           } catch (e) {
             console.error("lasso selection failed", e);
           }
         },
         onBbox: async (bbox) => {
           try {
-            const r = await selectWellsSpatial({
-              bbox,
-              filters: useMapStore.getState().filters,
-            });
-            setSelection(r.api10s, r.summary);
+            await runSpatialSelect(() =>
+              selectWellsSpatial({
+                bbox,
+                filters: useMapStore.getState().filters,
+              }),
+            );
           } catch (e) {
             console.error("box selection failed", e);
           }
