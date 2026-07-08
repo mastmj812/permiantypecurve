@@ -143,13 +143,14 @@ export function InspectProductionCharts({
     return out;
   }, [curves, api10s, stream, normalize, wellsByApi10]);
 
-  // The "hide entirely" rule from the plan: fewer than 2 wells with
-  // any non-null production → don't bother showing the panel. Caller
+  // Show the overlay for any well that has non-null production. A single
+  // well renders its own rate/cum curve (no comparison, but still a valid
+  // QC read); zero wells-with-history is the only case we hide. Caller
   // can still render whatever headers/footers it wants around us.
   const wellsWithData = series.filter((s) =>
     s.rate.some((v) => v != null && v > 0),
   );
-  const showCharts = wellsWithData.length >= 2;
+  const showCharts = wellsWithData.length >= 1;
 
   if (loading) {
     return <div className="inspect-charts-empty">Loading production…</div>;
@@ -160,7 +161,7 @@ export function InspectProductionCharts({
   if (!showCharts) {
     return (
       <div className="inspect-charts-empty">
-        Production overlay hidden — needs ≥2 wells with history.
+        Production overlay hidden — no wells with history.
       </div>
     );
   }
