@@ -154,7 +154,7 @@ export async function saveTypeCurve(args: {
       filter_spec: args.filter_spec ?? {},
       included_api10s: args.included_api10s,
       normalization_basis: args.normalization_basis ?? "per_lateral_ft",
-      alignment_method: args.alignment_method ?? "first_prod_month",
+      alignment_method: args.alignment_method ?? "peak_ramp",
       n_months: args.n_months ?? null,
       fit_overrides: args.fit_overrides ?? null,
       take_over_deal: args.take_over_deal ?? false,

@@ -58,10 +58,14 @@ log = get_logger("api.type_curves")
 class ComputeRequest(BaseModel):
     api10s: list[str] = Field(min_length=1, max_length=500)
     normalization_basis: str = "per_lateral_ft"
-    # Default is first-prod-month — includes ramp-up months, which the
-    # economics team needs for cash-flow modeling. peak_month is still
-    # supported for engineers doing pure decline-curve analysis.
-    alignment_method: str = "first_prod_month"
+    # Default is peak_ramp — the alignment of record. It's peak-aligned
+    # with a ramp lookback, so it still carries the ramp-up months
+    # economics needs for cash-flow while fixing the staggered-peak qi/Di
+    # smear that biased first_prod_month EUR ~7% high in the audit.
+    # first_prod_month / peak_month stay selectable (legacy curves, pure
+    # decline analysis). The UI always sends this explicitly; this default
+    # governs programmatic callers that omit it.
+    alignment_method: str = "peak_ramp"
     n_months: int | None = Field(default=None, ge=1, le=240)
 
 
@@ -89,7 +93,9 @@ class SaveRequest(BaseModel):
     filter_spec: dict[str, Any] = Field(default_factory=dict)
     included_api10s: list[str] = Field(min_length=1, max_length=500)
     normalization_basis: str = "per_lateral_ft"
-    alignment_method: str = "first_prod_month"
+    # peak_ramp is the alignment of record (see ComputeRequest); a save
+    # that omits this persists under peak_ramp, not the legacy default.
+    alignment_method: str = "peak_ramp"
     n_months: int | None = Field(default=None, ge=1, le=240)
     # Optional per-stream tweaked fits. When present, the computed series'
     # streams[<stream>].fitted is replaced with a re-evaluation of these

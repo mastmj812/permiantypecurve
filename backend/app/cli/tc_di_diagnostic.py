@@ -36,7 +36,7 @@ Usage:
 
     # Unsaved cohort — paste the 31 api10s (or point at a file, one/line):
     python -m app.cli.tc_di_diagnostic --api10s 42301...,42389... \
-        --basis per_lateral_ft --alignment first_prod_month
+        --basis per_lateral_ft --alignment peak_ramp
     python -m app.cli.tc_di_diagnostic --api10s-file cohort.txt
 
 When several versions share a name, the most recent (by created_at) is
@@ -193,7 +193,7 @@ def _pct(x: float) -> str:
     return f"{x * 100:.1f}%"
 
 
-def main(argv: list[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Decompose the Review-vs-TypeCurve Di gap for a cohort."
     )
@@ -215,8 +215,16 @@ def main(argv: list[str] | None = None) -> int:
         help="File of api10s, one per line, for an UNSAVED cohort.",
     )
     parser.add_argument("--basis", default="per_lateral_ft")
-    parser.add_argument("--alignment", default="first_prod_month")
+    # Match the API/aggregation default (peak_ramp is the alignment of
+    # record). An unsaved-cohort diagnostic that omits --alignment should
+    # reproduce what the app aggregates, not the legacy first_prod_month.
+    parser.add_argument("--alignment", default="peak_ramp")
     parser.add_argument("--log-level", default="WARNING")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     configure_logging(args.log_level)
 
