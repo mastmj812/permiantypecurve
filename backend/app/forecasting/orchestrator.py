@@ -69,6 +69,34 @@ def df_terminal_for_subbasin(subbasin: str | None, config: ForecastConfig) -> fl
     return config.df_terminal_per_year
 
 
+def df_terminal_for_cohort(
+    subbasins: Iterable[str | None], config: ForecastConfig
+) -> float:
+    """Terminal Df for a type-curve cohort's aggregate P50 fit.
+
+    The cohort's P50 is a single aggregate series, so one Df must be
+    imposed on the fit. Policy (of record): use Midland's shallower
+    ``df_terminal_midland`` when Midland wells are the MAJORITY (> 50%) of
+    the cohort, else the Delaware/default ``df_terminal_per_year`` — the
+    per-well ``df_terminal_for_subbasin`` rule (Midland 0.06, else 0.08)
+    lifted to the cohort grain. Empty cohort → the default.
+
+    NULL / blank subbasins count toward the total but never as Midland,
+    so a cohort that is only a plurality Midland (not a majority) keeps
+    the default 0.08 — deliberately conservative about shallowing the
+    tail (which raises EUR).
+    """
+    total = 0
+    midland = 0
+    for sb in subbasins:
+        total += 1
+        if sb and sb.strip().lower() == "midland":
+            midland += 1
+    if total > 0 and midland / total > 0.5:
+        return config.df_terminal_midland
+    return config.df_terminal_per_year
+
+
 def detect_stream_peaks(
     monthly: pd.DataFrame,
 ) -> dict[str, PeakResult | None]:

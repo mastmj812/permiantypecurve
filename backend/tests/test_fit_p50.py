@@ -76,6 +76,26 @@ def test_smoothed_rate_array_length_matches_input() -> None:
     assert len(r["smoothed_rate"]) == 24
 
 
+def test_basin_aware_df_flows_through_fit_and_moves_eur() -> None:
+    # The cohort-Df wiring depends on df_terminal_per_year actually
+    # reaching the imposed terminal decline and changing the EUR. Fit the
+    # same P50 with Delaware's 0.08 (nominal, ~7.7% eff yr-1) and
+    # Midland's shallower 0.06 (~5.8% eff): the fitted Df must track the
+    # input, and the shallower terminal must lengthen the tail → higher
+    # 50-yr EUR. Guards against a regression where the param is dropped.
+    truth = {"qi": 600.0, "Di": 0.85, "b": 1.2, "Df": 0.08}
+    p50 = _synthesize_p50(**truth, n_months=48)
+
+    r_delaware = fit_p50_series(p50, df_terminal_per_year=0.08)
+    r_midland = fit_p50_series(p50, df_terminal_per_year=0.06)
+    assert r_delaware is not None and r_midland is not None
+
+    assert r_delaware["Df"] == pytest.approx(0.08, abs=1e-6)
+    assert r_midland["Df"] == pytest.approx(0.06, abs=1e-6)
+    # Shallower terminal decline → longer-lived tail → larger EUR.
+    assert r_midland["eur_per_unit"] > r_delaware["eur_per_unit"]
+
+
 def _synthesize_ramp_arps(
     *, qo: float, qi: float, peak_index: int, Di: float, b: float, Df: float, n_months: int
 ) -> list[float]:
