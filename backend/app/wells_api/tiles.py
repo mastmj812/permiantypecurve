@@ -100,9 +100,21 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
 
 def _points_sql() -> str:
     """Tile content for z < 9: well surface points (or centroid fallback)."""
+    # The geom columns are stored in EPSG:4326 with per-column GiST
+    # indexes (ix_wells_{sh_geom,bh_geom,wellstick}_gist). The tile filter
+    # therefore compares the BARE 4326 columns against the tile envelope
+    # transformed INTO 4326 — wrapping the columns in ST_Transform(...,
+    # 3857) here would hide them from the planner and force a seq scan.
+    # The bbox-overlap operator (&&) is exactly what the GiST index
+    # accelerates, and it's OR'd per column so the planner can BitmapOr
+    # the three indexes; ST_AsMVTGeom below still does the exact clip, so
+    # the emitted feature set is unchanged. Only ST_AsMVTGeom transforms
+    # to 3857 (tile coordinate space) — on already-filtered rows.
     return """
 WITH bounds AS (
-  SELECT ST_TileEnvelope(:z, :x, :y) AS env_3857
+  SELECT
+    ST_TileEnvelope(:z, :x, :y) AS env_3857,
+    ST_Transform(ST_TileEnvelope(:z, :x, :y), 4326) AS env_4326
 ),
 mvtgeom AS (
   SELECT
@@ -125,9 +137,10 @@ mvtgeom AS (
     ) AS geom
   FROM wells w
   WHERE COALESCE(w.sh_geom, w.wellstick, w.bh_geom) IS NOT NULL
-    AND ST_Intersects(
-      ST_Transform(COALESCE(w.sh_geom, ST_Centroid(w.wellstick), w.bh_geom), 3857),
-      (SELECT env_3857 FROM bounds)
+    AND (
+         w.sh_geom   && (SELECT env_4326 FROM bounds)
+      OR w.wellstick && (SELECT env_4326 FROM bounds)
+      OR w.bh_geom   && (SELECT env_4326 FROM bounds)
     )
     AND ({filter_sql})
 )
@@ -139,9 +152,16 @@ WHERE geom IS NOT NULL
 
 def _lines_sql() -> str:
     """Tile content for z ≥ 9: full wellstick LINESTRINGs."""
+    # Filter on the BARE 4326 wellstick column vs the envelope transformed
+    # into 4326 so the GiST index (ix_wells_wellstick_gist) drives the
+    # scan — this is the perf-critical high-zoom path. ST_Intersects on a
+    # bare column still uses the index (its internal && bbox test hits the
+    # GiST); only the ST_AsMVTGeom projection transforms to 3857.
     return """
 WITH bounds AS (
-  SELECT ST_TileEnvelope(:z, :x, :y) AS env_3857
+  SELECT
+    ST_TileEnvelope(:z, :x, :y) AS env_3857,
+    ST_Transform(ST_TileEnvelope(:z, :x, :y), 4326) AS env_4326
 ),
 mvtgeom AS (
   SELECT
@@ -161,10 +181,7 @@ mvtgeom AS (
     ) AS geom
   FROM wells w
   WHERE w.wellstick IS NOT NULL
-    AND ST_Intersects(
-      ST_Transform(w.wellstick, 3857),
-      (SELECT env_3857 FROM bounds)
-    )
+    AND ST_Intersects(w.wellstick, (SELECT env_4326 FROM bounds))
     AND ({filter_sql})
 )
 SELECT ST_AsMVT(mvtgeom.*, 'wells_lines', 4096, 'geom')

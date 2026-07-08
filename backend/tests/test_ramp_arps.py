@@ -19,6 +19,7 @@ from app.forecasting.ramp_arps import (
     build_ramp_arps_rate,
     compute_ramp_eur,
     compute_total_eur,
+    evaluate_fit,
     evaluate_well_rate,
     model_cum_at_t,
 )
@@ -188,6 +189,33 @@ def test_compute_total_eur_adds_ramp_when_present() -> None:
         qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months
     )
     assert total == pytest.approx(arps_post_peak + ramp, rel=1e-9)
+
+
+def test_evaluate_fit_eur_matches_compute_total_eur() -> None:
+    # evaluate_fit powers the TC /preview and save-with-override paths;
+    # its eur_per_unit must equal compute_total_eur for the same params.
+    # Before the fix, evaluate_fit integrated the Arps tail over the FULL
+    # horizon and then added ramp_eur, double-counting the peak_t window.
+    # The overlap is a far-tail slice (t≈horizon-peak_t..horizon, where
+    # the rate is near-terminal) so it is tiny in magnitude, but it
+    # desyncs ``remaining = total - model_cum_at_t`` at t == horizon and
+    # makes the manual-override EUR disagree with the auto-fit convention.
+    peak_index_months = 3
+    params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": peak_index_months}
+    horizon = 50.0
+    expected = compute_total_eur(
+        model_type="modified_hyperbolic", params=params, horizon_years=horizon,
+    )
+    fitted = evaluate_fit(
+        qi=_BASE_PARAMS["qi"], Di=_BASE_PARAMS["Di"], b=_BASE_PARAMS["b"],
+        Df=_BASE_PARAMS["Df"], qo=200.0, peak_index=peak_index_months,
+        n_months=600, horizon_years=horizon,
+    )
+    assert fitted["eur_per_unit"] == pytest.approx(expected, rel=1e-9)
+    # The two reported pieces must sum to the reported total.
+    assert fitted["ramp_eur"] + fitted["arps_eur"] == pytest.approx(
+        fitted["eur_per_unit"], rel=1e-12
+    )
 
 
 def test_compute_total_eur_falls_back_to_arps_when_missing() -> None:

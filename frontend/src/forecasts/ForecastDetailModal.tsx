@@ -18,6 +18,7 @@ import {
   putForecastOverride,
 } from "../api/typeCurves";
 import { DeclineChart, type SeriesPoint } from "./DeclineChart";
+import { runRevert } from "./revert";
 
 interface TcContext {
   // Type curve the modal is editing FOR — Save writes a per-TC
@@ -483,17 +484,28 @@ export function ForecastDetailModal({
 
   async function revertOverride() {
     if (!tcContext) return;
-    const resolved = await deleteForecastOverride(tcContext.id, api10, stream);
-    tcContext.onOverrideChanged(api10, stream, resolved.source, resolved.payload);
-    setPreviewPoints([]);
-    setPreviewCumPoints([]);
-    setPreviewEur(null);
-    setPreviewEurDisplayed(null);
-    setPreviewEurRemaining(null);
+    const ctx = tcContext;
+    // A failed override-delete must surface (like save()/toggleLock()),
+    // not silently look reverted. runRevert clears the error, deletes,
+    // and only applies the reverted state on success; on failure it sets
+    // saveError and returns false so we skip the refetch below.
+    const ok = await runRevert({
+      deleteOverride: () => deleteForecastOverride(ctx.id, api10, stream),
+      applyResolved: (resolved) => {
+        ctx.onOverrideChanged(api10, stream, resolved.source, resolved.payload);
+        setPreviewPoints([]);
+        setPreviewCumPoints([]);
+        setPreviewEur(null);
+        setPreviewEurDisplayed(null);
+        setPreviewEurRemaining(null);
+      },
+      setError: setSaveError,
+    });
+    if (!ok) return;
     // Refetch with tc_id so the chart returns to the global fit (or
     // "missing" state) now that the override is gone.
     try {
-      const r = await fetchWellCurves(api10, 50, tcContext.id);
+      const r = await fetchWellCurves(api10, 50, ctx.id);
       const found = r.streams.find((s) => s.stream === stream) ?? null;
       setCurves(found);
     } catch (e) {

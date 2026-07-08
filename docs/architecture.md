@@ -52,7 +52,7 @@ flowchart LR
 flowchart TD
   prod["production_monthly<br/>(rate_calday_*)"]
   peak["peak_detection<br/>(3-mo rolling max,<br/>tied-max ⇒ highest actual rate)"]
-  fit["fit_rate_cum<br/>(scipy.optimize.curve_fit,<br/>bounds Di∈[0.3,5], b∈[0.7,1.5])"]
+  fit["fit_rate_cum<br/>(scipy.optimize.curve_fit,<br/>nominal Di∈[0.5,4.0], b∈[0.9,1.2])"]
   result["forecasts row<br/>(qi, Di, b, Df, EUR, R², fit_at_bound)"]
 
   prod --> peak --> fit --> result
@@ -65,7 +65,7 @@ flowchart TD
 flowchart TD
   fc["forecasts<br/>(per-well peak_month)"]
   pm["production_monthly<br/>(rate_calday_*)"]
-  loader["app.type_curves.loader<br/>(slice from first_prod OR peak)"]
+  loader["app.type_curves.loader<br/>(align: peak_ramp / first_prod / peak)"]
   agg["aggregate.py<br/>(percentiles + mean + well_count,<br/>per-1000-ft normalized)"]
   saved["type_curves row<br/>(series JSONB + filter_spec snapshot)"]
   zip["ZIP export<br/>(oil_rates.csv / gas / water / metadata)"]
@@ -91,9 +91,13 @@ flowchart TD
   is unreliable past month 1; calendar-day normalization yields stable
   type curves. Month-1 partial-month rule keeps producing-days as the
   denominator when the well started late in the calendar month.
-- **First-prod-month type-curve alignment by default** — includes 1–3
-  months of ramp-up, which matters for cash-flow and DCF modeling. Peak
-  alignment available as a per-curve option for pure decline analysis.
+- **`peak_ramp` type-curve alignment by default (new curves)** — every
+  well's peak sits at a common month index (the cohort-median ramp
+  length per stream), so cross-well percentiles see all peaks aligned
+  instead of smearing qi/Di across staggered onsets, while still
+  carrying real ramp months for facility buildout. `first_prod_month`
+  (t=0 at onset, ramp included) is retained for back-compat with curves
+  saved under it; `peak_month` gives pure post-peak decline with no ramp.
 - **JWT bearer auth on every /api/* route except health/auth/basemap** —
   basemap stays public because the MapLibre tile loader can't attach an
   Authorization header; health stays public so the login-page badge
@@ -110,18 +114,18 @@ flowchart TD
 | GET    | `/api/basemap/permian.pmtiles`      | Range-served PMTiles                 | —    |
 | GET    | `/api/basemap/plss_tx_nm.geojson`   | PLSS overlay                         | —    |
 | GET    | `/api/wells/tiles/{z}/{x}/{y}.mvt`  | Filtered MVT tiles                   | ✓    |
-| GET    | `/api/wells/{api14}`                | Well detail                          | ✓    |
+| GET    | `/api/wells/{api10}`                | Well detail                          | ✓    |
 | GET    | `/api/wells/filters/operators`      | Operator type-ahead                  | ✓    |
 | GET    | `/api/wells/filters/facets`         | Filter facets                        | ✓    |
 | POST   | `/api/wells/select`                 | Spatial selection + summary          | ✓    |
-| POST   | `/api/wells/summary`                | Summary for an api14 list            | ✓    |
+| POST   | `/api/wells/summary`                | Summary for an api10 list            | ✓    |
 | POST   | `/api/sync/run`                     | Kick off Enverus sync                | ✓    |
 | GET    | `/api/sync/status`                  | Sync job status                      | ✓    |
 | POST   | `/api/forecasts/batch`              | Batch fit                            | ✓    |
 | GET    | `/api/forecasts`                    | List forecasts (+ well attrs)        | ✓    |
 | GET    | `/api/forecasts/{id}`               | Single forecast                      | ✓    |
 | PATCH  | `/api/forecasts/{id}`               | Manual override                      | ✓    |
-| GET    | `/api/forecasts/{api14}/curves`     | History + forecast curves            | ✓    |
+| GET    | `/api/forecasts/{api10}/curves`     | History + forecast curves            | ✓    |
 | POST   | `/api/forecasts/preview`            | Live-edit preview                    | ✓    |
 | POST   | `/api/type-curves/compute`          | Live aggregation (no save)           | ✓    |
 | POST   | `/api/type-curves`                  | Save type curve                      | ✓    |

@@ -368,10 +368,17 @@ def evaluate_fit(
         qo=qo, qi=qi, peak_index=peak_index,
         Di=Di, b=b, Df=Df,
     )
+    # The ramp consumes peak_t years up front; integrate the Arps tail
+    # over the REMAINING (horizon - peak_t) years so ramp_eur + arps_eur
+    # spans exactly `horizon_years` of producing life. Integrating over
+    # the full horizon here would overlap the ramp window and inflate the
+    # total by a far-tail phantom slice — the same subtraction
+    # compute_total_eur applies (keep the two in lockstep).
+    peak_t = peak_index / 12.0 if peak_index and peak_index > 0 else 0.0
     arps_eur = compute_eur(
         "modified_hyperbolic",
         {"qi": qi, "Di": Di, "b": b, "Df": Df},
-        horizon_years=horizon_years,
+        horizon_years=max(0.0, horizon_years - peak_t),
     )
     ramp_eur = compute_ramp_eur(qo=qo, qi=qi, peak_index=peak_index)
     return {
