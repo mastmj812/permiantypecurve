@@ -12,6 +12,7 @@ to the smeared alignment.
 from __future__ import annotations
 
 from app.api.type_curves import ComputeRequest, SaveRequest
+from app.cli.tc_di_diagnostic import build_parser
 
 
 def test_compute_request_defaults_to_peak_ramp() -> None:
@@ -28,3 +29,17 @@ def test_explicit_alignment_is_still_honored() -> None:
     # The default must not clobber an explicit legacy choice.
     req = ComputeRequest(api10s=["4212345678"], alignment_method="first_prod_month")
     assert req.alignment_method == "first_prod_month"
+
+
+def test_cli_diagnostic_defaults_to_peak_ramp() -> None:
+    # The unsaved-cohort diagnostic should reproduce what the app
+    # aggregates by default, not the legacy first_prod_month.
+    args = build_parser().parse_args(["--api10s", "4212345678"])
+    assert args.alignment == "peak_ramp"
+
+
+def test_cli_diagnostic_explicit_alignment_honored() -> None:
+    args = build_parser().parse_args(
+        ["--api10s", "4212345678", "--alignment", "first_prod_month"]
+    )
+    assert args.alignment == "first_prod_month"
