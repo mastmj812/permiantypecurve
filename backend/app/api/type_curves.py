@@ -447,16 +447,34 @@ def _compute(
     # downstream economics export. R² is near 1.0 by construction.
     from dataclasses import replace
 
+    from app.forecasting.orchestrator import df_terminal_for_cohort
+    from app.forecasting.types import ForecastConfig
     from app.type_curves.fit_p50 import fit_p50_series
+
+    # Basin-aware terminal Df for the aggregate fit. The per-well
+    # forecasts already used a per-subbasin Df; the cohort's single P50
+    # series gets the dominant-subbasin Df (Midland 0.06 when Midland is
+    # the majority of the aggregated wells, else 0.08) so the published
+    # tail matches the cohort composition rather than always Delaware.
+    cohort_subbasins = (
+        session.execute(
+            select(Well.subbasin).where(
+                Well.api10.in_([fw.api10 for fw in forecast_wells])
+            )
+        )
+        .scalars()
+        .all()
+    )
+    cohort_df = df_terminal_for_cohort(cohort_subbasins, ForecastConfig())
 
     fitted_streams = {}
     for stream_name, stream in agg.streams.items():
-        fitted = fit_p50_series(stream.p50)
+        fitted = fit_p50_series(stream.p50, df_terminal_per_year=cohort_df)
         fitted_eur: dict[str, float | None] = {}
         fitted_per_pct: dict[str, dict[str, Any] | None] = {}
         for key in ("p10", "p25", "p50", "p75", "p90", "mean"):
             series = getattr(stream, key)
-            r = fit_p50_series(series)
+            r = fit_p50_series(series, df_terminal_per_year=cohort_df)
             fitted_eur[key] = r["eur_per_unit"] if r is not None else None
             if r is not None:
                 fitted_per_pct[key] = {
