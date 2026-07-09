@@ -12,12 +12,9 @@ import layers from "protomaps-themes-base";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
-import {
-  ACREAGE_COLOR,
-  NO_SOURCE_FILE,
-  fetchDealPolygonGeoJSON,
-} from "../api/dealPolygons";
+import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
+import { dealVisibilityFilter } from "../map/dealVisibility";
 import { DrawingController } from "../map/drawing";
 import { latestWins } from "../map/sequenced";
 import {
@@ -625,20 +622,7 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     if (!map.getLayer(DEALS_FILL_LAYER)) return;
-    const hidden = Object.entries(dealVisibility)
-      .filter(([, v]) => !v)
-      .map(([k]) => k);
-    const filter: maplibregl.FilterSpecification =
-      hidden.length === 0
-        ? (["literal", true] as unknown as maplibregl.FilterSpecification)
-        : ([
-            "!",
-            [
-              "in",
-              ["coalesce", ["get", "source_file"], NO_SOURCE_FILE],
-              ["literal", hidden],
-            ],
-          ] as unknown as maplibregl.FilterSpecification);
+    const filter = dealVisibilityFilter(dealVisibility);
     map.setFilter(DEALS_FILL_LAYER, filter);
     map.setFilter(DEALS_LINE_LAYER, filter);
   }, [dealVisibility, dealPolygons, styleLoaded]);

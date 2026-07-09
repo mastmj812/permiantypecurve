@@ -21,6 +21,8 @@ import { type ForecastRow } from "../api/forecasts";
 import { getStoredToken } from "../api/auth";
 import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
 import { fetchWellsticks, type WellstickFeatureCollection } from "../api/wells";
+import { dealVisibilityFilter } from "../map/dealVisibility";
+import { useMapStore } from "../store/mapStore";
 
 const SOURCE_ID = "review-wellsticks";
 const LAYER_ID = "review-wellsticks-line";
@@ -146,6 +148,12 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
   const [styleLoaded, setStyleLoaded] = useState(false);
   const [data, setData] = useState<WellstickFeatureCollection | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Per-shapefile acreage visibility set on the Map tab. The Review map
+  // mirrors those toggles rather than always showing every shapefile.
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  // Flips true once the acreage layers exist, so the visibility effect
+  // knows it can call setFilter on them (they're added async post-fetch).
+  const [dealsReady, setDealsReady] = useState(false);
   // Overlay-fetch errors are surfaced inline (small muted text in the
   // header) rather than as map-warning banners — the Review map is a
   // glance view, not a workflow surface, and a missing-GeoJSON message
@@ -566,6 +574,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
             "line-opacity": 0.95,
           },
         });
+        setDealsReady(true);
       })
       .catch((e) => {
         console.warn("review acreage polygons fetch failed", e);
@@ -574,6 +583,20 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
       cancelled = true;
     };
   }, [styleLoaded]);
+
+  // -------------- acreage per-shapefile visibility --------------
+  // Mirror the Map tab's per-shapefile toggles: hide features whose
+  // source_file is switched off. Re-applies whenever the toggles change
+  // or the layers first become available. Same filter the Map tab uses,
+  // so the two stay in lockstep.
+  useEffect(() => {
+    if (!styleLoaded || !dealsReady) return;
+    const map = mapRef.current;
+    if (!map || !map.getLayer(DEALS_FILL_LAYER)) return;
+    const filter = dealVisibilityFilter(dealVisibility);
+    map.setFilter(DEALS_FILL_LAYER, filter);
+    map.setFilter(DEALS_LINE_LAYER, filter);
+  }, [styleLoaded, dealsReady, dealVisibility]);
 
   // -------------- fit bounds once data arrives --------------
   const fittedRef = useRef(false);
