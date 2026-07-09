@@ -21,6 +21,7 @@ import { SlideCumChart } from "../components/slide/SlideCumChart";
 import { SlideMap } from "../components/slide/SlideMap";
 import { SlideParamTable } from "../components/slide/SlideParamTable";
 import { SlideRateChart } from "../components/slide/SlideRateChart";
+import { useMapStore } from "../store/mapStore";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 
 interface Props {
@@ -52,6 +53,15 @@ export function TypeCurveSlidePage({
   const [showBlocks, setShowBlocks] = useState(true);
   const [showSections, setShowSections] = useState(true);
   const [showDeals, setShowDeals] = useState(true);
+  // Per-shapefile acreage visibility set on the Map tab — the slide map
+  // mirrors it. dealVisKey folds the hidden set into the SlideMap remount
+  // key so a toggle change re-fires the canvas snapshot.
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  const dealVisKey = Object.entries(dealVisibility)
+    .filter(([, visible]) => !visible)
+    .map(([sourceFile]) => sourceFile)
+    .sort()
+    .join("|");
 
   useEffect(() => {
     // Remove the app's default body margin / background so the slide
@@ -178,12 +188,13 @@ export function TypeCurveSlidePage({
               with the new overlay set — captureSlideComposite reads
               the rendered IMG, which is what the PPTX picks up. */}
           <SlideMap
-            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}-d${showDeals ? 1 : 0}`}
+            key={`b${showBlocks ? 1 : 0}-s${showSections ? 1 : 0}-d${showDeals ? 1 : 0}-v${dealVisKey}`}
             api10s={api10s}
             wellDetails={data.wellDetails}
             showBlocks={showBlocks}
             showSections={showSections}
             showDeals={showDeals}
+            dealVisibility={dealVisibility}
             width={mapWidth}
             height={mapHeight}
           />

@@ -26,6 +26,7 @@ import { getStoredToken } from "../../api/auth";
 import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../../api/dealPolygons";
 import { DEFAULT_FILTER_SPEC } from "../../api/types";
 import { type WellDetailLite, tileUrlTemplate } from "../../api/wells";
+import { dealVisibilityFilter } from "../../map/dealVisibility";
 import { cohortLineFilter, WELLS_SOURCE_ID } from "../../map/wellsLayers";
 
 // All cohort wells should render regardless of status (saved type
@@ -50,6 +51,10 @@ interface Props {
   showBlocks?: boolean;
   showSections?: boolean;
   showDeals?: boolean;
+  // Per-shapefile acreage visibility from the Map tab. When showDeals is
+  // on, only the shapefiles toggled on here are drawn (default {} = all
+  // visible), so the slide mirrors the Map tab's per-shapefile toggles.
+  dealVisibility?: Record<string, boolean>;
   width?: number;
   height?: number;
 }
@@ -162,7 +167,10 @@ async function loadBlocks(map: MlMap): Promise<void> {
   });
 }
 
-async function loadDealPolygons(map: MlMap): Promise<void> {
+async function loadDealPolygons(
+  map: MlMap,
+  dealVisibility: Record<string, boolean>,
+): Promise<void> {
   if (map.getSource(DEALS_SOURCE_ID)) return;
   try {
     const fc = await fetchDealPolygonGeoJSON();
@@ -171,6 +179,9 @@ async function loadDealPolygons(map: MlMap): Promise<void> {
       type: "geojson",
       data: fc as unknown as GeoJSON.FeatureCollection,
     });
+    // Per-shapefile visibility: only draw the shapefiles toggled on in
+    // the Map tab. Same filter the Map and Review maps use.
+    const filter = dealVisibilityFilter(dealVisibility);
     // Translucent fill + crisp outline so the wells and section grid
     // remain readable underneath. Single shared ACREAGE_COLOR — same
     // as the Map and Review tabs.
@@ -178,6 +189,7 @@ async function loadDealPolygons(map: MlMap): Promise<void> {
       id: DEALS_FILL_LAYER,
       type: "fill",
       source: DEALS_SOURCE_ID,
+      filter,
       paint: {
         "fill-color": ACREAGE_COLOR,
         "fill-opacity": 0.14,
@@ -187,6 +199,7 @@ async function loadDealPolygons(map: MlMap): Promise<void> {
       id: DEALS_LINE_LAYER,
       type: "line",
       source: DEALS_SOURCE_ID,
+      filter,
       paint: {
         "line-color": ACREAGE_COLOR,
         "line-width": 2.2,
@@ -320,6 +333,7 @@ export function SlideMap({
   showBlocks = true,
   showSections = true,
   showDeals = true,
+  dealVisibility = {},
   width = 629,
   height = 418,
 }: Props) {
@@ -403,7 +417,7 @@ export function SlideMap({
       const overlayPromises: Array<Promise<unknown>> = [];
       if (showBlocks) overlayPromises.push(loadBlocks(map));
       if (showSections) overlayPromises.push(loadSections(map));
-      if (showDeals) overlayPromises.push(loadDealPolygons(map));
+      if (showDeals) overlayPromises.push(loadDealPolygons(map, dealVisibility));
       // Idle-listener fires even when no overlays loaded — the wells
       // still need to paint before we snapshot.
       if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
