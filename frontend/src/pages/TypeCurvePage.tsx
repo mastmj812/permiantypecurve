@@ -97,6 +97,16 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const setPersistedAgg = useMapStore((s) => s.setTypeCurveAgg);
   const tcTriggerPending = useMapStore((s) => s.typeCurveTriggerPending);
   const setTcTriggerPending = useMapStore((s) => s.setTypeCurveTriggerPending);
+  // Per-shapefile acreage visibility set on the Map tab. The slide
+  // preview runs inside an iframe whose fresh app instance has its OWN
+  // (empty) mapStore, so it can't read these toggles directly — we thread
+  // the hidden set through the iframe URL instead. `hideDeals` is the
+  // sorted, pipe-joined list of source_files toggled OFF.
+  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  const hiddenDeals = Object.entries(dealVisibility)
+    .filter(([, visible]) => !visible)
+    .map(([sourceFile]) => sourceFile)
+    .sort();
 
   const [agg, setAggLocal] = useState<AggregatePayload | null>(persistedAgg);
   // Wrapper that keeps local + store in lockstep. Use everywhere
@@ -1044,12 +1054,20 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               // and never sees the updated fit. Both the slide preview
               // and the PPTX export (which snapshots the slide) need
               // this to stay in sync with the latest persisted fit.
-              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}-${fitSignature(selectedSaved)}`}
+              // hiddenDeals is folded into the key so toggling a
+              // shapefile on the Map tab remounts the iframe — a hash-only
+              // src change alone wouldn't reload it, and the inner app
+              // reads its dealVisibility from the URL once on mount.
+              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}-${fitSignature(selectedSaved)}-h${hiddenDeals.join("|")}`}
               ref={previewIframeRef}
               src={(() => {
                 const qs = new URLSearchParams();
                 if (compareWithId) qs.set("compareWith", compareWithId);
                 if (includeProbit) qs.set("probit", "1");
+                // Hidden acreage shapefiles from the Map tab (see
+                // hiddenDeals above). Omitted when nothing is hidden so
+                // the common URL stays clean.
+                if (hiddenDeals.length > 0) qs.set("hideDeals", hiddenDeals.join("|"));
                 const str = qs.toString();
                 return `#/type-curves/${encodeURIComponent(selectedSaved.id)}/slide${str ? `?${str}` : ""}`;
               })()}

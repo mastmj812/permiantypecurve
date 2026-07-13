@@ -29,18 +29,30 @@ function parseSlideHash(): {
   typeCurveId: string;
   compareWithId: string | null;
   includeProbit: boolean;
+  dealVisibility: Record<string, boolean>;
 } | null {
   const hash = window.location.hash || "";
   const m = hash.match(/^#\/type-curves\/([^/?]+)\/slide(?:\?(.+))?$/);
   if (!m) return null;
   let compareWithId: string | null = null;
   let includeProbit = false;
+  // The slide runs in an iframe with its own (empty) mapStore, so the
+  // Map tab's per-shapefile toggles reach it through the URL. `hideDeals`
+  // is the pipe-joined set of source_files toggled OFF; rebuild it into
+  // the `{source_file: false}` shape dealVisibilityFilter expects.
+  const dealVisibility: Record<string, boolean> = {};
   if (m[2]) {
     const params = new URLSearchParams(m[2]);
     compareWithId = params.get("compareWith");
     includeProbit = params.get("probit") === "1";
+    const hideDeals = params.get("hideDeals");
+    if (hideDeals) {
+      for (const sourceFile of hideDeals.split("|")) {
+        if (sourceFile) dealVisibility[sourceFile] = false;
+      }
+    }
   }
-  return { typeCurveId: m[1]!, compareWithId, includeProbit };
+  return { typeCurveId: m[1]!, compareWithId, includeProbit, dealVisibility };
 }
 
 // Hash route for the TC workspace (Phase 1: read-only well navigation).
@@ -204,6 +216,7 @@ export function App() {
         typeCurveId={slideRoute.typeCurveId}
         compareWithId={slideRoute.compareWithId}
         includeProbit={slideRoute.includeProbit}
+        dealVisibility={slideRoute.dealVisibility}
       />
     );
   }
