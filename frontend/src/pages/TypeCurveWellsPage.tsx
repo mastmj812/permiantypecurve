@@ -27,13 +27,8 @@ import {
   reaggregateTypeCurve,
 } from "../api/typeCurves";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
-import {
-  Th,
-  fmtDi,
-  fmtInt,
-  fmtVol,
-  type SortDir,
-} from "../forecasts/reviewTable";
+import { Th, type SortDir } from "../forecasts/reviewTable";
+import { fmtDi, fmtInt, fmtVol } from "../forecasts/reviewTableHelpers";
 import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 
 interface Props {
@@ -324,7 +319,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     return [...wells].sort((a, b) => {
       const av = get(a), bv = get(b);
       if (typeof av === "string") return sign * av.localeCompare(bv as string);
-      return sign * ((av as number) - (bv as number));
+      return sign * (av - (bv as number));
     });
   }, [wells, sortKey, sortDir]);
 
@@ -447,7 +442,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
             type="button"
             className="btn-primary"
             disabled={busy != null}
-            onClick={forecastMissingWells}
+            onClick={() => void forecastMissingWells()}
           >
             {busy === "forecasting"
               ? "forecasting…"
@@ -497,7 +492,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
             type="button"
             className="btn-primary"
             disabled={busy != null}
-            onClick={rerunAggregation}
+            onClick={() => void rerunAggregation()}
           >
             {busy === "reaggregate" ? "running…" : "Re-run aggregation"}
           </button>
@@ -626,7 +621,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
                       disabled={busy != null}
                       style={{ color: "#dc2626" }}
                       title="Remove this well from the type curve. Bands won't update until you click Re-run aggregation."
-                      onClick={() => excludeWell(w.api10)}
+                      onClick={() => void excludeWell(w.api10)}
                     >
                       {busy === `exclude:${w.api10}` ? "removing…" : "remove"}
                     </button>

@@ -176,7 +176,7 @@ export function MapView() {
     if (!containerRef.current || mapRef.current) return;
     registerPmtilesProtocol();
 
-    fetch("/api/basemap/permian.pmtiles", { method: "HEAD" }).then((r) => {
+    void fetch("/api/basemap/permian.pmtiles", { method: "HEAD" }).then((r) => {
       if (r.status === 404) setTilesMissing(true);
     });
 
@@ -296,7 +296,7 @@ export function MapView() {
         map.getCanvas().style.cursor = "pointer";
         popupRef.current!
           .setLngLat(e.lngLat)
-          .setHTML(buildWellPopupHtml(feat.properties as Record<string, unknown>))
+          .setHTML(buildWellPopupHtml(feat.properties))
           .addTo(map);
       };
       const onLeave = () => {
@@ -329,12 +329,11 @@ export function MapView() {
     if (!styleLoaded) return;
     const map = mapRef.current;
     if (!map) return;
-    const src = map.getSource(WELLS_SOURCE_ID);
+    const src = map.getSource<maplibregl.VectorTileSource>(WELLS_SOURCE_ID);
     if (!src) return;
     // setTiles() swaps URL templates without dropping/re-adding the source,
     // which would otherwise force every layer to re-register.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (src as any).setTiles?.([withOrigin(tileUrlTemplate(filters))]);
+    src.setTiles([withOrigin(tileUrlTemplate(filters))]);
   }, [filters, styleLoaded]);
 
   // -------------- draw mode --------------
@@ -416,7 +415,7 @@ export function MapView() {
               return null;
             }
             if (!r.ok) throw new Error(`Blocks fetch ${r.status}`);
-            return r.json();
+            return r.json() as Promise<GeoJSON.GeoJSON>;
           })
           .then((data) => {
             if (!data) return;
@@ -494,7 +493,7 @@ export function MapView() {
               return null;
             }
             if (!r.ok) throw new Error(`Sections fetch ${r.status}`);
-            return r.json();
+            return r.json() as Promise<GeoJSON.GeoJSON>;
           })
           .then((data) => {
             if (!data) return;
@@ -581,11 +580,9 @@ export function MapView() {
     const map = mapRef.current;
     if (!map) return;
     if (!dealPolygons) return;
-    const existing = map.getSource(DEALS_SOURCE_ID) as
-      | maplibregl.GeoJSONSource
-      | undefined;
+    const existing = map.getSource<maplibregl.GeoJSONSource>(DEALS_SOURCE_ID);
     if (existing) {
-      existing.setData(dealPolygons as unknown as GeoJSON.FeatureCollection);
+      existing.setData(dealPolygons);
     } else {
       map.addSource(DEALS_SOURCE_ID, {
         type: "geojson",
@@ -660,7 +657,15 @@ function withOrigin(template: string): string {
 // in principle contain HTML metacharacters.
 function escHtml(s: unknown): string {
   if (s == null) return "—";
-  return String(s).replace(/[&<>"']/g, (c) => {
+  const str =
+    typeof s === "string" ||
+    typeof s === "number" ||
+    typeof s === "boolean" ||
+    typeof s === "bigint" ||
+    typeof s === "symbol"
+      ? String(s)
+      : JSON.stringify(s);
+  return str.replace(/[&<>"']/g, (c) => {
     switch (c) {
       case "&": return "&amp;";
       case "<": return "&lt;";

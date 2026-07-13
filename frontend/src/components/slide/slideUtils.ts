@@ -49,8 +49,8 @@ export function buildAlignedWellHistories(
     let peakVal = -Infinity;
     for (let i = 0; i < anchorRate.length; i++) {
       const v = anchorRate[i];
-      if (v != null && Number.isFinite(v) && (v as number) > peakVal) {
-        peakVal = v as number;
+      if (v != null && Number.isFinite(v) && v > peakVal) {
+        peakVal = v;
         peakIdx = i;
       }
     }
@@ -76,7 +76,7 @@ export function buildAlignedWellHistories(
           // matching the band cum convention.
           for (let k = Math.max(0, start); k < source.length; k++) {
             const v = source[k];
-            if (v != null && Number.isFinite(v)) return v as number;
+            if (v != null && Number.isFinite(v)) return v;
           }
           return 0;
         })()
@@ -95,7 +95,7 @@ export function buildAlignedWellHistories(
         aligned.push(null);
         continue;
       }
-      aligned.push(((v as number) - baseline) * scale);
+      aligned.push((v - baseline) * scale);
     }
     out.push({ api10: wc.api10, rate: aligned });
   }

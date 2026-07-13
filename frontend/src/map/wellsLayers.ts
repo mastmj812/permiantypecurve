@@ -27,11 +27,12 @@ export const POINTS_MAXZOOM = 9;     // exclusive — switch to lines at 9
 export const LINES_MINZOOM = 9;
 
 // Basin-aware color: a nested MapLibre `match` (outer basin_blueox, inner
-// formation_blueox code → color). Cast via `unknown` because TS can't statically
-// prove the nested match satisfies MapLibre's recursive ExpressionSpecification
-// union — MapLibre validates the JSON at runtime.
+// formation_blueox code → color). `blueoxColorExpression()` returns `unknown`
+// because TS can't statically prove the nested match satisfies MapLibre's
+// recursive ExpressionSpecification union — MapLibre validates the JSON at
+// runtime, so we assert the shape here.
 const FORMATION_COLOR_EXPR: ExpressionSpecification =
-  blueoxColorExpression() as unknown as ExpressionSpecification;
+  blueoxColorExpression() as ExpressionSpecification;
 
 // `feature-state.selected === true` → bright yellow halo; else formation color.
 const SELECTED_COLOR_EXPR: ExpressionSpecification = [

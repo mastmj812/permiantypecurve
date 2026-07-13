@@ -23,9 +23,11 @@ const SCRATCH_LINE_LAYER = "draw-scratch-line";
 const EMPTY_FC: GeoJSON.FeatureCollection = { type: "FeatureCollection", features: [] };
 
 export interface DrawingCallbacks {
-  onPolygon: (polygon: GeoJsonPolygon) => void;
-  onBbox: (bbox: [number, number, number, number]) => void;
-  onClick: (lngLat: LngLat) => void;
+  // Callbacks may be async; the controller invokes them fire-and-forget
+  // (each handler owns its own error handling).
+  onPolygon: (polygon: GeoJsonPolygon) => void | Promise<void>;
+  onBbox: (bbox: [number, number, number, number]) => void | Promise<void>;
+  onClick: (lngLat: LngLat) => void | Promise<void>;
 }
 
 export class DrawingController {
@@ -93,7 +95,7 @@ export class DrawingController {
   // -------- click mode --------
   private onClick = (e: MapMouseEvent): void => {
     if (this.mode !== "click") return;
-    this.cb.onClick(e.lngLat);
+    void this.cb.onClick(e.lngLat);
   };
 
   // -------- lasso & box: shared mouse machinery --------
@@ -124,7 +126,7 @@ export class DrawingController {
       if (this.points.length >= 3) {
         const closed = [...this.points, this.points[0]!];
         const poly: GeoJsonPolygon = { type: "Polygon", coordinates: [closed] };
-        this.cb.onPolygon(poly);
+        void this.cb.onPolygon(poly);
       }
       this.points = [];
     } else if (this.mode === "box" && this.dragStart) {
@@ -136,7 +138,7 @@ export class DrawingController {
       const n = Math.max(a.lat, b.lat);
       // Filter out accidental zero-size boxes (click-and-release).
       if (Math.abs(ee - w) > 1e-6 && Math.abs(n - s) > 1e-6) {
-        this.cb.onBbox([w, s, ee, n]);
+        void this.cb.onBbox([w, s, ee, n]);
       }
       this.dragStart = null;
     }
@@ -145,7 +147,7 @@ export class DrawingController {
 
   // -------- scratch rendering --------
   private renderLasso(): void {
-    const src = this.map.getSource(SCRATCH_SOURCE_ID) as GeoJSONSource | undefined;
+    const src = this.map.getSource<GeoJSONSource>(SCRATCH_SOURCE_ID);
     if (!src) return;
     const ring = [...this.points, this.points[0]!];
     src.setData({
@@ -161,7 +163,7 @@ export class DrawingController {
   }
 
   private renderBox(a: LngLat, b: LngLat): void {
-    const src = this.map.getSource(SCRATCH_SOURCE_ID) as GeoJSONSource | undefined;
+    const src = this.map.getSource<GeoJSONSource>(SCRATCH_SOURCE_ID);
     if (!src) return;
     const ring = [
       [a.lng, a.lat],
@@ -183,7 +185,7 @@ export class DrawingController {
   }
 
   private clearScratch(): void {
-    const src = this.map.getSource(SCRATCH_SOURCE_ID) as GeoJSONSource | undefined;
+    const src = this.map.getSource<GeoJSONSource>(SCRATCH_SOURCE_ID);
     src?.setData(EMPTY_FC);
   }
 }

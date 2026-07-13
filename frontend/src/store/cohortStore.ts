@@ -173,7 +173,7 @@ export const useCohortStore = create<CohortState>()(
               const { api14s, ...rest } = c;
               return {
                 ...rest,
-                api10s: normalize((api14s as string[] | undefined) ?? []),
+                api10s: normalize(api14s ?? []),
               };
             }) ?? [];
           return {
@@ -190,7 +190,7 @@ export const useCohortStore = create<CohortState>()(
           const migratedCohorts =
             s.cohorts?.map((c) => ({
               ...c,
-              api10s: normalize((c.api10s as string[] | undefined) ?? []),
+              api10s: normalize(c.api10s ?? []),
             })) ?? [];
           return {
             cohorts: migratedCohorts,

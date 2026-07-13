@@ -260,7 +260,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       return;
     }
     let cancelled = false;
-    fetchTypeCurve(compareWithId).then((tc) => {
+    void fetchTypeCurve(compareWithId).then((tc) => {
       if (!cancelled) setCompareWith(tc);
     });
     return () => {
@@ -902,7 +902,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                     })}
                     <td>
                       {previewEur[stream] != null
-                        ? fmtEur(previewEur[stream]!)
+                        ? fmtEur(previewEur[stream])
                         : currentStream.fitted
                           ? fmtEur(
                               eurFromParams(currentStream.fitted) ??
@@ -921,7 +921,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   hasPreview={!!previewSmoothed[stream]}
                   error={tweakError}
                   onChange={setTweakField}
-                  onPreview={onTweakPreview}
+                  onPreview={() => void onTweakPreview()}
                   onReset={onTweakReset}
                 />
               )}
@@ -1032,7 +1032,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 <button
                   type="button"
                   className="btn-primary"
-                  onClick={onExportPptx}
+                  onClick={() => void onExportPptx()}
                   disabled={exporting}
                 >
                   {exporting ? "building…" : "Export PowerPoint"}
@@ -1169,7 +1169,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               type="button"
               className="btn-primary"
               disabled={inPlaceBusy || saving}
-              onClick={onUpdateInPlace}
+              onClick={() => void onUpdateInPlace()}
             >
               {inPlaceBusy
                 ? "rebuilding…"
@@ -1214,7 +1214,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               type="button"
               className="btn-primary"
               disabled={!saveName.trim() || saving}
-              onClick={onSave}
+              onClick={() => void onSave()}
               style={{ marginTop: 8 }}
             >
               {saving
@@ -1263,7 +1263,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               type="button"
               className="btn-primary"
               disabled={!saveName.trim() || included.length === 0 || saving}
-              onClick={onSave}
+              onClick={() => void onSave()}
             >
               {saving ? "saving…" : `save ${included.length} wells`}
             </button>
@@ -1286,7 +1286,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 <button
                   type="button"
                   className="tb-btn"
-                  onClick={onSaveNotes}
+                  onClick={() => void onSaveNotes()}
                   disabled={updatingSaved}
                   style={{ marginTop: 4, alignSelf: "flex-start" }}
                 >
@@ -1364,7 +1364,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               <button
                 type="button"
                 className="btn-primary"
-                onClick={onUpdateFit}
+                onClick={() => void onUpdateFit()}
                 disabled={!collectOverrides() || updatingSaved}
                 title={
                   collectOverrides()
@@ -1378,7 +1378,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 type="button"
                 className="tb-btn"
                 onClick={() =>
-                  downloadTypeCurveExport(
+                  void downloadTypeCurveExport(
                     selectedSaved.id,
                     `${selectedSaved.name.replace(/[^a-z0-9]+/gi, "_")}.zip`,
                   )
@@ -1389,14 +1389,14 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               <button
                 type="button"
                 className="tb-btn"
-                onClick={() => onRename(selectedSaved.id)}
+                onClick={() => void onRename(selectedSaved.id)}
               >
                 rename
               </button>
               <button
                 type="button"
                 className="tb-btn"
-                onClick={() => onDelete(selectedSaved.id)}
+                onClick={() => void onDelete(selectedSaved.id)}
                 style={{ color: "#dc2626" }}
               >
                 delete
@@ -1481,7 +1481,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   <button
                     type="button"
                     className={selectedSaved?.id === tc.id ? "active" : ""}
-                    onClick={() => onLoadSaved(tc.id)}
+                    onClick={() => void onLoadSaved(tc.id)}
                   >
                     <div className="lib-name">
                       {tc.name}
@@ -1719,7 +1719,7 @@ function fullForecastSeries(stream: StreamSeries): StreamSeries {
   const per = stream.fitted_per_percentile;
   const evalKey = (key: string): Array<number | null> => {
     const fit = per?.[key];
-    if (!fit) return Array(N).fill(null);
+    if (!fit) return Array<number | null>(N).fill(null);
     return buildRampArpsRate(fit, N);
   };
   return {
@@ -1732,7 +1732,7 @@ function fullForecastSeries(stream: StreamSeries): StreamSeries {
     mean: evalKey("mean"),
     // well_count is meaningless past the data window — zero it so the
     // ribbon stays empty rather than projecting a stale count forward.
-    well_count: Array(N).fill(0),
+    well_count: Array<number>(N).fill(0),
     fitted: stream.fitted
       ? { ...stream.fitted, smoothed_rate: buildRampArpsRate(stream.fitted, N) }
       : null,
