@@ -24,17 +24,15 @@ import {
 import { fetchWellDetails, type WellDetailLite } from "../api/wells";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { computeOutliers } from "../forecasts/outliers";
+import { Stat, Th, type SortDir } from "../forecasts/reviewTable";
 import {
-  Stat,
-  Th,
   effDiFor,
   fmtDi,
   fmtInt,
   fmtVol,
   indexFitsByWellStream,
   median,
-  type SortDir,
-} from "../forecasts/reviewTable";
+} from "../forecasts/reviewTableHelpers";
 import { ReviewMap } from "../components/ReviewMap";
 import { useMapStore } from "../store/mapStore";
 
@@ -80,7 +78,9 @@ export function ReviewPage() {
   const setFitStatusNote = useMapStore((s) => s.setFitStatusNote);
 
   const longApi10s = partition?.long ?? [];
-  const shortApi10s = partition?.short ?? [];
+  // Memoized: consumed in downstream hook deps (useCallback/useMemo),
+  // so a fresh `?? []` array every render would churn them.
+  const shortApi10s = useMemo(() => partition?.short ?? [], [partition]);
   const noPeakApi10s = partition?.noPeak ?? [];
 
   const [allForecasts, setAllForecasts] = useState<ForecastRow[]>([]);
@@ -139,7 +139,7 @@ export function ReviewPage() {
       return;
     }
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const details = await fetchWellDetails(missing);
         if (cancelled) return;
@@ -160,7 +160,7 @@ export function ReviewPage() {
   useEffect(() => {
     if (api10s.length === 0) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       setLoading(true);
       try {
         const rows = await listForecasts(api10s);
@@ -694,7 +694,7 @@ export function ReviewPage() {
               <button
                 type="button"
                 className="btn-primary"
-                onClick={onApplyTransfer}
+                onClick={() => void onApplyTransfer()}
                 disabled={transferStatus === "running"}
                 title="Write transferred forecasts for short-history wells using the long cohort's median Di / b"
               >

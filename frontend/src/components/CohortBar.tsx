@@ -170,7 +170,7 @@ export function CohortBar() {
                 ? "Stage at least one well that isn't already in the TC"
                 : `Add ${newWells.length} new well${newWells.length === 1 ? "" : "s"} to ${tcName}`
             }
-            onClick={handleAddToTc}
+            onClick={() => void handleAddToTc()}
           >
             {addBusy
               ? "adding…"

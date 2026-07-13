@@ -50,7 +50,7 @@ function cumulateNullable(arr: Array<number | null>): Array<number | null> {
       out.push(started ? running : null);
       continue;
     }
-    running += (v as number) * DAYS_PER_MONTH;
+    running += v * DAYS_PER_MONTH;
     started = true;
     out.push(running);
   }
@@ -60,7 +60,7 @@ function cumulateNullable(arr: Array<number | null>): Array<number | null> {
 function cumulateAndScale(s: StreamSeries, factor: number): StreamSeries {
   const scC = (arr: Array<number | null>) =>
     cumulateNullable(arr).map((v) =>
-      v == null || !Number.isFinite(v) ? v : (v as number) * factor,
+      v == null || !Number.isFinite(v) ? v : v * factor,
     );
   return {
     ...s,

@@ -3,12 +3,10 @@
 # typecheck + unit tests on every push/PR. The suite is pure-function (no
 # database required), so this stays fast and dependency-light.
 #
-# eslint runs as a NON-BLOCKING `lint` job (continue-on-error): the repo
-# carries known lint debt (83 errors / 12 warnings, incl. maplibre
-# no-unnecessary-type-assertion false-positives that --fix breaks), tracked
-# in https://github.com/mastmj812/permiantypecurve/issues/2. It's visible on
-# every run but doesn't block merges. Drop continue-on-error once that debt
-# is cleared to make lint a required check.
+# eslint runs as a REQUIRED `lint` job. The frontend lint debt tracked in
+# https://github.com/mastmj812/permiantypecurve/issues/2 (83 errors / 12
+# warnings) was burned down to zero, so lint now blocks merges like the
+# other jobs.
 name: ci
 
 on:
@@ -51,11 +49,10 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
-  # Non-blocking: surfaces eslint debt on every run without turning trunk red.
-  # Tracked in issue #2; drop continue-on-error to make it required once clear.
+  # Required check: eslint must pass (`--max-warnings=0`). Debt from issue #2
+  # is cleared, so this blocks merges alongside the backend/frontend jobs.
   lint:
     runs-on: ubuntu-latest
-    continue-on-error: true
     defaults:
       run:
         working-directory: frontend
