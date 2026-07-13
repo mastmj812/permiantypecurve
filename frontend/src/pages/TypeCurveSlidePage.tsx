@@ -21,13 +21,18 @@ import { SlideCumChart } from "../components/slide/SlideCumChart";
 import { SlideMap } from "../components/slide/SlideMap";
 import { SlideParamTable } from "../components/slide/SlideParamTable";
 import { SlideRateChart } from "../components/slide/SlideRateChart";
-import { useMapStore } from "../store/mapStore";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 
 interface Props {
   typeCurveId: string;
   compareWithId: string | null;
   includeProbit?: boolean;
+  // Per-shapefile acreage visibility, parsed from the slide URL's
+  // `hideDeals` param by App. The slide runs in an iframe with its own
+  // empty mapStore, so this can't come from the store — it's threaded
+  // through the URL from the parent Map-tab store. Default {} = all
+  // visible.
+  dealVisibility?: Record<string, boolean>;
 }
 
 interface SlideData {
@@ -42,6 +47,7 @@ export function TypeCurveSlidePage({
   typeCurveId,
   compareWithId,
   includeProbit = false,
+  dealVisibility = {},
 }: Props) {
   const [data, setData] = useState<SlideData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +59,10 @@ export function TypeCurveSlidePage({
   const [showBlocks, setShowBlocks] = useState(true);
   const [showSections, setShowSections] = useState(true);
   const [showDeals, setShowDeals] = useState(true);
-  // Per-shapefile acreage visibility set on the Map tab — the slide map
-  // mirrors it. dealVisKey folds the hidden set into the SlideMap remount
-  // key so a toggle change re-fires the canvas snapshot.
-  const dealVisibility = useMapStore((s) => s.dealVisibility);
+  // Per-shapefile acreage visibility comes from the slide URL (prop),
+  // not this iframe's own empty mapStore. dealVisKey folds the hidden
+  // set into the SlideMap remount key so the canvas snapshot re-fires
+  // if it changes.
   const dealVisKey = Object.entries(dealVisibility)
     .filter(([, visible]) => !visible)
     .map(([sourceFile]) => sourceFile)
