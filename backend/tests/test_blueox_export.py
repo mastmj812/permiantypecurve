@@ -349,6 +349,184 @@ def test_monthly_volumes_trapezoid_and_zero_fill() -> None:
     assert vols[3] == 0.0 and vols[4] == 0.0
 
 
+def test_manifest_declares_inventory_exclusions() -> None:
+    data = _data()
+    data = BlueOxExportData(**{
+        **data.__dict__, "inventory_exclusions": ("WDFD (4 wells)", "WCB_1 (1 wells)"),
+    })
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
+    kv = _manifest_kv(wb)
+    assert "WDFD (4 wells)" in str(kv["inventory_benches_excluded"])
+
+
+def test_narvi_distribution_exclusions_and_unmapped() -> None:
+    """Bench->zone routing: wells land in their zone, excluded benches
+    are tallied for the manifest, unmapped benches hard-error, and an
+    empty selection match hard-errors (typo protection)."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxExportRequest,
+        BlueOxZoneSpec,
+        NarviSelection,
+        _fetch_narvi_by_zone,
+    )
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    def _w(
+        scenario: str, name: str, bench: str, comp: float, drill: float,
+        category: str = "generated",
+    ) -> NarviInventoryWell:
+        return NarviInventoryWell(
+            deal_id="thecan_south_bs", scenario_id=scenario, well_name=name,
+            formation=bench, completed_lateral_ft=comp, drilled_lateral_ft=drill,
+            well_type="single", category=category,
+        )
+
+    wells = [
+        _w("plan_a", "WCA 1H", "WCA_1", 10_000.0, 10_000.0),
+        _w("plan_a", "WCA 2H", "WCA_2", 9_800.0, 9_800.0),
+        _w("plan_a", "WDFD 1H", "WDFD", 10_400.0, 10_400.0),
+        _w("plan_a", "MYSTERY 1H", "BS9", 10_000.0, 10_000.0),
+        # Existing producer riding along as gunbarrel context — must be
+        # invisible to the inventory (not mapped, not excluded-counted).
+        _w("plan_a", "4249533594", "WCA_1", 4_326.0, 4_326.0, category="pdp"),
+    ]
+    req = BlueOxExportRequest(
+        codename="x", prepared_by="m",
+        zones=[BlueOxZoneSpec(
+            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
+            benches=["WCA_1", "WCA_2"],
+        )],
+        narvi_selections=[
+            NarviSelection(deal_id="thecan_south_bs", scenario_id="plan_a"),
+            NarviSelection(deal_id="thecan_south_bs", scenario_id="plan_missing"),
+        ],
+        exclude_benches=["WDFD"],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, exclusions = _fetch_narvi_by_zone(req, errors)
+
+    assert [w.well_name for w in by_zone["WCA"]] == ["WCA 1H", "WCA 2H"]
+    assert exclusions == ("WDFD (1 wells)",)
+    assert any("BS9 (1 wells)" in e for e in errors)  # unmapped -> error
+    assert any("plan_missing matched no inventory wells" in e for e in errors)
+    # The pdp-context well was dropped entirely: not in the zone, not an
+    # unmapped error for its bench beyond the planned MYSTERY well.
+    assert all("4249533594" not in e for e in errors)
+
+
+def test_narvi_pdp_only_selection_and_duplicate_guard() -> None:
+    """A selection whose wells are ALL pdp-context has no plannable
+    inventory (distinct message from a typo'd id), and the same planned
+    well appearing in two merged scenarios is an error, while pdp
+    duplicates across scenarios are fine (they were context in both)."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxExportRequest,
+        BlueOxZoneSpec,
+        NarviSelection,
+        _fetch_narvi_by_zone,
+    )
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    def _w(scenario: str, name: str, category: str) -> NarviInventoryWell:
+        return NarviInventoryWell(
+            deal_id="d", scenario_id=scenario, well_name=name, formation="WCA_1",
+            completed_lateral_ft=10_000.0, drilled_lateral_ft=10_000.0,
+            well_type="single", category=category,
+        )
+
+    wells = [
+        _w("plan_all_pdp", "4249533594", "pdp"),
+        _w("plan_b", "4249533594", "pdp"),      # pdp dupe across scenarios: fine
+        _w("plan_b", "WCA_1-01", "generated"),
+        _w("plan_c", "WCA_1-01", "generated"),  # planned dupe: error
+    ]
+    req = BlueOxExportRequest(
+        codename="x", prepared_by="m",
+        zones=[BlueOxZoneSpec(
+            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
+            benches=["WCA_1"],
+        )],
+        narvi_selections=[
+            NarviSelection(deal_id="d", scenario_id="plan_all_pdp"),
+            NarviSelection(deal_id="d", scenario_id="plan_b"),
+            NarviSelection(deal_id="d", scenario_id="plan_c"),
+        ],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, _ = _fetch_narvi_by_zone(req, errors)
+
+    assert any("plan_all_pdp matched only PDP-context wells" in e for e in errors)
+    assert any(
+        "'WCA_1-01'" in e and "plan_b" in e and "plan_c" in e for e in errors
+    )
+    assert all("4249533594" not in e for e in errors)
+    assert len(by_zone["WCA"]) == 2  # both generated rows routed (dupe flagged)
+
+
+def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:
+    """A U-turn well's completed (producing) and drilled laterals map to
+    the contract's two columns without cohort-mean defaulting."""
+    from unittest.mock import patch
+
+    from app.api.deals import BlueOxZoneSpec, _collect_blueox_zone
+    from app.db.models import AlignmentMethod, NormalizationBasis, TypeCurve
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    def _fit(qi: float) -> dict[str, Any]:
+        return {"qi": qi, "Di": 0.0, "b": 0.0, "Df": 0.0, "qo": qi, "peak_index": 0}
+
+    tc = TypeCurve()
+    tc.id = uuid.uuid4()
+    tc.name = "WCA"
+    tc.included_api10s = ["4200000001"]
+    tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
+    tc.alignment_method = AlignmentMethod.PEAK_RAMP
+    tc.created_at = datetime(2026, 7, 18, tzinfo=UTC)
+    tc.series = {
+        "streams": {
+            "oil": {"fitted_per_percentile": {"p50": _fit(100.0)}},
+            "gas": {"fitted_per_percentile": {"p50": _fit(600.0)}},
+        },
+    }
+    spec = BlueOxZoneSpec(
+        type_curve_id=tc.id, zone_name="WCA", reserve_category="PUD",
+    )
+    narvi_wells = [
+        NarviInventoryWell(
+            deal_id="thecan_44_44", scenario_id="plan_thecan_44",
+            well_name="THECAN 44 U1", formation="WCA_1",
+            completed_lateral_ft=8_926.0, drilled_lateral_ft=10_811.0,
+            well_type="uturn",
+        ),
+    ]
+    errors: list[str] = []
+    with patch(
+        "app.api.deals.per_well_rows",
+        return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
+    ):
+        zone = _collect_blueox_zone(
+            None, tc, spec, ["P50"], 12, errors,  # type: ignore[arg-type]
+            narvi_wells=narvi_wells,
+        )
+    assert errors == []
+    assert zone is not None
+    assert zone.inventory[0].producing_lateral_ft == 8_926.0
+    assert zone.inventory[0].drilled_lateral_ft == 10_811.0
+    assert zone.inventory[0].well_name == "THECAN 44 U1"
+
+
 def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
     """End-to-end pin of the orientation flip: a stub curve whose SPE
     p10 (high) fit is qi=200 and SPE p90 (low) fit is qi=50 must land

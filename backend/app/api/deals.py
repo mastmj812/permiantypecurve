@@ -19,6 +19,7 @@ import io
 import math
 import re
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
@@ -58,6 +59,8 @@ from app.exports.well_rows import (
     per_well_rows,
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
+from app.warehouse_client.narvi import NarviInventoryWell, fetch_narvi_inventory
+from app.warehouse_client.session import get_warehouse_session
 
 router = APIRouter(prefix="/deals", tags=["deals"])
 log = get_logger("api.deals")
@@ -549,7 +552,22 @@ class BlueOxZoneSpec(BaseModel):
     # Principle 2 — stable across re-drops). Defaults to the curve name.
     zone_name: str | None = Field(default=None, min_length=1, max_length=26)
     reserve_category: Literal["PUD", "RES"]
+    # narvi formation_blueox bench codes whose planned wells belong to
+    # this zone (a zone commonly spans benches: WCA_1 + WCA_2 -> WCA).
+    # Benches must be disjoint across zones.
+    benches: list[str] = Field(default_factory=list)
+    # Manual rows — the fallback for deals without narvi coverage, or
+    # extras on top of the narvi pull.
     inventory: list[BlueOxInventoryRowIn] = Field(default_factory=list)
+
+
+class NarviSelection(BaseModel):
+    """One narvi scenario feeding this drop's inventory. A drop may
+    merge several (one per DSU, plus geometry-forced splits — e.g.
+    U-turn wells in half a DSU saved as their own scenario)."""
+
+    deal_id: str = Field(min_length=1)
+    scenario_id: str = Field(min_length=1)
 
 
 class BlueOxExportRequest(BaseModel):
@@ -560,6 +578,15 @@ class BlueOxExportRequest(BaseModel):
     levels: list[Literal["P10", "P25", "P75", "P90"]] = Field(default_factory=list)
     prepared_by: str = Field(min_length=1, max_length=128)
     zones: list[BlueOxZoneSpec] = Field(min_length=1)
+    # narvi scenarios whose inventory_well rows populate the inventory
+    # sheet (via each zone's `benches` mapping).
+    narvi_selections: list[NarviSelection] = Field(default_factory=list)
+    # Benches present in the selected scenarios but deliberately NOT in
+    # this workbook (e.g. carried in a sibling deal's drop). Declared in
+    # the manifest; an unmapped bench that is not excluded is a hard
+    # error — silently dropping wells would understate the location
+    # count Blue Ox values.
+    exclude_benches: list[str] = Field(default_factory=list)
 
 
 _BLUEOX_BASIS: dict[NormalizationBasis, str] = {
@@ -592,6 +619,7 @@ def _collect_blueox_zone(
     delivered: list[str],
     curve_months: int,
     errors: list[str],
+    narvi_wells: list[NarviInventoryWell] | None = None,
 ) -> ZoneData | None:
     """Assemble one zone's volumes / params / analogs / inventory.
 
@@ -680,6 +708,21 @@ def _collect_blueox_zone(
     cohort_mean_lat = sum(laterals) / len(laterals) if laterals else None
 
     inventory: list[InventoryRow] = []
+    # narvi-planned wells first: completed lateral (EUR driver) is the
+    # producing lateral, drilled (legs + turn arc) drives per-ft capex.
+    for nw in narvi_wells or []:
+        if nw.completed_lateral_ft is None or nw.drilled_lateral_ft is None:
+            errors.append(
+                f"{zone_name}: narvi well {nw.well_name!r} "
+                f"({nw.deal_id}/{nw.scenario_id}) has no laterals persisted"
+            )
+            continue
+        inventory.append(InventoryRow(
+            producing_lateral_ft=nw.completed_lateral_ft,
+            drilled_lateral_ft=nw.drilled_lateral_ft,
+            well_name=nw.well_name,
+        ))
+    # Manual rows — fallback / extras on top of the narvi pull.
     for i, inv in enumerate(spec.inventory, start=1):
         producing = inv.producing_lateral_ft or cohort_mean_lat
         if producing is None:
@@ -706,6 +749,99 @@ def _collect_blueox_zone(
     )
 
 
+def _fetch_narvi_by_zone(
+    req: BlueOxExportRequest, errors: list[str]
+) -> tuple[dict[str, list[NarviInventoryWell]], tuple[str, ...]]:
+    """Pull the selected narvi scenarios and distribute wells to zones
+    by each zone's bench list.
+
+    Returns ({zone_name: wells}, manifest exclusion strings). Every
+    fetched well must land in a zone or an explicitly excluded bench —
+    an unmapped bench is an error, never a silent drop (the inventory
+    row count IS the location count Blue Ox values).
+    """
+    if not req.narvi_selections:
+        return {}, ()
+
+    bench_to_zone: dict[str, str] = {}
+    for spec in req.zones:
+        zname = spec.zone_name or ""
+        for bench in spec.benches:
+            if bench in bench_to_zone:
+                errors.append(
+                    f"bench {bench!r} mapped to more than one zone "
+                    f"({bench_to_zone[bench]!r} and {zname!r})"
+                )
+            bench_to_zone[bench] = zname
+
+    pairs = [(sel.deal_id, sel.scenario_id) for sel in req.narvi_selections]
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            wells = fetch_narvi_inventory(wh, pairs)
+    except Exception as exc:  # surface as a 422, not a 500
+        errors.append(f"narvi inventory fetch failed: {exc}")
+        return {}, ()
+
+    # narvi scenarios carry EXISTING producers as gunbarrel context
+    # (category 'pdp', well_name = api10). Those are never planned
+    # locations — drop them before any counting, so they can't inflate
+    # the inventory or double-count across merged scenarios.
+    planned = [w for w in wells if (w.category or "").lower() != "pdp"]
+    n_pdp_context = len(wells) - len(planned)
+    if n_pdp_context:
+        log.info("blueox_narvi_pdp_context_skipped", n=n_pdp_context)
+
+    seen_pairs = {(w.deal_id, w.scenario_id) for w in planned}
+    fetched_pairs = {(w.deal_id, w.scenario_id) for w in wells}
+    for pair in pairs:
+        if pair not in seen_pairs:
+            detail = (
+                "only PDP-context wells"
+                if pair in fetched_pairs
+                else "no inventory wells"
+            )
+            errors.append(
+                f"narvi selection {pair[0]}/{pair[1]} matched {detail}"
+            )
+
+    # Merged scenarios must not re-list the same planned well.
+    seen_names: dict[tuple[str, str], tuple[str, str]] = {}
+    for w in planned:
+        key = (w.well_name, w.formation or "")
+        if key in seen_names and seen_names[key] != (w.deal_id, w.scenario_id):
+            errors.append(
+                f"planned well {w.well_name!r} ({w.formation}) appears in both "
+                f"{seen_names[key][1]} and {w.scenario_id}"
+            )
+        seen_names[key] = (w.deal_id, w.scenario_id)
+
+    excluded = dict.fromkeys(req.exclude_benches, 0)
+    unmapped: dict[str, int] = {}
+    by_zone: dict[str, list[NarviInventoryWell]] = {}
+    for w in planned:
+        bench = w.formation or "(null)"
+        if bench in excluded:
+            excluded[bench] += 1
+            continue
+        zone = bench_to_zone.get(bench)
+        if zone is None:
+            unmapped[bench] = unmapped.get(bench, 0) + 1
+            continue
+        by_zone.setdefault(zone, []).append(w)
+    if unmapped:
+        errors.append(
+            "narvi benches with no zone mapping and no exclusion: "
+            + ", ".join(f"{b} ({n} wells)" for b, n in sorted(unmapped.items()))
+        )
+    for bench, n in excluded.items():
+        if n == 0:
+            errors.append(f"exclude_benches entry {bench!r} matched no wells")
+    exclusions = tuple(
+        f"{b} ({n} wells)" for b, n in sorted(excluded.items()) if n > 0
+    )
+    return by_zone, exclusions
+
+
 def _collect_blueox_data(
     session: Session, deal: Deal, req: BlueOxExportRequest, export_date: date
 ) -> BlueOxExportData:
@@ -715,6 +851,17 @@ def _collect_blueox_data(
         lv for lv in ("P10", "P25", "P50", "P75", "P90")
         if lv == "P50" or lv in req.levels
     ]
+
+    # Zone names must be resolved before the narvi distribution (the
+    # bench map keys on them), so default them from the curve names
+    # up front.
+    for spec in req.zones:
+        if spec.zone_name is None:
+            tc = session.get(TypeCurve, spec.type_curve_id)
+            if tc is not None:
+                spec.zone_name = tc.name[:26].strip()
+
+    narvi_by_zone, inventory_exclusions = _fetch_narvi_by_zone(req, errors)
 
     zones: list[ZoneData] = []
     curves: list[TypeCurve] = []
@@ -728,7 +875,8 @@ def _collect_blueox_data(
             continue
         curves.append(tc)
         zone = _collect_blueox_zone(
-            session, tc, spec, delivered, req.curve_months, errors
+            session, tc, spec, delivered, req.curve_months, errors,
+            narvi_wells=narvi_by_zone.get(spec.zone_name or tc.name, []),
         )
         if zone is not None:
             zones.append(zone)
@@ -791,6 +939,7 @@ def _collect_blueox_data(
         production_rows=prod_rows,
         production_history_through=history_through,
         history_exceptions=history_exceptions,
+        inventory_exclusions=inventory_exclusions,
     )
 
 
