@@ -782,17 +782,43 @@ def _fetch_narvi_by_zone(
         errors.append(f"narvi inventory fetch failed: {exc}")
         return {}, ()
 
-    seen_pairs = {(w.deal_id, w.scenario_id) for w in wells}
+    # narvi scenarios carry EXISTING producers as gunbarrel context
+    # (category 'pdp', well_name = api10). Those are never planned
+    # locations — drop them before any counting, so they can't inflate
+    # the inventory or double-count across merged scenarios.
+    planned = [w for w in wells if (w.category or "").lower() != "pdp"]
+    n_pdp_context = len(wells) - len(planned)
+    if n_pdp_context:
+        log.info("blueox_narvi_pdp_context_skipped", n=n_pdp_context)
+
+    seen_pairs = {(w.deal_id, w.scenario_id) for w in planned}
+    fetched_pairs = {(w.deal_id, w.scenario_id) for w in wells}
     for pair in pairs:
         if pair not in seen_pairs:
-            errors.append(
-                f"narvi selection {pair[0]}/{pair[1]} matched no inventory wells"
+            detail = (
+                "only PDP-context wells"
+                if pair in fetched_pairs
+                else "no inventory wells"
             )
+            errors.append(
+                f"narvi selection {pair[0]}/{pair[1]} matched {detail}"
+            )
+
+    # Merged scenarios must not re-list the same planned well.
+    seen_names: dict[tuple[str, str], tuple[str, str]] = {}
+    for w in planned:
+        key = (w.well_name, w.formation or "")
+        if key in seen_names and seen_names[key] != (w.deal_id, w.scenario_id):
+            errors.append(
+                f"planned well {w.well_name!r} ({w.formation}) appears in both "
+                f"{seen_names[key][1]} and {w.scenario_id}"
+            )
+        seen_names[key] = (w.deal_id, w.scenario_id)
 
     excluded = dict.fromkeys(req.exclude_benches, 0)
     unmapped: dict[str, int] = {}
     by_zone: dict[str, list[NarviInventoryWell]] = {}
-    for w in wells:
+    for w in planned:
         bench = w.formation or "(null)"
         if bench in excluded:
             excluded[bench] += 1

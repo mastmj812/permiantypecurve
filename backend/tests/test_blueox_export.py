@@ -373,11 +373,14 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
     )
     from app.warehouse_client.narvi import NarviInventoryWell
 
-    def _w(scenario: str, name: str, bench: str, comp: float, drill: float) -> NarviInventoryWell:
+    def _w(
+        scenario: str, name: str, bench: str, comp: float, drill: float,
+        category: str = "generated",
+    ) -> NarviInventoryWell:
         return NarviInventoryWell(
             deal_id="thecan_south_bs", scenario_id=scenario, well_name=name,
             formation=bench, completed_lateral_ft=comp, drilled_lateral_ft=drill,
-            well_type="single",
+            well_type="single", category=category,
         )
 
     wells = [
@@ -385,6 +388,9 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
         _w("plan_a", "WCA 2H", "WCA_2", 9_800.0, 9_800.0),
         _w("plan_a", "WDFD 1H", "WDFD", 10_400.0, 10_400.0),
         _w("plan_a", "MYSTERY 1H", "BS9", 10_000.0, 10_000.0),
+        # Existing producer riding along as gunbarrel context — must be
+        # invisible to the inventory (not mapped, not excluded-counted).
+        _w("plan_a", "4249533594", "WCA_1", 4_326.0, 4_326.0, category="pdp"),
     ]
     req = BlueOxExportRequest(
         codename="x", prepared_by="m",
@@ -409,6 +415,64 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
     assert exclusions == ("WDFD (1 wells)",)
     assert any("BS9 (1 wells)" in e for e in errors)  # unmapped -> error
     assert any("plan_missing matched no inventory wells" in e for e in errors)
+    # The pdp-context well was dropped entirely: not in the zone, not an
+    # unmapped error for its bench beyond the planned MYSTERY well.
+    assert all("4249533594" not in e for e in errors)
+
+
+def test_narvi_pdp_only_selection_and_duplicate_guard() -> None:
+    """A selection whose wells are ALL pdp-context has no plannable
+    inventory (distinct message from a typo'd id), and the same planned
+    well appearing in two merged scenarios is an error, while pdp
+    duplicates across scenarios are fine (they were context in both)."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxExportRequest,
+        BlueOxZoneSpec,
+        NarviSelection,
+        _fetch_narvi_by_zone,
+    )
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    def _w(scenario: str, name: str, category: str) -> NarviInventoryWell:
+        return NarviInventoryWell(
+            deal_id="d", scenario_id=scenario, well_name=name, formation="WCA_1",
+            completed_lateral_ft=10_000.0, drilled_lateral_ft=10_000.0,
+            well_type="single", category=category,
+        )
+
+    wells = [
+        _w("plan_all_pdp", "4249533594", "pdp"),
+        _w("plan_b", "4249533594", "pdp"),      # pdp dupe across scenarios: fine
+        _w("plan_b", "WCA_1-01", "generated"),
+        _w("plan_c", "WCA_1-01", "generated"),  # planned dupe: error
+    ]
+    req = BlueOxExportRequest(
+        codename="x", prepared_by="m",
+        zones=[BlueOxZoneSpec(
+            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
+            benches=["WCA_1"],
+        )],
+        narvi_selections=[
+            NarviSelection(deal_id="d", scenario_id="plan_all_pdp"),
+            NarviSelection(deal_id="d", scenario_id="plan_b"),
+            NarviSelection(deal_id="d", scenario_id="plan_c"),
+        ],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, _ = _fetch_narvi_by_zone(req, errors)
+
+    assert any("plan_all_pdp matched only PDP-context wells" in e for e in errors)
+    assert any(
+        "'WCA_1-01'" in e and "plan_b" in e and "plan_c" in e for e in errors
+    )
+    assert all("4249533594" not in e for e in errors)
+    assert len(by_zone["WCA"]) == 2  # both generated rows routed (dupe flagged)
 
 
 def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:

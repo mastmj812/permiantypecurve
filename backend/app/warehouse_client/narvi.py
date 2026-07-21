@@ -41,13 +41,19 @@ class NarviInventoryWell:
     completed_lateral_ft: float | None
     drilled_lateral_ft: float | None
     well_type: str
+    # narvi's well category: 'generated' (narvi-planned) / 'pud' / 'res'
+    # (curated from novi_intel) are plannable inventory; 'pdp' is an
+    # EXISTING producer included for gunbarrel/plan-view context and
+    # must never be counted as a location (its well_name is the api10).
+    category: str | None = None
 
 
 _FETCH_SQL = (
     text(
         """
         SELECT deal_id, scenario_id, well_name, formation,
-               completed_lateral_ft, drilled_lateral_ft, well_type
+               completed_lateral_ft, drilled_lateral_ft, well_type,
+               detail->>'category' AS category
         FROM narvi.inventory_well
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id, well_name
@@ -85,6 +91,7 @@ def fetch_narvi_inventory(
                 else None
             ),
             well_type=r.well_type,
+            category=r.category,
         )
         for r in rows
     ]
