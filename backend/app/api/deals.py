@@ -868,11 +868,20 @@ def _collect_blueox_data(
     all_apis: set[str] = set()
     for spec in req.zones:
         tc = session.get(TypeCurve, spec.type_curve_id)
-        if tc is None or tc.deal_id != deal.id:
-            errors.append(
-                f"type curve {spec.type_curve_id} is not assigned to deal {deal.name!r}"
-            )
+        if tc is None:
+            errors.append(f"type curve {spec.type_curve_id} not found")
             continue
+        if tc.deal_id != deal.id:
+            # Allowed on purpose: one curve can legitimately serve zones
+            # in two workbooks (e.g. a formation whose curve lives on a
+            # sibling deal but whose planned wells sit in this deal's
+            # DSUs). Logged so a mis-picked curve is visible.
+            log.info(
+                "blueox_cross_deal_curve",
+                deal=deal.name,
+                curve=tc.name,
+                curve_deal_id=str(tc.deal_id),
+            )
         curves.append(tc)
         zone = _collect_blueox_zone(
             session, tc, spec, delivered, req.curve_months, errors,
