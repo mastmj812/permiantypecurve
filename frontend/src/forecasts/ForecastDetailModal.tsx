@@ -146,6 +146,10 @@ export function ForecastDetailModal({
     setPreviewEur(null);
     setPreviewEurDisplayed(null);
     setPreviewEurRemaining(null);
+    // Intentionally keyed only on the forecast's id: reset the edit
+    // fields when the user switches to a DIFFERENT forecast, not on
+    // every parent re-render (which would clobber in-progress edits).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [forecastForStream?.id]);
 
   // Keyboard nav while the modal is open. Skip when focus is in an
@@ -181,7 +185,7 @@ export function ForecastDetailModal({
     // override on the type curve drives the forecast portion of the
     // chart. Without this the modal would draw the global fit and
     // "Save TC override" would appear to revert on the next refetch.
-    fetchWellCurves(api10, 50, tcContext?.id ?? null)
+    void fetchWellCurves(api10, 50, tcContext?.id ?? null)
       .then((r) => {
         if (cancelled) return;
         const found = r.streams.find((s) => s.stream === stream) ?? null;
@@ -753,10 +757,10 @@ export function ForecastDetailModal({
               </table>
               {!readOnly && (
                 <div className="param-actions">
-                  <button type="button" onClick={recompute}>
+                  <button type="button" onClick={() => void recompute()}>
                     preview
                   </button>
-                  <button type="button" className="btn-primary" onClick={save}>
+                  <button type="button" className="btn-primary" onClick={() => void save()}>
                     {tcContext ? "save TC override" : "save override"}
                   </button>
                   {tcContext &&
@@ -764,7 +768,7 @@ export function ForecastDetailModal({
                       <button
                         type="button"
                         className="tb-btn"
-                        onClick={revertOverride}
+                        onClick={() => void revertOverride()}
                         title="Delete the TC-scoped override and fall back to this well's global forecast"
                       >
                         revert to global
@@ -774,7 +778,7 @@ export function ForecastDetailModal({
                     <button
                       type="button"
                       className={forecastForStream.locked ? "tb-active tb-btn" : "tb-btn"}
-                      onClick={toggleLock}
+                      onClick={() => void toggleLock()}
                       title={
                         forecastForStream.locked
                           ? "Locked — bulk re-fit will skip this stream"

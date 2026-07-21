@@ -9,7 +9,7 @@ import {
   setOnUnauthorized,
 } from "./api/auth";
 import { fetchTypeCurve } from "./api/typeCurves";
-import type { FilterSpec, WellStatus } from "./api/types";
+import type { FilterSpec } from "./api/types";
 import { HealthBadge } from "./components/HealthBadge";
 import { navigateHash } from "./navigation";
 import { LoginPage } from "./pages/LoginPage";
@@ -141,14 +141,14 @@ export function App() {
       return;
     }
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const tc = await fetchTypeCurve(addWellsRoute.typeCurveId);
         if (cancelled) return;
         const f = (tc.filter_spec ?? {}) as Partial<FilterSpec>;
         setFormations(f.formations ?? []);
         setOperators(f.operators ?? []);
-        setStatuses((f.statuses ?? []) as WellStatus[]);
+        setStatuses(f.statuses ?? []);
         setVintageRange(f.first_prod_start ?? null, f.first_prod_end ?? null);
         setLateralRange(f.lateral_min_ft ?? null, f.lateral_max_ft ?? null);
         // api10s allow-list on the filter would force-include EXACTLY
@@ -264,7 +264,7 @@ export function App() {
               ← back to workspace
             </button>
             <span className="muted">{user.email}</span>
-            <button type="button" className="link-btn" onClick={onLogout}>
+            <button type="button" className="link-btn" onClick={() => void onLogout()}>
               sign out
             </button>
           </div>
@@ -302,7 +302,7 @@ export function App() {
           <div className="app-user">
             <HealthBadge />
             <span className="muted">{user.email}</span>
-            <button type="button" className="link-btn" onClick={onLogout}>
+            <button type="button" className="link-btn" onClick={() => void onLogout()}>
               sign out
             </button>
           </div>
@@ -354,7 +354,7 @@ export function App() {
         <div className="app-user">
           <HealthBadge />
           <span className="muted">{user.email}</span>
-          <button type="button" className="link-btn" onClick={onLogout}>
+          <button type="button" className="link-btn" onClick={() => void onLogout()}>
             sign out
           </button>
         </div>

@@ -517,18 +517,18 @@ function mergeSeriesForAxes(a: StreamSeries, b: StreamSeries): StreamSeries {
   const n = Math.max(a.p50.length, b.p50.length);
   const pad = <T,>(arr: T[], fill: T): T[] => {
     if (arr.length >= n) return arr.slice(0, n);
-    return [...arr, ...Array(n - arr.length).fill(fill)];
+    return [...arr, ...Array<T>(n - arr.length).fill(fill)];
   };
   // x-axis length comes from `n`; y-axis uses pointwise max of both.
   const ymax = <T extends number | null>(x: T, y: T): T => {
     if (x == null) return y;
     if (y == null) return x;
-    return ((x as number) >= (y as number) ? x : y) as T;
+    return x >= y ? x : y;
   };
   const ymin = <T extends number | null>(x: T, y: T): T => {
     if (x == null) return y;
     if (y == null) return x;
-    return ((x as number) <= (y as number) ? x : y) as T;
+    return x <= y ? x : y;
   };
   const A = {
     p10: pad(a.p10, null as number | null), p25: pad(a.p25, null as number | null),

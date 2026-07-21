@@ -86,7 +86,7 @@ export function TypeCurveSlidePage({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    void (async () => {
       try {
         const [curve, previousMaybe, wellStats] = await Promise.all([
           fetchTypeCurve(typeCurveId),

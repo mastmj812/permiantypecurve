@@ -45,7 +45,7 @@ function getStreamSeries(curve: TypeCurveRow, stream: Stream): StreamSeries | nu
 // the saved-curve series.
 function scaleSeries(s: StreamSeries, factor: number): StreamSeries {
   const sc = (arr: Array<number | null>) =>
-    arr.map((v) => (v == null || !Number.isFinite(v) ? v : (v as number) * factor));
+    arr.map((v) => (v == null || !Number.isFinite(v) ? v : v * factor));
   return {
     ...s,
     p10: sc(s.p10),

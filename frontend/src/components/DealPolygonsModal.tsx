@@ -75,7 +75,7 @@ export function DealPolygonsModal({ onClose }: Props) {
   }, []);
 
   useEffect(() => {
-    refresh();
+    void refresh();
   }, [refresh]);
 
   async function handleUpload(file: File) {
@@ -149,7 +149,7 @@ export function DealPolygonsModal({ onClose }: Props) {
               disabled={uploading}
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) handleUpload(f);
+                if (f) void handleUpload(f);
               }}
             />
             <span className="muted" style={{ fontSize: 11 }}>
@@ -218,7 +218,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                       type="button"
                       className="link-btn"
                       style={{ marginLeft: "auto" }}
-                      onClick={() => handleDeleteGroup(sourceFile, rows.length)}
+                      onClick={() => void handleDeleteGroup(sourceFile, rows.length)}
                       title="Delete every polygon from this shapefile"
                     >
                       delete shapefile
@@ -254,7 +254,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                           <button
                             type="button"
                             className="link-btn"
-                            onClick={() => handleDelete(p.id)}
+                            onClick={() => void handleDelete(p.id)}
                           >
                             delete
                           </button>

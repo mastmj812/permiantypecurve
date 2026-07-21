@@ -302,9 +302,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
     const map = mapRef.current;
     if (!map || !joined) return;
 
-    const existing = map.getSource(SOURCE_ID) as
-      | maplibregl.GeoJSONSource
-      | undefined;
+    const existing = map.getSource<maplibregl.GeoJSONSource>(SOURCE_ID);
     if (existing) {
       existing.setData(joined);
     } else {
@@ -380,7 +378,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
         map.getCanvas().style.cursor = "pointer";
         popupRef.current!
           .setLngLat(e.lngLat)
-          .setHTML(buildReviewPopupHtml(feat.properties as Record<string, unknown>))
+          .setHTML(buildReviewPopupHtml(feat.properties))
           .addTo(map);
       };
       const onLeave = () => {
@@ -431,7 +429,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
           return null;
         }
         if (!r.ok) throw new Error(`blocks fetch ${r.status}`);
-        return r.json();
+        return r.json() as Promise<GeoJSON.GeoJSON>;
       })
       .then((geo) => {
         if (!geo) return;
@@ -492,7 +490,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
           return null;
         }
         if (!r.ok) throw new Error(`sections fetch ${r.status}`);
-        return r.json();
+        return r.json() as Promise<GeoJSON.GeoJSON>;
       })
       .then((geo) => {
         if (!geo) return;
@@ -727,7 +725,15 @@ function ReviewMapLegend({
 // principle contain HTML metacharacters.
 function escHtml(s: unknown): string {
   if (s == null) return "—";
-  return String(s).replace(/[&<>"']/g, (c) => {
+  const str =
+    typeof s === "string" ||
+    typeof s === "number" ||
+    typeof s === "boolean" ||
+    typeof s === "bigint" ||
+    typeof s === "symbol"
+      ? String(s)
+      : JSON.stringify(s);
+  return str.replace(/[&<>"']/g, (c) => {
     switch (c) {
       case "&": return "&amp;";
       case "<": return "&lt;";

@@ -113,7 +113,7 @@ async function loadBlocks(map: MlMap): Promise<void> {
   if (map.getSource(BLOCKS_SOURCE_ID)) return;
   const r = await fetch("/api/basemap/blocks_tx_nm.geojson");
   if (!r.ok) return;
-  const data = await r.json();
+  const data = (await r.json()) as GeoJSON.GeoJSON;
   map.addSource(BLOCKS_SOURCE_ID, { type: "geojson", data });
   map.addLayer({
     id: BLOCKS_FILL_LAYER,
@@ -216,7 +216,7 @@ async function loadSections(map: MlMap): Promise<void> {
   if (map.getSource(SECTIONS_SOURCE_ID)) return;
   const r = await fetch("/api/basemap/sections_tx_nm.geojson");
   if (!r.ok) return;
-  const data = await r.json();
+  const data = (await r.json()) as GeoJSON.GeoJSON;
   map.addSource(SECTIONS_SOURCE_ID, { type: "geojson", data });
   map.addLayer({
     id: SECTIONS_FILL_LAYER,
@@ -421,7 +421,7 @@ export function SlideMap({
       // Idle-listener fires even when no overlays loaded — the wells
       // still need to paint before we snapshot.
       if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
-      Promise.allSettled(overlayPromises).then(() => {
+      void Promise.allSettled(overlayPromises).then(() => {
         // Enforce a deterministic z-order regardless of which fetch
         // resolved first. moveLayer(id) with no second arg moves the
         // layer to the TOP of the stack. We move sections-then-blocks

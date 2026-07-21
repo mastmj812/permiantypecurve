@@ -95,13 +95,17 @@ function Api10Section({
   // Local draft state — only commits to the store on blur / Apply, so
   // we don't refetch tiles on every keystroke during a multi-thousand-
   // character paste.
-  const [draft, setDraft] = useState<string>(() => selected.join("\n"));
+  // Newline-joined store value — also the exact string the textarea
+  // holds, so keying the sync effect on it re-syncs on content change
+  // (guarding against reference churn) without listing the array.
+  const selectedText = selected.join("\n");
+  const [draft, setDraft] = useState<string>(() => selectedText);
 
   // If the store value changes from outside (e.g. resetFilters), pull
   // it back into the textarea.
   useEffect(() => {
-    setDraft(selected.join("\n"));
-  }, [selected.join(",")]);
+    setDraft(selectedText);
+  }, [selectedText]);
 
   // Extract every 10-digit run (Novi wellbore identifier), regardless
   // of separator. Tolerates dashes (e.g. "42-301-36707" = 10 digits

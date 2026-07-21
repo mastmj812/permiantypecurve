@@ -32,7 +32,7 @@ export function LoginPage({ onAuthenticated }: Props) {
 
   return (
     <div className="login-shell">
-      <form className="login-card" onSubmit={onSubmit}>
+      <form className="login-card" onSubmit={(e) => void onSubmit(e)}>
         <h1>Permian Type Curve</h1>
         <p className="muted">Sign in to continue.</p>
 
