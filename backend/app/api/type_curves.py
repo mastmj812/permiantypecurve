@@ -856,10 +856,10 @@ def _fitted_eur_per_1000ft(
     }
 
 
-def _evaluate_fitted_rates(
+def _fitted_params_by_pct(
     stream_data: dict[str, Any],
-) -> dict[str, list[float] | None]:
-    """Per-percentile fitted rate arrays out to ``_FORECAST_N_MONTHS``.
+) -> dict[str, dict[str, Any] | None]:
+    """Resolve the fit params behind each percentile band.
 
     Reads ``fitted_per_percentile`` from the saved series (new format)
     and falls back to refitting from the raw monthly arrays for type
@@ -867,30 +867,48 @@ def _evaluate_fitted_rates(
     whose underlying series couldn't be fit (too few months, all-zero,
     etc) — same fail-open semantic as ``fitted_eur_per_unit``.
 
-    Shared by the CSV-zip export (``_forecast_csv``) and the deal-level
-    Excel export so the two stay in lockstep.
+    The single source for BOTH the evaluated rate vectors and any
+    export that quotes the params themselves (the Blue Ox drop's
+    ``curve_params`` sheet) — resolving once here guarantees the quoted
+    qi/Di/b always belong to the same fit that produced the volumes.
     """
-    # Lazy imports — these pull in numpy / scipy and we don't want
-    # that on the list endpoint's hot path.
-    from app.type_curves.fit_p50 import evaluate_fit, fit_p50_series
+    # Lazy import — pulls in numpy / scipy and we don't want that on
+    # the list endpoint's hot path.
+    from app.type_curves.fit_p50 import fit_p50_series
 
     persisted = (stream_data or {}).get("fitted_per_percentile") or {}
-    rates_by_pct: dict[str, list[float] | None] = {}
+    fits: dict[str, dict[str, Any] | None] = {}
     for key in _PERCENTILE_KEYS_WITH_MEAN:
         fit = persisted.get(key)
         if fit is None:
             # Old save or unfittable series — try to refit from the
             # raw monthly series now. Stateless fallback.
             series = stream_data.get(key)
-            if not series:
-                rates_by_pct[key] = None
-                continue
-            r = fit_p50_series(series)
-            fit = (
-                {k: v for k, v in r.items() if k != "smoothed_rate"}
-                if r is not None
-                else None
-            )
+            if series:
+                r = fit_p50_series(series)
+                fit = (
+                    {k: v for k, v in r.items() if k != "smoothed_rate"}
+                    if r is not None
+                    else None
+                )
+        fits[key] = fit
+    return fits
+
+
+def _evaluate_fitted_rates(
+    stream_data: dict[str, Any],
+) -> dict[str, list[float] | None]:
+    """Per-percentile fitted rate arrays out to ``_FORECAST_N_MONTHS``.
+
+    Params resolved via ``_fitted_params_by_pct`` (persisted-first,
+    stateless refit fallback). Shared by the CSV-zip export
+    (``_forecast_csv``) and the deal-level Excel export so the two stay
+    in lockstep.
+    """
+    from app.type_curves.fit_p50 import evaluate_fit
+
+    rates_by_pct: dict[str, list[float] | None] = {}
+    for key, fit in _fitted_params_by_pct(stream_data).items():
         if fit is None:
             rates_by_pct[key] = None
             continue

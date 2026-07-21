@@ -19,8 +19,8 @@ import io
 import math
 import re
 import uuid
-from datetime import datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -29,18 +29,29 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.api.type_curves import (
-    TypeCurveSummary,
+    _DAYS_PER_MONTH,
     _FITTED_PARAM_KEYS,
     _FORECAST_N_MONTHS,
     _PERCENTILE_KEYS_WITH_MEAN,
-    _DAYS_PER_MONTH,
+    TypeCurveSummary,
     _evaluate_fitted_rates,
     _fitted_eur_per_1000ft,
     _fitted_p50_params,
 )
 from app.core.logging import get_logger
-from app.db.models import Deal, TypeCurve
+from app.db.models import Deal, NormalizationBasis, TypeCurve
+from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
+from app.exports.blueox import (
+    LEVEL_TO_SPE_KEY,
+    BlueOxContractError,
+    BlueOxExportData,
+    InventoryRow,
+    ZoneData,
+    blueox_filename,
+    build_blueox_workbook,
+    monthly_volumes_from_rates,
+)
 from app.exports.well_rows import (
     PER_WELL_COL_FORMATS,
     PER_WELL_HEADERS,
@@ -510,5 +521,306 @@ def export_deal(
         media_type=XLSX_MEDIA_TYPE,
         headers={
             "Content-Disposition": f'attachment; filename="{safe_name}.xlsx"',
+        },
+    )
+
+
+# ==================== Blue Ox curve-drop export ====================
+#
+# Deliverable A of the Blue Ox Engineering Curve-Drop Contract v1
+# (engineering_db docs/blue_ox_curve_drop_contract.md). Assembly only —
+# workbook shape, validation, and the SPE->ascending percentile flip
+# live in app.exports.blueox (pure module, no DB/HTTP coupling).
+
+
+class BlueOxInventoryRowIn(BaseModel):
+    """One planned undeveloped well (contract §1.3)."""
+
+    drilled_lateral_ft: float = Field(ge=3_000, le=25_000)
+    # Analog lateral basis behind the curve; defaults to the zone's
+    # analog-cohort mean lateral when omitted.
+    producing_lateral_ft: float | None = Field(default=None, ge=3_000, le=25_000)
+    well_name: str | None = None
+
+
+class BlueOxZoneSpec(BaseModel):
+    type_curve_id: uuid.UUID
+    # Adopted verbatim by Blue Ox as the zone identifier (contract
+    # Principle 2 — stable across re-drops). Defaults to the curve name.
+    zone_name: str | None = Field(default=None, min_length=1, max_length=26)
+    reserve_category: Literal["PUD", "RES"]
+    inventory: list[BlueOxInventoryRowIn] = Field(default_factory=list)
+
+
+class BlueOxExportRequest(BaseModel):
+    codename: str = Field(min_length=1, max_length=64)
+    curve_months: int = Field(default=360, ge=12, le=600)
+    # Blue Ox ASCENDING labels (their P10 = low case); the flip to our
+    # SPE fits happens in assembly via LEVEL_TO_SPE_KEY.
+    levels: list[Literal["P10", "P25", "P75", "P90"]] = Field(default_factory=list)
+    prepared_by: str = Field(min_length=1, max_length=128)
+    zones: list[BlueOxZoneSpec] = Field(min_length=1)
+
+
+_BLUEOX_BASIS: dict[NormalizationBasis, str] = {
+    NormalizationBasis.PER_LATERAL_FT: "per_1000_lateral_ft",
+    NormalizationBasis.PER_WELL: "per_well",
+}
+_BLUEOX_QI_UNITS: dict[str, str] = {"oil": "bbl/d", "gas": "Mcf/d"}
+_BLUEOX_SOURCE_SYSTEM = "anduin type-curve DB (synced from oilgas warehouse)"
+
+
+def _one_yr_effective(di_nominal: float, b: float) -> float | None:
+    """1-yr secant effective decline from nominal Di (per-yr) and Arps b.
+
+    Quoted in curve_params notes so the finance side reads both
+    conventions — a nominal 2.5/yr Permian Di is ~75% effective and the
+    bare nominal number invites misreading.
+    """
+    try:
+        if b > 0:
+            return 1.0 - float((1.0 + b * di_nominal) ** (-1.0 / b))
+        return 1.0 - math.exp(-di_nominal)
+    except (ValueError, OverflowError, ZeroDivisionError):
+        return None
+
+
+def _collect_blueox_zone(
+    session: Session,
+    tc: TypeCurve,
+    spec: BlueOxZoneSpec,
+    delivered: list[str],
+    curve_months: int,
+    errors: list[str],
+) -> ZoneData | None:
+    """Assemble one zone's volumes / params / analogs / inventory.
+
+    Appends human-readable problems to ``errors`` and returns None when
+    the zone can't be assembled (missing fits, unsupported basis, no
+    usable producing-lateral default).
+    """
+    from app.api.type_curves import _fitted_params_by_pct
+    from app.type_curves.fit_p50 import evaluate_fit
+
+    zone_name = spec.zone_name or tc.name
+    basis = _BLUEOX_BASIS.get(tc.normalization_basis)
+    if basis is None:
+        errors.append(
+            f"{zone_name}: normalization basis "
+            f"{tc.normalization_basis.value!r} is not exportable under the contract"
+        )
+        return None
+
+    streams = (tc.series or {}).get("streams", {})
+    fits_by_stream = {
+        s: _fitted_params_by_pct(streams.get(s) or {})
+        for s in ("oil", "gas", "water")
+    }
+
+    def _rates(fit: dict[str, Any]) -> list[float]:
+        evaluated = evaluate_fit(
+            qi=fit["qi"], Di=fit["Di"], b=fit["b"], Df=fit["Df"],
+            qo=fit.get("qo", fit["qi"]),
+            peak_index=fit.get("peak_index", 0),
+            n_months=_FORECAST_N_MONTHS,
+        )
+        return [float(r) for r in evaluated["smoothed_rate"]]
+
+    volumes: dict[str, dict[str, list[float]]] = {}
+    params_rows: list[dict[str, Any]] = []
+    for lv in delivered:
+        spe_key = LEVEL_TO_SPE_KEY[lv]
+        by_stream: dict[str, list[float]] = {}
+        for stream in ("oil", "gas"):
+            fit = fits_by_stream[stream].get(spe_key)
+            if fit is None:
+                errors.append(
+                    f"{zone_name}: no {stream} fit behind level {lv} (SPE "
+                    f"{spe_key}) — a partial triplet is a contract failure; "
+                    "drop the level or re-save the curve"
+                )
+                continue
+            by_stream[stream] = monthly_volumes_from_rates(
+                _rates(fit), curve_months, _DAYS_PER_MONTH
+            )
+            di = float(fit["Di"])
+            b_factor = float(fit["b"])
+            peak_month = int(fit.get("peak_index", 0)) + 1
+            eff = _one_yr_effective(di, b_factor)
+            eff_txt = f"; 1-yr secant effective {eff * 100.0:.1f}%" if eff is not None else ""
+            qi_units = _BLUEOX_QI_UNITS[stream]
+            if basis == "per_1000_lateral_ft":
+                qi_units += " per 1,000 ft"
+            params_rows.append({
+                "stream": stream,
+                "level": lv,
+                "qi": float(fit["qi"]),
+                "qi_units": qi_units,
+                "b_factor": b_factor,
+                "di": di,
+                "dmin": float(fit["Df"]),
+                "notes": (
+                    f"{tc.alignment_method.value} alignment; qi at peak "
+                    f"month {peak_month}{eff_txt}"
+                ),
+            })
+        # Water rides on the base level only (contract: no percentile
+        # water columns); included when a water fit exists.
+        if lv == "P50":
+            wfit = fits_by_stream["water"].get("p50")
+            if wfit is not None:
+                by_stream["water"] = monthly_volumes_from_rates(
+                    _rates(wfit), curve_months, _DAYS_PER_MONTH
+                )
+        volumes[lv] = by_stream
+
+    analog_rows = per_well_rows(session, list(tc.included_api10s or []))
+    lat_idx = PER_WELL_HEADERS.index("Lateral Length")
+    laterals = [float(r[lat_idx]) for r in analog_rows if r[lat_idx]]
+    cohort_mean_lat = sum(laterals) / len(laterals) if laterals else None
+
+    inventory: list[InventoryRow] = []
+    for i, inv in enumerate(spec.inventory, start=1):
+        producing = inv.producing_lateral_ft or cohort_mean_lat
+        if producing is None:
+            errors.append(
+                f"{zone_name}: inventory row {i} has no producing_lateral_ft "
+                "and the analog cohort has no laterals to default from"
+            )
+            continue
+        inventory.append(InventoryRow(
+            producing_lateral_ft=float(producing),
+            drilled_lateral_ft=float(inv.drilled_lateral_ft),
+            well_name=inv.well_name,
+        ))
+
+    return ZoneData(
+        zone_name=zone_name,
+        reserve_category=spec.reserve_category,
+        normalization_basis=basis,
+        volumes=volumes,
+        curve_params=params_rows,
+        analog_headers=PER_WELL_HEADERS,
+        analog_rows=analog_rows,
+        inventory=inventory,
+    )
+
+
+def _collect_blueox_data(
+    session: Session, deal: Deal, req: BlueOxExportRequest, export_date: date
+) -> BlueOxExportData:
+    """Assemble the full pure-builder input; 422 on any assembly problem."""
+    errors: list[str] = []
+    delivered = [
+        lv for lv in ("P10", "P25", "P50", "P75", "P90")
+        if lv == "P50" or lv in req.levels
+    ]
+
+    zones: list[ZoneData] = []
+    curves: list[TypeCurve] = []
+    all_apis: set[str] = set()
+    for spec in req.zones:
+        tc = session.get(TypeCurve, spec.type_curve_id)
+        if tc is None or tc.deal_id != deal.id:
+            errors.append(
+                f"type curve {spec.type_curve_id} is not assigned to deal {deal.name!r}"
+            )
+            continue
+        curves.append(tc)
+        zone = _collect_blueox_zone(
+            session, tc, spec, delivered, req.curve_months, errors
+        )
+        if zone is not None:
+            zones.append(zone)
+            all_apis.update(str(r[0]) for r in zone.analog_rows)
+
+    prod_rows_db = session.execute(
+        select(ProductionMonthly)
+        .where(ProductionMonthly.api10.in_(sorted(all_apis)))
+        .order_by(ProductionMonthly.api10, ProductionMonthly.prod_date)
+    ).scalars().all() if all_apis else []
+
+    if not prod_rows_db:
+        errors.append("no monthly production history found for any analog well")
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    # Optional columns obey the no-blank-cells rule: water is included
+    # (None coalesced to 0, the standard load-time convention) whenever
+    # any month reports it; days_on only when EVERY month has it — a
+    # zero producing_days means shut-in, not missing, so None can't be
+    # coalesced there.
+    has_water = any(r.water_bbl is not None for r in prod_rows_db)
+    has_days = all(r.producing_days is not None for r in prod_rows_db)
+    headers = ["api10", "date", "oil_bbl", "gas_mcf"]
+    if has_water:
+        headers.append("water_bbl")
+    if has_days:
+        headers.append("days_on")
+    prod_rows: list[list[Any]] = []
+    for r in prod_rows_db:
+        row: list[Any] = [
+            r.api10,
+            r.prod_date.strftime("%Y-%m"),
+            float(r.oil_bbl or 0.0),
+            float(r.gas_mcf or 0.0),
+        ]
+        if has_water:
+            row.append(float(r.water_bbl or 0.0))
+        if has_days:
+            row.append(float(r.producing_days or 0.0))
+        prod_rows.append(row)
+
+    history_through = max(r.prod_date for r in prod_rows_db).strftime("%Y-%m")
+    history_exceptions = tuple(sorted(all_apis - {r.api10 for r in prod_rows_db}))
+
+    filename = blueox_filename(req.codename, export_date)
+    return BlueOxExportData(
+        codename=req.codename,
+        export_date=export_date,
+        curve_months=req.curve_months,
+        levels=tuple(lv for lv in delivered if lv != "P50"),
+        prepared_by=req.prepared_by,
+        source_system=_BLUEOX_SOURCE_SYSTEM,
+        governing_export=f"deal {deal.name} ({deal.id}) — {filename}",
+        curve_params_source="; ".join(
+            f"{tc.name} ({tc.id}) saved {tc.created_at:%Y-%m-%d}" for tc in curves
+        ),
+        zones=zones,
+        production_headers=headers,
+        production_rows=prod_rows,
+        production_history_through=history_through,
+        history_exceptions=history_exceptions,
+    )
+
+
+@router.post("/{deal_id}/blueox-export.xlsx")
+def export_deal_blueox(
+    deal_id: uuid.UUID,
+    req: BlueOxExportRequest,
+    session: Session = Depends(get_session),
+) -> Response:
+    deal = _load_or_404(session, deal_id)
+    export_date = datetime.now(UTC).date()
+    data = _collect_blueox_data(session, deal, req, export_date)
+    try:
+        content = build_blueox_workbook(data)
+    except BlueOxContractError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    filename = blueox_filename(req.codename, export_date)
+    log.info(
+        "deal_blueox_exported",
+        id=str(deal_id),
+        codename=req.codename,
+        n_zones=len(data.zones),
+        curve_months=req.curve_months,
+        levels=list(data.levels),
+        bytes=len(content),
+    )
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
