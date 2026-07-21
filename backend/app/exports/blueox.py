@@ -143,6 +143,11 @@ class BlueOxExportData:
     # api10s listed on analog sheets with no available history, declared
     # in the manifest per contract §1.5 ("never silently absent").
     history_exceptions: tuple[str, ...] = ()
+    # Inventory benches deliberately excluded from this workbook (e.g.
+    # carried in a sibling deal's drop), declared in the manifest —
+    # Principle 4: everything declared, nothing implied. Strings like
+    # "WDFD (4 wells)".
+    inventory_exclusions: tuple[str, ...] = ()
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -554,6 +559,11 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         block_a.append((
             "analog_history_exceptions",
             ", ".join(data.history_exceptions) + " (no monthly history in source)",
+        ))
+    if data.inventory_exclusions:
+        block_a.append((
+            "inventory_benches_excluded",
+            "; ".join(data.inventory_exclusions),
         ))
     for key, value in block_a:
         ws.append([key, value])
