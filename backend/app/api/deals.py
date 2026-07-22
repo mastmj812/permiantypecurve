@@ -24,7 +24,7 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -44,7 +44,6 @@ from app.db.models import Deal, NormalizationBasis, TypeCurve
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
-    INVENTORY_CATEGORIES,
     LEVEL_TO_SPE_KEY,
     BlueOxContractError,
     BlueOxExportData,
@@ -63,6 +62,7 @@ from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.warehouse_client.narvi import (
     NarviInventoryWell,
     NarviScenario,
+    derive_handoff_category,
     fetch_narvi_inventory,
     fetch_narvi_scenarios,
     fetch_scenario_updated_at,
@@ -560,7 +560,19 @@ class BlueOxZoneSpec(BaseModel):
     # Adopted verbatim by Blue Ox as the zone identifier (contract
     # Principle 2 — stable across re-drops). Defaults to the curve name.
     zone_name: str | None = Field(default=None, min_length=1, max_length=26)
-    reserve_category: Literal["PUD", "RES"]
+    # PUD = proven undeveloped (scheduled and valued); UPSIDE = non-
+    # proven, carried unscheduled. Same vocabulary as the per-well
+    # handoff category so the zone label and its narvi wells align.
+    reserve_category: Literal["PUD", "UPSIDE"]
+
+    @field_validator("reserve_category", mode="before")
+    @classmethod
+    def _legacy_res(cls, v: Any) -> Any:
+        # Contract v1 shipped this as PUD | RES; configs saved before
+        # the rename still carry "RES".
+        if isinstance(v, str) and v.strip().upper() == "RES":
+            return "UPSIDE"
+        return v
     # narvi formation_blueox bench codes whose planned wells belong to
     # this zone (a zone commonly spans benches: WCA_1 + WCA_2 -> WCA).
     # Benches must be disjoint across zones.
@@ -620,15 +632,11 @@ def _handoff_category(w: NarviInventoryWell) -> str:
     agreed rule: existing producers -> PDP; pdp_count_3mi >= 3 -> PUD;
     <= 2 or unscored -> UPSIDE.
     """
-    if w.handoff_category:
-        cat = w.handoff_category.strip().upper()
-        if cat in INVENTORY_CATEGORIES:
-            return cat
-    if (w.category or "").lower() == "pdp":
-        return "PDP"
-    if w.pdp_count_3mi is not None and w.pdp_count_3mi >= 3:
-        return "PUD"
-    return "UPSIDE"
+    return derive_handoff_category(
+        w.handoff_category,
+        w.category,
+        w.pdp_count_3mi is not None and w.pdp_count_3mi >= 3,
+    )
 
 
 def _one_yr_effective(di_nominal: float, b: float) -> float | None:
@@ -1116,6 +1124,12 @@ def put_blueox_config(
 narvi_router = APIRouter(prefix="/narvi", tags=["narvi"])
 
 
+class NarviBenchCountOut(BaseModel):
+    formation: str | None  # formation_blueox bench code
+    category: str  # PDP / PUD / UPSIDE
+    n: int
+
+
 class NarviScenarioOut(BaseModel):
     deal_id: str
     scenario_id: str
@@ -1124,6 +1138,9 @@ class NarviScenarioOut(BaseModel):
     total_wells: int | None
     total_completed_ft: float | None
     updated_at: str
+    # Per-bench well counts by handoff class — the config UI's surface
+    # for confirming zone categories and bench coverage pre-export.
+    breakdown: list[NarviBenchCountOut]
 
 
 @narvi_router.get("/scenarios", response_model=list[NarviScenarioOut])
@@ -1135,7 +1152,22 @@ def list_narvi_scenarios() -> list[NarviScenarioOut]:
         raise HTTPException(
             status_code=502, detail=f"narvi scenario listing failed: {exc}"
         ) from exc
-    return [NarviScenarioOut(**s.__dict__) for s in scenarios]
+    return [
+        NarviScenarioOut(
+            deal_id=s.deal_id,
+            scenario_id=s.scenario_id,
+            name=s.name,
+            well_type=s.well_type,
+            total_wells=s.total_wells,
+            total_completed_ft=s.total_completed_ft,
+            updated_at=s.updated_at,
+            breakdown=[
+                NarviBenchCountOut(formation=b.formation, category=b.category, n=b.n)
+                for b in s.breakdown
+            ],
+        )
+        for s in scenarios
+    ]
 
 
 @router.post("/{deal_id}/blueox-export.xlsx")

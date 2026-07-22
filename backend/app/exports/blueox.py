@@ -126,7 +126,7 @@ class ZoneData:
     """
 
     zone_name: str
-    reserve_category: str  # "PUD" | "RES"
+    reserve_category: str  # "PUD" | "UPSIDE"
     normalization_basis: str  # "per_1000_lateral_ft" | "per_well"
     volumes: Mapping[str, Mapping[str, Sequence[float]]]
     curve_params: Sequence[Mapping[str, Any]]
@@ -257,9 +257,9 @@ def _validate(data: BlueOxExportData) -> None:
             errors.append(f"duplicate zone name {z.zone_name!r}")
         seen_names.add(z.zone_name.casefold())
 
-        if z.reserve_category not in ("PUD", "RES"):
+        if z.reserve_category not in ("PUD", "UPSIDE"):
             errors.append(
-                f"{z.zone_name}: reserve_category must be PUD or RES "
+                f"{z.zone_name}: reserve_category must be PUD or UPSIDE "
                 f"(got {z.reserve_category!r})"
             )
         if z.normalization_basis not in ("per_1000_lateral_ft", "per_well"):

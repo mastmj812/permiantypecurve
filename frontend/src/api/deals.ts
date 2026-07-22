@@ -110,7 +110,10 @@ async function safeDetail(r: Response): Promise<string | null> {
 // ---------------- Blue Ox curve-drop config (one deal = one workbook) --------
 
 export type BlueOxLevel = "P10" | "P25" | "P75" | "P90";
-export type BlueOxCategory = "PUD" | "RES";
+// PUD = proven undeveloped (scheduled/valued); UPSIDE = non-proven,
+// carried unscheduled. Same vocabulary as the per-well handoff
+// category. (Legacy "RES" is coerced to UPSIDE server-side.)
+export type BlueOxCategory = "PUD" | "UPSIDE";
 
 export interface BlueOxZoneSpec {
   type_curve_id: string;
@@ -151,6 +154,12 @@ export interface BlueOxConfigResponse {
   narvi_status: BlueOxScenarioStatus[];
 }
 
+export interface NarviBenchCount {
+  formation: string | null; // formation_blueox bench code
+  category: string; // PDP / PUD / UPSIDE
+  n: number;
+}
+
 export interface NarviScenario {
   deal_id: string;
   scenario_id: string;
@@ -159,6 +168,9 @@ export interface NarviScenario {
   total_wells: number | null;
   total_completed_ft: number | null;
   updated_at: string;
+  // per-bench well counts by handoff class — the pre-export surface for
+  // confirming zone categories and bench coverage
+  breakdown: NarviBenchCount[];
 }
 
 export async function getBlueOxConfig(dealId: string): Promise<BlueOxConfigResponse> {
