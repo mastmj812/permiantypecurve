@@ -44,6 +44,7 @@ from app.db.models import Deal, NormalizationBasis, TypeCurve
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
+    INVENTORY_CATEGORIES,
     LEVEL_TO_SPE_KEY,
     BlueOxContractError,
     BlueOxExportData,
@@ -537,13 +538,15 @@ def export_deal(
 
 
 class BlueOxInventoryRowIn(BaseModel):
-    """One planned undeveloped well (contract §1.3)."""
+    """One manual inventory-sheet row (contract §1.3 + category
+    amendment)."""
 
     drilled_lateral_ft: float = Field(ge=3_000, le=25_000)
     # Analog lateral basis behind the curve; defaults to the zone's
     # analog-cohort mean lateral when omitted.
     producing_lateral_ft: float | None = Field(default=None, ge=3_000, le=25_000)
     well_name: str | None = None
+    category: Literal["PDP", "PUD", "UPSIDE"] = "PUD"
 
 
 class BlueOxZoneSpec(BaseModel):
@@ -595,6 +598,25 @@ _BLUEOX_BASIS: dict[NormalizationBasis, str] = {
 }
 _BLUEOX_QI_UNITS: dict[str, str] = {"oil": "bbl/d", "gas": "Mcf/d"}
 _BLUEOX_SOURCE_SYSTEM = "anduin type-curve DB (synced from oilgas warehouse)"
+
+
+def _handoff_category(w: NarviInventoryWell) -> str:
+    """PDP / PUD / UPSIDE for one narvi well.
+
+    narvi's user-facing category (auto-derived there and overridable in
+    its UI, like the TVD override) wins when persisted. Fallback is the
+    agreed rule: existing producers -> PDP; pdp_count_3mi >= 3 -> PUD;
+    <= 2 or unscored -> UPSIDE.
+    """
+    if w.handoff_category:
+        cat = w.handoff_category.strip().upper()
+        if cat in INVENTORY_CATEGORIES:
+            return cat
+    if (w.category or "").lower() == "pdp":
+        return "PDP"
+    if w.pdp_count_3mi is not None and w.pdp_count_3mi >= 3:
+        return "PUD"
+    return "UPSIDE"
 
 
 def _one_yr_effective(di_nominal: float, b: float) -> float | None:
@@ -708,8 +730,9 @@ def _collect_blueox_zone(
     cohort_mean_lat = sum(laterals) / len(laterals) if laterals else None
 
     inventory: list[InventoryRow] = []
-    # narvi-planned wells first: completed lateral (EUR driver) is the
-    # producing lateral, drilled (legs + turn arc) drives per-ft capex.
+    # narvi wells first: completed lateral (EUR driver) is the producing
+    # lateral, drilled (legs + turn arc) drives per-ft capex. Category
+    # comes from narvi (override-aware) via _handoff_category.
     for nw in narvi_wells or []:
         if nw.completed_lateral_ft is None or nw.drilled_lateral_ft is None:
             errors.append(
@@ -721,6 +744,7 @@ def _collect_blueox_zone(
             producing_lateral_ft=nw.completed_lateral_ft,
             drilled_lateral_ft=nw.drilled_lateral_ft,
             well_name=nw.well_name,
+            category=_handoff_category(nw),
         ))
     # Manual rows — fallback / extras on top of the narvi pull.
     for i, inv in enumerate(spec.inventory, start=1):
@@ -735,6 +759,7 @@ def _collect_blueox_zone(
             producing_lateral_ft=float(producing),
             drilled_lateral_ft=float(inv.drilled_lateral_ft),
             well_name=inv.well_name,
+            category=inv.category,
         ))
 
     return ZoneData(
@@ -751,17 +776,21 @@ def _collect_blueox_zone(
 
 def _fetch_narvi_by_zone(
     req: BlueOxExportRequest, errors: list[str]
-) -> tuple[dict[str, list[NarviInventoryWell]], tuple[str, ...]]:
+) -> tuple[dict[str, list[NarviInventoryWell]], tuple[str, ...], list[NarviInventoryWell]]:
     """Pull the selected narvi scenarios and distribute wells to zones
     by each zone's bench list.
 
-    Returns ({zone_name: wells}, manifest exclusion strings). Every
-    fetched well must land in a zone or an explicitly excluded bench —
-    an unmapped bench is an error, never a silent drop (the inventory
-    row count IS the location count Blue Ox values).
+    Returns ({zone_name: wells}, manifest exclusion strings, unzoned
+    PDP wells). Every fetched PLANNED well must land in a zone or an
+    explicitly excluded bench — an unmapped bench is an error, never a
+    silent drop (the inventory row count IS the location count Blue Ox
+    values). Existing producers are NEVER dropped: a PDP well whose
+    bench has no zone here comes back in the third element and lands on
+    the inventory sheet with its bench code as `area` (the downstream
+    gunbarrel automation needs the whole DSU stack).
     """
     if not req.narvi_selections:
-        return {}, ()
+        return {}, (), []
 
     bench_to_zone: dict[str, str] = {}
     for spec in req.zones:
@@ -780,31 +809,33 @@ def _fetch_narvi_by_zone(
             wells = fetch_narvi_inventory(wh, pairs)
     except Exception as exc:  # surface as a 422, not a 500
         errors.append(f"narvi inventory fetch failed: {exc}")
-        return {}, ()
+        return {}, (), []
 
-    # narvi scenarios carry EXISTING producers as gunbarrel context
-    # (category 'pdp', well_name = api10). Those are never planned
-    # locations — drop them before any counting, so they can't inflate
-    # the inventory or double-count across merged scenarios.
-    planned = [w for w in wells if (w.category or "").lower() != "pdp"]
-    n_pdp_context = len(wells) - len(planned)
-    if n_pdp_context:
-        log.info("blueox_narvi_pdp_context_skipped", n=n_pdp_context)
-
-    seen_pairs = {(w.deal_id, w.scenario_id) for w in planned}
-    fetched_pairs = {(w.deal_id, w.scenario_id) for w in wells}
+    seen_pairs = {(w.deal_id, w.scenario_id) for w in wells}
     for pair in pairs:
         if pair not in seen_pairs:
-            detail = (
-                "only PDP-context wells"
-                if pair in fetched_pairs
-                else "no inventory wells"
-            )
             errors.append(
-                f"narvi selection {pair[0]}/{pair[1]} matched {detail}"
+                f"narvi selection {pair[0]}/{pair[1]} matched no inventory wells"
             )
 
-    # Merged scenarios must not re-list the same planned well.
+    # EXISTING producers (narvi category 'pdp', well_name = api10) ride
+    # along as display rows for the downstream gunbarrel automation.
+    # They dedupe across merged scenarios (the same producer shows up
+    # in several DSU plans) and are NEVER dropped — unmapped/excluded
+    # benches route them to the unzoned list (bench code as area).
+    # Planned wells (everything else) must map or be excluded, and must
+    # NOT duplicate across merged scenarios.
+    planned = [w for w in wells if (w.category or "").lower() != "pdp"]
+    pdp_context: list[NarviInventoryWell] = []
+    seen_pdp: set[tuple[str, str]] = set()
+    for w in wells:
+        if (w.category or "").lower() != "pdp":
+            continue
+        key = (w.well_name, w.formation or "")
+        if key not in seen_pdp:
+            seen_pdp.add(key)
+            pdp_context.append(w)
+
     seen_names: dict[tuple[str, str], tuple[str, str]] = {}
     for w in planned:
         key = (w.well_name, w.formation or "")
@@ -828,6 +859,13 @@ def _fetch_narvi_by_zone(
             unmapped[bench] = unmapped.get(bench, 0) + 1
             continue
         by_zone.setdefault(zone, []).append(w)
+    unzoned_pdp: list[NarviInventoryWell] = []
+    for w in pdp_context:
+        zone = bench_to_zone.get(w.formation or "")
+        if zone is None or (w.formation or "") in excluded:
+            unzoned_pdp.append(w)
+            continue
+        by_zone.setdefault(zone, []).append(w)
     if unmapped:
         errors.append(
             "narvi benches with no zone mapping and no exclusion: "
@@ -839,7 +877,7 @@ def _fetch_narvi_by_zone(
     exclusions = tuple(
         f"{b} ({n} wells)" for b, n in sorted(excluded.items()) if n > 0
     )
-    return by_zone, exclusions
+    return by_zone, exclusions, unzoned_pdp
 
 
 def _collect_blueox_data(
@@ -861,18 +899,45 @@ def _collect_blueox_data(
             if tc is not None:
                 spec.zone_name = tc.name[:26].strip()
 
-    narvi_by_zone, inventory_exclusions = _fetch_narvi_by_zone(req, errors)
+    narvi_by_zone, inventory_exclusions, unzoned_pdp = _fetch_narvi_by_zone(req, errors)
+
+    # Existing producers whose bench has no zone in THIS workbook still
+    # ride the inventory sheet (bench code as `area`) — the gunbarrel
+    # automation needs the whole DSU stack, zone coverage or not.
+    pdp_context_rows: list[tuple[str, InventoryRow]] = []
+    for w in unzoned_pdp:
+        if w.completed_lateral_ft is None or w.drilled_lateral_ft is None:
+            log.info("blueox_pdp_context_missing_laterals", well=w.well_name)
+            continue
+        pdp_context_rows.append((
+            w.formation or "(unknown)",
+            InventoryRow(
+                producing_lateral_ft=w.completed_lateral_ft,
+                drilled_lateral_ft=w.drilled_lateral_ft,
+                well_name=w.well_name,
+                category="PDP",
+            ),
+        ))
 
     zones: list[ZoneData] = []
     curves: list[TypeCurve] = []
     all_apis: set[str] = set()
     for spec in req.zones:
         tc = session.get(TypeCurve, spec.type_curve_id)
-        if tc is None or tc.deal_id != deal.id:
-            errors.append(
-                f"type curve {spec.type_curve_id} is not assigned to deal {deal.name!r}"
-            )
+        if tc is None:
+            errors.append(f"type curve {spec.type_curve_id} not found")
             continue
+        if tc.deal_id != deal.id:
+            # Allowed on purpose: one curve can legitimately serve zones
+            # in two workbooks (e.g. a formation whose curve lives on a
+            # sibling deal but whose planned wells sit in this deal's
+            # DSUs). Logged so a mis-picked curve is visible.
+            log.info(
+                "blueox_cross_deal_curve",
+                deal=deal.name,
+                curve=tc.name,
+                curve_deal_id=str(tc.deal_id),
+            )
         curves.append(tc)
         zone = _collect_blueox_zone(
             session, tc, spec, delivered, req.curve_months, errors,
@@ -940,6 +1005,7 @@ def _collect_blueox_data(
         production_history_through=history_through,
         history_exceptions=history_exceptions,
         inventory_exclusions=inventory_exclusions,
+        pdp_context_rows=pdp_context_rows,
     )
 
 

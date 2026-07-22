@@ -90,13 +90,24 @@ class BlueOxContractError(ValueError):
     """A contract violation that must block the export (never a warning)."""
 
 
+# Handoff categories on the inventory sheet. PUD/UPSIDE are the valued
+# location classes (they count toward Block B gross_locations and
+# lateral means); PDP rows are EXISTING producers carried for the
+# downstream gunbarrel automation — displayed, never counted, and
+# exempt from the planned-well lateral bounds.
+INVENTORY_CATEGORIES: tuple[str, ...] = ("PDP", "PUD", "UPSIDE")
+
+
 @dataclass(frozen=True)
 class InventoryRow:
-    """One planned undeveloped well (contract §1.3)."""
+    """One row on the handoff inventory sheet (contract §1.3 + the
+    category amendment): a planned undeveloped well (PUD/UPSIDE) or an
+    existing producer shown for gunbarrel context (PDP)."""
 
     producing_lateral_ft: float
     drilled_lateral_ft: float
     well_name: str | None = None
+    category: str = "PUD"
 
 
 @dataclass(frozen=True)
@@ -148,6 +159,12 @@ class BlueOxExportData:
     # Principle 4: everything declared, nothing implied. Strings like
     # "WDFD (4 wells)".
     inventory_exclusions: tuple[str, ...] = ()
+    # Existing producers whose bench maps to NO zone in this workbook —
+    # still written to the inventory sheet (the downstream gunbarrel
+    # automation needs the whole DSU stack), with the bench code as
+    # `area`. Deliberately the one place an `area` value may not match
+    # a zone sheet; loaders must tolerate it on category=PDP rows only.
+    pdp_context_rows: Sequence[tuple[str, InventoryRow]] = ()
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -334,6 +351,15 @@ def _validate(data: BlueOxExportData) -> None:
             errors.append(f"{z.zone_name}: analog sheet has no wells")
 
         for inv in z.inventory:
+            if inv.category not in INVENTORY_CATEGORIES:
+                errors.append(
+                    f"{z.zone_name}: inventory category {inv.category!r} not in "
+                    f"{INVENTORY_CATEGORIES}"
+                )
+            if inv.category == "PDP":
+                # Existing producers are display rows for the gunbarrel
+                # automation — the planned-well bounds don't apply.
+                continue
             for label, val in (
                 ("producing_lateral_ft", inv.producing_lateral_ft),
                 ("drilled_lateral_ft", inv.drilled_lateral_ft),
@@ -369,6 +395,14 @@ def _validate(data: BlueOxExportData) -> None:
             errors.append(
                 f"analog_production rows for wells not on any analog sheet: "
                 f"{sorted(orphans)}"
+            )
+
+    # Unzoned PDP context rows: display-only, must actually be PDP.
+    for area, invr in data.pdp_context_rows:
+        if invr.category != "PDP":
+            errors.append(
+                f"pdp_context_rows entry {invr.well_name!r} ({area}) must be "
+                f"category PDP (got {invr.category!r})"
             )
 
     if errors:
@@ -448,28 +482,39 @@ def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
     # well_name is optional; include the column only when every row has
     # one (contract formatting rule: no blank cells mid-column).
     all_named = all(
-        inv.well_name for z in data.zones for inv in z.inventory
-    )
-    header = ["area", "producing_lateral_ft", "drilled_lateral_ft"]
+        inv.well_name
+        for z in data.zones for inv in z.inventory
+    ) and all(inv.well_name for _area, inv in data.pdp_context_rows)
+    header = ["area", "category", "producing_lateral_ft", "drilled_lateral_ft"]
     if all_named:
         header.append("well_name")
     ws.append(header)
     _bold_row(ws, 1, len(header))
+
+    def _row(area: str, inv: InventoryRow) -> None:
+        row: list[Any] = [
+            area,
+            inv.category,
+            float(inv.producing_lateral_ft),
+            float(inv.drilled_lateral_ft),
+        ]
+        if all_named:
+            row.append(inv.well_name)
+        ws.append(row)
+
     for z in data.zones:
         for inv in z.inventory:
-            row: list[Any] = [
-                z.zone_name,
-                float(inv.producing_lateral_ft),
-                float(inv.drilled_lateral_ft),
-            ]
-            if all_named:
-                row.append(inv.well_name)
-            ws.append(row)
+            _row(z.zone_name, inv)
+    # Existing producers with no zone here: area = the bench code (the
+    # one sanctioned mismatch with the zone-sheet names; PDP rows only).
+    for area, inv in data.pdp_context_rows:
+        _row(area, inv)
     ws.column_dimensions["A"].width = 28
-    for letter in ("B", "C"):
+    ws.column_dimensions["B"].width = 10
+    for letter in ("C", "D"):
         ws.column_dimensions[letter].number_format = "#,##0"
         ws.column_dimensions[letter].width = 20
-    ws.column_dimensions["D"].width = 26
+    ws.column_dimensions["E"].width = 26
 
 
 def _write_analog_sheet(ws: Any, z: ZoneData) -> None:
@@ -565,6 +610,12 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
             "inventory_benches_excluded",
             "; ".join(data.inventory_exclusions),
         ))
+    block_a.append((
+        "inventory_category_basis",
+        "PDP = existing producer (context only, not counted); "
+        "PUD = pdp_count_3mi >= 3; UPSIDE = pdp_count_3mi <= 2 or unscored; "
+        "narvi user overrides win",
+    ))
     for key, value in block_a:
         ws.append([key, value])
         ws.cell(row=ws.max_row, column=1).font = _BOLD
@@ -582,13 +633,16 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
     ws.append(header)
     _bold_row(ws, ws.max_row, len(header))
     for z in data.zones:
-        n_inv = len(z.inventory)
+        # PDP rows are display-only context — the valued location count
+        # and lateral means cover PUD/UPSIDE rows exclusively.
+        counted = [i for i in z.inventory if i.category != "PDP"]
+        n_inv = len(counted)
         avg_prod = (
-            sum(float(i.producing_lateral_ft) for i in z.inventory) / n_inv
+            sum(float(i.producing_lateral_ft) for i in counted) / n_inv
             if n_inv else 0.0
         )
         avg_drill = (
-            sum(float(i.drilled_lateral_ft) for i in z.inventory) / n_inv
+            sum(float(i.drilled_lateral_ft) for i in counted) / n_inv
             if n_inv else 0.0
         )
         ws.append([
