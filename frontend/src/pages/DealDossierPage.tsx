@@ -1,0 +1,385 @@
+// Deal dossier preview + export. Mounted chrome-free at
+// `#/deals/<id>/dossier` (like the type-curve slide page). Renders the
+// deal's SAVED Blue Ox config: one section per pinned narvi scenario
+// (live plan-view map + gunbarrel) followed by one section per zone
+// type curve (param table + rate/cum charts + cohort map — the same
+// panels as the slide export). The Export button captures every panel
+// to PNG client-side and POSTs them to /api/deals/{id}/dossier.pptx.
+//
+// This is a working discussion deck, not a final exhibit — maps are
+// live; frame them before exporting.
+
+import { useEffect, useMemo, useState } from "react";
+
+import {
+  type BlueOxConfig,
+  type DealRow,
+  type DossierManifest,
+  exportDealDossierPptx,
+  getBlueOxConfig,
+  getDeal,
+} from "../api/deals";
+import { type Stream, type WellCurvesResponse, fetchWellCurves } from "../api/forecasts";
+import {
+  type NarviScenarioDetail,
+  fetchNarviScenarioDetail,
+} from "../api/narvi";
+import {
+  type TypeCurveRow,
+  type TypeCurveWellStat,
+  fetchTypeCurve,
+  fetchTypeCurveWellStats,
+} from "../api/typeCurves";
+import { type WellDetailLite, fetchWellDetails } from "../api/wells";
+import { ScenarioGunBarrel } from "../components/dossier/ScenarioGunBarrel";
+import { ScenarioSlideMap } from "../components/dossier/ScenarioSlideMap";
+import { capturePanel } from "../components/slide/captureSlideComposite";
+import { SlideCumChart } from "../components/slide/SlideCumChart";
+import { SlideMap } from "../components/slide/SlideMap";
+import { SlideParamTable } from "../components/slide/SlideParamTable";
+import { SlideRateChart } from "../components/slide/SlideRateChart";
+
+// Matches the backend's scenario picture boxes (5.95" x 4.9" at
+// 96 px/in) so the captured PNG aspect equals the slide placement.
+const SCENARIO_PANEL_W = 571;
+const SCENARIO_PANEL_H = 470;
+const STREAMS: Stream[] = ["oil", "gas", "water"];
+
+interface Props {
+  dealId: string;
+}
+
+// Well counts per handoff class + bench — the scenario slide subtitle.
+function scenarioSubtitle(sd: NarviScenarioDetail): string {
+  const parts: string[] = [];
+  for (const cat of ["PUD", "UPSIDE"] as const) {
+    const byBench = new Map<string, number>();
+    for (const w of sd.wells) {
+      if (w.category !== cat) continue;
+      const key = w.formation ?? "(no bench)";
+      byBench.set(key, (byBench.get(key) ?? 0) + 1);
+    }
+    if (byBench.size > 0) {
+      parts.push(
+        `${cat} ${[...byBench.entries()].map(([f, n]) => `${f} x${n}`).join(", ")}`,
+      );
+    }
+  }
+  const pdp = sd.wells.filter((w) => w.category === "PDP").length;
+  if (pdp > 0) parts.push(`PDP x${pdp}`);
+  parts.push(sd.well_type);
+  return parts.join(" · ");
+}
+
+export function DealDossierPage({ dealId }: Props) {
+  const [deal, setDeal] = useState<DealRow | null>(null);
+  const [cfg, setCfg] = useState<BlueOxConfig | null>(null);
+  const [scenarios, setScenarios] = useState<NarviScenarioDetail[] | null>(null);
+  const [curvesReady, setCurvesReady] = useState<Set<number>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+
+  useEffect(() => {
+    const prevMargin = document.body.style.margin;
+    const prevBg = document.body.style.background;
+    document.body.style.margin = "0";
+    document.body.style.background = "#ffffff";
+    return () => {
+      document.body.style.margin = prevMargin;
+      document.body.style.background = prevBg;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [d, cfgResp] = await Promise.all([
+          getDeal(dealId),
+          getBlueOxConfig(dealId),
+        ]);
+        if (cancelled) return;
+        setDeal(d);
+        if (!cfgResp.config) {
+          setError(
+            "this deal has no saved Blue Ox config — save one first (the dossier renders its scenarios and zones)",
+          );
+          return;
+        }
+        setCfg(cfgResp.config);
+        const details = await Promise.all(
+          cfgResp.config.narvi_selections.map((s) =>
+            fetchNarviScenarioDetail(s.deal_id, s.scenario_id),
+          ),
+        );
+        if (!cancelled) setScenarios(details);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dealId]);
+
+  // One curve section per zone, deduped (two zones may share a curve).
+  const curveIds = useMemo(() => {
+    if (!cfg) return [] as string[];
+    return [...new Set(cfg.zones.map((z) => z.type_curve_id))];
+  }, [cfg]);
+
+  const allReady =
+    scenarios !== null && curveIds.every((_, i) => curvesReady.has(i));
+
+  const onExport = async () => {
+    if (!scenarios) return;
+    setExporting(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const manifest: DossierManifest = {
+        scenarios: scenarios.map((sd) => ({
+          title: sd.name ?? sd.scenario_id,
+          subtitle: scenarioSubtitle(sd),
+        })),
+        curves: curveIds.map((id) => ({ type_curve_id: id })),
+      };
+      const files: Record<string, Blob> = {};
+      const grab = async (name: string) => {
+        const panel = document.querySelector<HTMLElement>(
+          `[data-dossier-panel="${name}"]`,
+        );
+        if (!panel) throw new Error(`panel ${name} not rendered yet`);
+        files[name] = await capturePanel(document, panel, 2);
+      };
+      for (let i = 0; i < scenarios.length; i++) {
+        await grab(`s${i}_map`);
+        await grab(`s${i}_gunbarrel`);
+      }
+      for (let i = 0; i < curveIds.length; i++) {
+        for (const stream of STREAMS) {
+          await grab(`c${i}_rate_${stream}`);
+          await grab(`c${i}_cum_${stream}`);
+        }
+        await grab(`c${i}_map`);
+      }
+      const filename = await exportDealDossierPptx(dealId, manifest, files);
+      setNotice(`exported ${filename}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  if (error && !cfg) {
+    return (
+      <div className="slide-page slide-error">
+        <h2>Couldn't build dossier</h2>
+        <p>{error}</p>
+      </div>
+    );
+  }
+  if (!deal || !cfg) {
+    return (
+      <div className="slide-page slide-loading">
+        <p>Building dossier preview…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="slide-page" style={{ padding: "12px 24px 48px" }}>
+      <div
+        className="slide-preview-controls"
+        style={{ position: "sticky", top: 0, background: "#ffffff", zIndex: 10, padding: "8px 0" }}
+      >
+        <strong style={{ marginRight: 12 }}>Dossier — {deal.name}</strong>
+        <button
+          type="button"
+          className="tb-btn"
+          disabled={exporting || !allReady}
+          title={
+            allReady
+              ? "capture every panel as framed and download the .pptx"
+              : "panels still loading…"
+          }
+          onClick={() => void onExport()}
+        >
+          {exporting ? "exporting…" : "Export dossier .pptx"}
+        </button>
+        <span className="muted" style={{ fontSize: 11, marginLeft: 12 }}>
+          maps are live — drag / scroll-zoom to frame each shot; the export
+          captures the current views
+        </span>
+        {error && <span style={{ color: "#dc2626", fontSize: 12, marginLeft: 12 }}>{error}</span>}
+        {notice && !error && (
+          <span style={{ color: "#15803d", fontSize: 12, marginLeft: 12 }}>{notice}</span>
+        )}
+      </div>
+
+      {scenarios === null && <p className="muted">loading narvi scenarios…</p>}
+      {scenarios?.map((sd, i) => (
+        <section key={`${sd.deal_id}/${sd.scenario_id}`} style={{ marginTop: 20 }}>
+          <h1 className="slide-title">{sd.name ?? sd.scenario_id}</h1>
+          <p className="muted" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+            {scenarioSubtitle(sd)}
+          </p>
+          <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <div className="slide-panel" data-dossier-panel={`s${i}_map`}>
+              <ScenarioSlideMap
+                aoiGeojson={sd.aoi_geojson}
+                wells={sd.wells}
+                width={SCENARIO_PANEL_W}
+                height={SCENARIO_PANEL_H}
+              />
+            </div>
+            <div className="slide-panel" data-dossier-panel={`s${i}_gunbarrel`}>
+              <ScenarioGunBarrel
+                wells={sd.wells}
+                width={SCENARIO_PANEL_W}
+                height={SCENARIO_PANEL_H}
+              />
+            </div>
+          </div>
+        </section>
+      ))}
+
+      {curveIds.map((id, i) => (
+        <DossierCurveSection
+          key={id}
+          curveId={id}
+          idx={i}
+          onReady={() =>
+            setCurvesReady((prev) => new Set(prev).add(i))
+          }
+        />
+      ))}
+    </div>
+  );
+}
+
+interface CurveSectionProps {
+  curveId: string;
+  idx: number;
+  onReady: () => void;
+}
+
+interface CurveData {
+  curve: TypeCurveRow;
+  wellStats: TypeCurveWellStat[];
+  wellDetails: WellDetailLite[];
+  wellCurves: WellCurvesResponse[];
+}
+
+// One type curve's dossier section — the same data + panels as the
+// slide export page (TypeCurveSlidePage), all streams stacked visibly.
+function DossierCurveSection({ curveId, idx, onReady }: CurveSectionProps) {
+  const [data, setData] = useState<CurveData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [curve, wellStats] = await Promise.all([
+          fetchTypeCurve(curveId),
+          fetchTypeCurveWellStats(curveId),
+        ]);
+        if (cancelled) return;
+        const api10s = curve.included_api10s ?? [];
+        const [wellDetails, wellCurvesSettled] = await Promise.all([
+          api10s.length > 0 ? fetchWellDetails(api10s) : Promise.resolve([]),
+          Promise.allSettled(api10s.map((a) => fetchWellCurves(a))),
+        ]);
+        if (cancelled) return;
+        const wellCurves: WellCurvesResponse[] = [];
+        for (const r of wellCurvesSettled) {
+          if (r.status === "fulfilled") wellCurves.push(r.value);
+        }
+        setData({ curve, wellStats, wellDetails, wellCurves });
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [curveId]);
+
+  useEffect(() => {
+    if (data) onReady();
+    // onReady is a stable-enough parent callback; firing once per data
+    // load is the contract.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
+
+  const lateralByApi10 = useMemo(() => {
+    const m = new Map<string, number | null>();
+    if (!data) return m;
+    for (const s of data.wellStats) m.set(s.api10, s.lateral_ft);
+    for (const d of data.wellDetails) {
+      if (!m.has(d.api10) || m.get(d.api10) == null) m.set(d.api10, d.lateral_ft);
+    }
+    return m;
+  }, [data]);
+
+  if (error) {
+    return (
+      <section style={{ marginTop: 24 }}>
+        <p style={{ color: "#dc2626" }}>curve {curveId}: {error}</p>
+      </section>
+    );
+  }
+  if (!data) {
+    return (
+      <section style={{ marginTop: 24 }}>
+        <p className="muted">loading type curve…</p>
+      </section>
+    );
+  }
+
+  const api10s = data.curve.included_api10s ?? [];
+  return (
+    <section style={{ marginTop: 28 }}>
+      <h1 className="slide-title">{data.curve.name}</h1>
+      <SlideParamTable current={data.curve} previous={null} />
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
+        <div className="slide-panel slide-panel-map" data-dossier-panel={`c${idx}_map`}>
+          <SlideMap
+            api10s={api10s}
+            wellDetails={data.wellDetails}
+            width={629}
+            height={418}
+          />
+        </div>
+      </div>
+      {STREAMS.map((stream) => (
+        <div
+          key={stream}
+          style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}
+        >
+          <div className="slide-panel" data-dossier-panel={`c${idx}_rate_${stream}`}>
+            <SlideRateChart
+              current={data.curve}
+              previous={null}
+              wellCurves={data.wellCurves}
+              lateralByApi10={lateralByApi10}
+              stream={stream}
+            />
+          </div>
+          <div className="slide-panel" data-dossier-panel={`c${idx}_cum_${stream}`}>
+            <SlideCumChart
+              current={data.curve}
+              previous={null}
+              wellCurves={data.wellCurves}
+              lateralByApi10={lateralByApi10}
+              stream={stream}
+            />
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}

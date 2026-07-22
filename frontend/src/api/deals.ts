@@ -204,6 +204,48 @@ export async function listNarviScenarios(): Promise<NarviScenario[]> {
   return (await r.json()) as NarviScenario[];
 }
 
+// ---------------- deal dossier (working discussion deck) ----------------
+
+export interface DossierManifest {
+  scenarios: Array<{ title: string; subtitle: string }>;
+  curves: Array<{ type_curve_id: string }>;
+}
+
+// POSTs the manifest + client-captured panel PNGs; file names must
+// match the backend's convention (s{i}_map / s{i}_gunbarrel and
+// c{i}_rate_{stream} / c{i}_cum_{stream} / c{i}_map).
+export async function exportDealDossierPptx(
+  dealId: string,
+  manifest: DossierManifest,
+  files: Record<string, Blob>,
+): Promise<string> {
+  const fd = new FormData();
+  fd.append("manifest", JSON.stringify(manifest));
+  for (const [name, blob] of Object.entries(files)) {
+    fd.append(name, blob, `${name}.png`);
+  }
+  const r = await apiFetch(`/api/deals/${dealId}/dossier.pptx`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`dossier export failed: ${detail}`);
+  }
+  const cd = r.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(cd)?.[1] ?? "deal_dossier.pptx";
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return filename;
+}
+
 // Thrown when the export refuses because a pinned narvi scenario was
 // re-saved since the config was pinned; the caller may confirm and
 // retry with allowStale.

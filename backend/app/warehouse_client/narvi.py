@@ -215,6 +215,120 @@ def fetch_scenario_updated_at(
     return {(r.deal_id, r.scenario_id): r.updated_at.isoformat() for r in rows}
 
 
+@dataclass(frozen=True)
+class NarviScenarioWellGeo:
+    """One scenario well with everything the dossier's map + gunbarrel
+    need: WGS84 leg/turn geometry for the plan view, cross-section
+    offset + TVD for the gunbarrel."""
+
+    well_name: str
+    formation: str | None  # formation_blueox bench code
+    category: str  # resolved handoff class: PDP / PUD / UPSIDE
+    provenance: str | None  # narvi source: generated / pud / res / pdp
+    well_type: str  # single / uturn
+    n_legs: int
+    completed_lateral_ft: float | None
+    target_tvd_ft: float | None
+    legs_geojson: str | None  # MultiLineString, WGS84
+    turn_geojson: str | None  # LineString (U-turn arc), WGS84
+    # Perpendicular offsets (ft) of each leg along the cross-section
+    # axis — narvi's gunbarrel_x_ft, one per leg.
+    gunbarrel_xs: tuple[float, ...]
+
+
+@dataclass(frozen=True)
+class NarviScenarioDetail:
+    deal_id: str
+    scenario_id: str
+    name: str | None
+    well_type: str
+    aoi_geojson: str | None  # parcel Polygon/MultiPolygon, WGS84
+    wells: tuple[NarviScenarioWellGeo, ...]
+
+
+_DETAIL_HEADER_SQL = text(
+    """
+    SELECT name, well_type, ST_AsGeoJSON(aoi_geom) AS aoi_geojson
+    FROM narvi.scenario
+    WHERE deal_id = :deal_id AND scenario_id = :scenario_id
+    """
+)
+
+_DETAIL_WELLS_SQL = text(
+    """
+    SELECT well_name, formation, well_type, n_legs,
+           completed_lateral_ft, target_tvd_ft,
+           ST_AsGeoJSON(legs_geom) AS legs_geojson,
+           ST_AsGeoJSON(turn_geom) AS turn_geojson,
+           detail->>'category' AS category,
+           NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
+           detail->>'handoff_category' AS handoff_category,
+           detail->'legs' AS legs_detail
+    FROM narvi.inventory_well
+    WHERE deal_id = :deal_id AND scenario_id = :scenario_id
+    ORDER BY well_name
+    """
+)
+
+
+def fetch_narvi_scenario_detail(
+    wh: Session, deal_id: str, scenario_id: str
+) -> NarviScenarioDetail | None:
+    """Full geometry payload for one scenario (dossier map + gunbarrel).
+
+    Returns None when the scenario doesn't exist. PDP producers ride
+    along (category PDP) so the views show the whole DSU stack.
+    """
+    header = wh.execute(
+        _DETAIL_HEADER_SQL, {"deal_id": deal_id, "scenario_id": scenario_id}
+    ).one_or_none()
+    if header is None:
+        return None
+    rows = wh.execute(
+        _DETAIL_WELLS_SQL, {"deal_id": deal_id, "scenario_id": scenario_id}
+    ).all()
+    wells: list[NarviScenarioWellGeo] = []
+    for r in rows:
+        xs: list[float] = []
+        for leg in r.legs_detail or []:
+            x = leg.get("gunbarrel_x_ft") if isinstance(leg, dict) else None
+            if isinstance(x, (int, float)):
+                xs.append(float(x))
+        wells.append(
+            NarviScenarioWellGeo(
+                well_name=r.well_name,
+                formation=r.formation,
+                category=derive_handoff_category(
+                    r.handoff_category,
+                    r.category,
+                    r.pdp_count_3mi is not None and r.pdp_count_3mi >= 3,
+                ),
+                provenance=r.category,
+                well_type=r.well_type,
+                n_legs=r.n_legs,
+                completed_lateral_ft=(
+                    float(r.completed_lateral_ft)
+                    if r.completed_lateral_ft is not None
+                    else None
+                ),
+                target_tvd_ft=(
+                    float(r.target_tvd_ft) if r.target_tvd_ft is not None else None
+                ),
+                legs_geojson=r.legs_geojson,
+                turn_geojson=r.turn_geojson,
+                gunbarrel_xs=tuple(xs),
+            )
+        )
+    return NarviScenarioDetail(
+        deal_id=deal_id,
+        scenario_id=scenario_id,
+        name=header.name,
+        well_type=header.well_type,
+        aoi_geojson=header.aoi_geojson,
+        wells=tuple(wells),
+    )
+
+
 def fetch_narvi_inventory(
     wh: Session, selections: Sequence[tuple[str, str]]
 ) -> list[NarviInventoryWell]:
