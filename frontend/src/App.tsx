@@ -12,6 +12,7 @@ import { fetchTypeCurve } from "./api/typeCurves";
 import type { FilterSpec } from "./api/types";
 import { HealthBadge } from "./components/HealthBadge";
 import { navigateHash } from "./navigation";
+import { DealDossierPage } from "./pages/DealDossierPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MapPage } from "./pages/MapPage";
 import { ReviewPage } from "./pages/ReviewPage";
@@ -53,6 +54,15 @@ function parseSlideHash(): {
     }
   }
   return { typeCurveId: m[1]!, compareWithId, includeProbit, dealVisibility };
+}
+
+// Hash route for the deal dossier preview/export (chrome-free, like
+// the slide page).
+//   #/deals/<id>/dossier
+function parseDossierHash(): { dealId: string } | null {
+  const hash = window.location.hash || "";
+  const m = hash.match(/^#\/deals\/([^/?]+)\/dossier$/);
+  return m ? { dealId: m[1]! } : null;
 }
 
 // Hash route for the TC workspace (Phase 1: read-only well navigation).
@@ -104,6 +114,7 @@ export function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
   const [slideRoute, setSlideRoute] = useState(() => parseSlideHash());
+  const [dossierRoute, setDossierRoute] = useState(() => parseDossierHash());
   const [wellsRoute, setWellsRoute] = useState(() => parseWellsHash());
   const [addWellsRoute, setAddWellsRoute] = useState(() => parseAddWellsHash());
   const [tcDetailRoute, setTcDetailRoute] = useState(() =>
@@ -118,6 +129,7 @@ export function App() {
   useEffect(() => {
     const onHash = () => {
       setSlideRoute(parseSlideHash());
+      setDossierRoute(parseDossierHash());
       setWellsRoute(parseWellsHash());
       setAddWellsRoute(parseAddWellsHash());
       setTcDetailRoute(parseTypeCurveDetailHash());
@@ -219,6 +231,11 @@ export function App() {
         dealVisibility={slideRoute.dealVisibility}
       />
     );
+  }
+
+  // Dossier route — same chrome-free treatment as the slide page.
+  if (dossierRoute) {
+    return <DealDossierPage dealId={dossierRoute.dealId} />;
   }
 
   // Add-wells route (Phase 2.5): lands the user on the Map page with

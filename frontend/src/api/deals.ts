@@ -110,7 +110,10 @@ async function safeDetail(r: Response): Promise<string | null> {
 // ---------------- Blue Ox curve-drop config (one deal = one workbook) --------
 
 export type BlueOxLevel = "P10" | "P25" | "P75" | "P90";
-export type BlueOxCategory = "PUD" | "RES";
+// PUD = proven undeveloped (scheduled/valued); UPSIDE = non-proven,
+// carried unscheduled. Same vocabulary as the per-well handoff
+// category. (Legacy "RES" is coerced to UPSIDE server-side.)
+export type BlueOxCategory = "PUD" | "UPSIDE";
 
 export interface BlueOxZoneSpec {
   type_curve_id: string;
@@ -151,6 +154,12 @@ export interface BlueOxConfigResponse {
   narvi_status: BlueOxScenarioStatus[];
 }
 
+export interface NarviBenchCount {
+  formation: string | null; // formation_blueox bench code
+  category: string; // PDP / PUD / UPSIDE
+  n: number;
+}
+
 export interface NarviScenario {
   deal_id: string;
   scenario_id: string;
@@ -159,6 +168,9 @@ export interface NarviScenario {
   total_wells: number | null;
   total_completed_ft: number | null;
   updated_at: string;
+  // per-bench well counts by handoff class — the pre-export surface for
+  // confirming zone categories and bench coverage
+  breakdown: NarviBenchCount[];
 }
 
 export async function getBlueOxConfig(dealId: string): Promise<BlueOxConfigResponse> {
@@ -190,6 +202,48 @@ export async function listNarviScenarios(): Promise<NarviScenario[]> {
     throw new Error(`narvi scenario listing failed: ${detail}`);
   }
   return (await r.json()) as NarviScenario[];
+}
+
+// ---------------- deal dossier (working discussion deck) ----------------
+
+export interface DossierManifest {
+  scenarios: Array<{ title: string; subtitle: string }>;
+  curves: Array<{ type_curve_id: string }>;
+}
+
+// POSTs the manifest + client-captured panel PNGs; file names must
+// match the backend's convention (s{i}_map / s{i}_gunbarrel and
+// c{i}_rate_{stream} / c{i}_cum_{stream} / c{i}_map).
+export async function exportDealDossierPptx(
+  dealId: string,
+  manifest: DossierManifest,
+  files: Record<string, Blob>,
+): Promise<string> {
+  const fd = new FormData();
+  fd.append("manifest", JSON.stringify(manifest));
+  for (const [name, blob] of Object.entries(files)) {
+    fd.append(name, blob, `${name}.png`);
+  }
+  const r = await apiFetch(`/api/deals/${dealId}/dossier.pptx`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`dossier export failed: ${detail}`);
+  }
+  const cd = r.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(cd)?.[1] ?? "deal_dossier.pptx";
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return filename;
 }
 
 // Thrown when the export refuses because a pinned narvi scenario was

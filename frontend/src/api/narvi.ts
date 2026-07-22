@@ -1,0 +1,42 @@
+// narvi scenario geometry client. Mirrors the narvi passthroughs in
+// app/api/deals.py (narvi_router) — read-only; narvi is the single
+// writer of narvi.* in the warehouse.
+
+import { apiFetch } from "./auth";
+
+export interface NarviWellGeo {
+  well_name: string;
+  formation: string | null; // formation_blueox bench code
+  category: string; // resolved handoff class: PDP / PUD / UPSIDE
+  provenance: string | null; // narvi source: generated / pud / res / pdp
+  well_type: string; // single / uturn
+  n_legs: number;
+  completed_lateral_ft: number | null;
+  target_tvd_ft: number | null;
+  legs_geojson: string | null; // MultiLineString, WGS84
+  turn_geojson: string | null; // LineString (U-turn arc), WGS84
+  // Perpendicular cross-section offsets (ft), one per leg — narvi's
+  // gunbarrel_x_ft.
+  gunbarrel_xs: number[];
+}
+
+export interface NarviScenarioDetail {
+  deal_id: string;
+  scenario_id: string;
+  name: string | null;
+  well_type: string;
+  aoi_geojson: string | null; // parcel Polygon/MultiPolygon, WGS84
+  wells: NarviWellGeo[];
+}
+
+export async function fetchNarviScenarioDetail(
+  dealId: string,
+  scenarioId: string,
+): Promise<NarviScenarioDetail> {
+  const qs = new URLSearchParams({ deal_id: dealId, scenario_id: scenarioId });
+  const r = await apiFetch(`/api/narvi/scenario-detail?${qs}`);
+  if (!r.ok) {
+    throw new Error(`narvi scenario detail failed: ${r.status}`);
+  }
+  return (await r.json()) as NarviScenarioDetail;
+}

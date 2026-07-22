@@ -200,6 +200,21 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   const [dealActionError, setDealActionError] = useState<string | null>(null);
   // Deal whose Blue Ox drop config modal is open (null = closed).
   const [blueOxDeal, setBlueOxDeal] = useState<DealSummary | null>(null);
+  // Name filters for the sidebar lists — both panels accumulate fast
+  // enough that scrolling stops scaling. Case-insensitive substring;
+  // filters the list only, never the dropdowns fed by `library`/`deals`.
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [dealSearch, setDealSearch] = useState("");
+  const visibleLibrary = useMemo(() => {
+    const q = librarySearch.trim().toLowerCase();
+    if (!q) return library;
+    return library.filter((tc) => tc.name.toLowerCase().includes(q));
+  }, [library, librarySearch]);
+  const visibleDeals = useMemo(() => {
+    const q = dealSearch.trim().toLowerCase();
+    if (!q) return deals;
+    return deals.filter((d) => d.name.toLowerCase().includes(q));
+  }, [deals, dealSearch]);
   const refreshDeals = useCallback(async () => {
     setDeals(await listDeals());
   }, []);
@@ -1436,8 +1451,19 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
           {deals.length === 0 ? (
             <p className="muted">No deals yet — assign a saved curve to a deal to create one.</p>
           ) : (
+            <>
+              <input
+                type="search"
+                value={dealSearch}
+                placeholder={`search ${deals.length} deals…`}
+                onChange={(e) => setDealSearch(e.target.value)}
+                style={{ width: "100%", marginBottom: 6 }}
+              />
+              {visibleDeals.length === 0 && (
+                <p className="muted">no deals match “{dealSearch.trim()}”</p>
+              )}
             <ul className="library-list">
-              {deals.map((d) => (
+              {visibleDeals.map((d) => (
                 <li key={d.id} className="deal-row">
                   <div className="deal-row-info">
                     <div className="lib-name">{d.name}</div>
@@ -1478,6 +1504,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 </li>
               ))}
             </ul>
+            </>
           )}
           {blueOxDeal && (
             <BlueOxDropModal deal={blueOxDeal} onClose={() => setBlueOxDeal(null)} />
@@ -1489,8 +1516,19 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
           {library.length === 0 ? (
             <p className="muted">No saved curves yet.</p>
           ) : (
+            <>
+              <input
+                type="search"
+                value={librarySearch}
+                placeholder={`search ${library.length} curves…`}
+                onChange={(e) => setLibrarySearch(e.target.value)}
+                style={{ width: "100%", marginBottom: 6 }}
+              />
+              {visibleLibrary.length === 0 && (
+                <p className="muted">no curves match “{librarySearch.trim()}”</p>
+              )}
             <ul className="library-list">
-              {library.map((tc) => (
+              {visibleLibrary.map((tc) => (
                 <li key={tc.id}>
                   <button
                     type="button"
@@ -1525,6 +1563,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 </li>
               ))}
             </ul>
+            </>
           )}
         </section>
       </aside>

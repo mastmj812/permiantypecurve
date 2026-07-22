@@ -16,6 +16,7 @@ at most one deal via ``type_curves.deal_id``.
 from __future__ import annotations
 
 import io
+import json
 import math
 import re
 import uuid
@@ -23,8 +24,9 @@ from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -44,7 +46,6 @@ from app.db.models import Deal, NormalizationBasis, TypeCurve
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
-    INVENTORY_CATEGORIES,
     LEVEL_TO_SPE_KEY,
     BlueOxContractError,
     BlueOxExportData,
@@ -60,10 +61,17 @@ from app.exports.well_rows import (
     per_well_rows,
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
+from app.exports.dossier import (
+    CurveSlideInput,
+    ScenarioSlideInput,
+    build_deal_dossier_pptx,
+)
 from app.warehouse_client.narvi import (
     NarviInventoryWell,
     NarviScenario,
+    derive_handoff_category,
     fetch_narvi_inventory,
+    fetch_narvi_scenario_detail,
     fetch_narvi_scenarios,
     fetch_scenario_updated_at,
 )
@@ -560,7 +568,19 @@ class BlueOxZoneSpec(BaseModel):
     # Adopted verbatim by Blue Ox as the zone identifier (contract
     # Principle 2 — stable across re-drops). Defaults to the curve name.
     zone_name: str | None = Field(default=None, min_length=1, max_length=26)
-    reserve_category: Literal["PUD", "RES"]
+    # PUD = proven undeveloped (scheduled and valued); UPSIDE = non-
+    # proven, carried unscheduled. Same vocabulary as the per-well
+    # handoff category so the zone label and its narvi wells align.
+    reserve_category: Literal["PUD", "UPSIDE"]
+
+    @field_validator("reserve_category", mode="before")
+    @classmethod
+    def _legacy_res(cls, v: Any) -> Any:
+        # Contract v1 shipped this as PUD | RES; configs saved before
+        # the rename still carry "RES".
+        if isinstance(v, str) and v.strip().upper() == "RES":
+            return "UPSIDE"
+        return v
     # narvi formation_blueox bench codes whose planned wells belong to
     # this zone (a zone commonly spans benches: WCA_1 + WCA_2 -> WCA).
     # Benches must be disjoint across zones.
@@ -620,15 +640,11 @@ def _handoff_category(w: NarviInventoryWell) -> str:
     agreed rule: existing producers -> PDP; pdp_count_3mi >= 3 -> PUD;
     <= 2 or unscored -> UPSIDE.
     """
-    if w.handoff_category:
-        cat = w.handoff_category.strip().upper()
-        if cat in INVENTORY_CATEGORIES:
-            return cat
-    if (w.category or "").lower() == "pdp":
-        return "PDP"
-    if w.pdp_count_3mi is not None and w.pdp_count_3mi >= 3:
-        return "PUD"
-    return "UPSIDE"
+    return derive_handoff_category(
+        w.handoff_category,
+        w.category,
+        w.pdp_count_3mi is not None and w.pdp_count_3mi >= 3,
+    )
 
 
 def _one_yr_effective(di_nominal: float, b: float) -> float | None:
@@ -1116,6 +1132,12 @@ def put_blueox_config(
 narvi_router = APIRouter(prefix="/narvi", tags=["narvi"])
 
 
+class NarviBenchCountOut(BaseModel):
+    formation: str | None  # formation_blueox bench code
+    category: str  # PDP / PUD / UPSIDE
+    n: int
+
+
 class NarviScenarioOut(BaseModel):
     deal_id: str
     scenario_id: str
@@ -1124,6 +1146,9 @@ class NarviScenarioOut(BaseModel):
     total_wells: int | None
     total_completed_ft: float | None
     updated_at: str
+    # Per-bench well counts by handoff class — the config UI's surface
+    # for confirming zone categories and bench coverage pre-export.
+    breakdown: list[NarviBenchCountOut]
 
 
 @narvi_router.get("/scenarios", response_model=list[NarviScenarioOut])
@@ -1135,7 +1160,190 @@ def list_narvi_scenarios() -> list[NarviScenarioOut]:
         raise HTTPException(
             status_code=502, detail=f"narvi scenario listing failed: {exc}"
         ) from exc
-    return [NarviScenarioOut(**s.__dict__) for s in scenarios]
+    return [
+        NarviScenarioOut(
+            deal_id=s.deal_id,
+            scenario_id=s.scenario_id,
+            name=s.name,
+            well_type=s.well_type,
+            total_wells=s.total_wells,
+            total_completed_ft=s.total_completed_ft,
+            updated_at=s.updated_at,
+            breakdown=[
+                NarviBenchCountOut(formation=b.formation, category=b.category, n=b.n)
+                for b in s.breakdown
+            ],
+        )
+        for s in scenarios
+    ]
+
+
+class NarviWellGeoOut(BaseModel):
+    well_name: str
+    formation: str | None
+    category: str  # PDP / PUD / UPSIDE
+    provenance: str | None  # generated / pud / res / pdp
+    well_type: str
+    n_legs: int
+    completed_lateral_ft: float | None
+    target_tvd_ft: float | None
+    legs_geojson: str | None
+    turn_geojson: str | None
+    gunbarrel_xs: list[float]
+
+
+class NarviScenarioDetailOut(BaseModel):
+    deal_id: str
+    scenario_id: str
+    name: str | None
+    well_type: str
+    aoi_geojson: str | None
+    wells: list[NarviWellGeoOut]
+
+
+@narvi_router.get("/scenario-detail", response_model=NarviScenarioDetailOut)
+def get_narvi_scenario_detail(
+    deal_id: str, scenario_id: str
+) -> NarviScenarioDetailOut:
+    """Geometry payload for one scenario — the dossier preview's map
+    (AOI + legs/turns) and gunbarrel (offset vs TVD) inputs."""
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            detail = fetch_narvi_scenario_detail(wh, deal_id, scenario_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"narvi scenario detail failed: {exc}"
+        ) from exc
+    if detail is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"narvi scenario {deal_id}/{scenario_id} not found",
+        )
+    return NarviScenarioDetailOut(
+        deal_id=detail.deal_id,
+        scenario_id=detail.scenario_id,
+        name=detail.name,
+        well_type=detail.well_type,
+        aoi_geojson=detail.aoi_geojson,
+        wells=[
+            NarviWellGeoOut(
+                well_name=w.well_name,
+                formation=w.formation,
+                category=w.category,
+                provenance=w.provenance,
+                well_type=w.well_type,
+                n_legs=w.n_legs,
+                completed_lateral_ft=w.completed_lateral_ft,
+                target_tvd_ft=w.target_tvd_ft,
+                legs_geojson=w.legs_geojson,
+                turn_geojson=w.turn_geojson,
+                gunbarrel_xs=list(w.gunbarrel_xs),
+            )
+            for w in detail.wells
+        ],
+    )
+
+
+PPTX_MEDIA_TYPE = (
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+)
+
+
+@router.post("/{deal_id}/dossier.pptx")
+async def export_deal_dossier(
+    deal_id: uuid.UUID,
+    request: Request,
+    session: Session = Depends(get_session),
+) -> Response:
+    """Assemble the deal dossier deck from client-captured panels.
+
+    Multipart form: a ``manifest`` JSON field plus PNG files named by
+    the manifest's order —
+
+      manifest: {"scenarios": [{"title", "subtitle"}, ...],
+                 "curves": [{"type_curve_id", ...}, ...]}
+      files:    s{i}_map, s{i}_gunbarrel per scenario;
+                c{i}_rate_{stream}, c{i}_cum_{stream} (oil/gas/water)
+                and c{i}_map per curve.
+
+    Dynamic file counts rule out fixed UploadFile params — the form is
+    parsed by hand and missing parts are 422s, never silently skipped.
+    """
+    deal = _load_or_404(session, deal_id)
+    form = await request.form()
+    raw_manifest = form.get("manifest")
+    if not isinstance(raw_manifest, str):
+        raise HTTPException(status_code=422, detail="missing manifest field")
+    try:
+        manifest = json.loads(raw_manifest)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"manifest is not valid JSON: {exc}"
+        ) from exc
+
+    pngs: dict[str, bytes] = {}
+    for key, value in form.multi_items():
+        if isinstance(value, StarletteUploadFile):
+            pngs[key] = await value.read()
+
+    def png(name: str) -> bytes:
+        data = pngs.get(name)
+        if not data:
+            raise HTTPException(
+                status_code=422, detail=f"missing panel image {name!r}"
+            )
+        return data
+
+    scenarios: list[ScenarioSlideInput] = []
+    for i, sc in enumerate(manifest.get("scenarios", [])):
+        scenarios.append(
+            ScenarioSlideInput(
+                title=str(sc.get("title") or f"Scenario {i + 1}"),
+                subtitle=str(sc.get("subtitle") or ""),
+                map_png=png(f"s{i}_map"),
+                gunbarrel_png=png(f"s{i}_gunbarrel"),
+            )
+        )
+    curves: list[CurveSlideInput] = []
+    for i, cv in enumerate(manifest.get("curves", [])):
+        try:
+            tc_id = uuid.UUID(str(cv.get("type_curve_id")))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"curve {i}: bad type_curve_id"
+            ) from exc
+        curves.append(
+            CurveSlideInput(
+                type_curve_id=tc_id,
+                stream_pngs={
+                    stream: (png(f"c{i}_rate_{stream}"), png(f"c{i}_cum_{stream}"))
+                    for stream in ("oil", "gas", "water")
+                },
+                map_png=png(f"c{i}_map"),
+            )
+        )
+
+    try:
+        content = build_deal_dossier_pptx(session, scenarios, curves)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    safe_name = re.sub(r"[^a-z0-9]+", "_", deal.name.lower()).strip("_") or "deal"
+    filename = f"{safe_name}_dossier_{datetime.now(UTC).date().isoformat()}.pptx"
+    log.info(
+        "deal_dossier_exported",
+        id=str(deal_id),
+        n_scenarios=len(scenarios),
+        n_curves=len(curves),
+        bytes=len(content),
+    )
+    return Response(
+        content=content,
+        media_type=PPTX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 
 @router.post("/{deal_id}/blueox-export.xlsx")

@@ -83,7 +83,10 @@ async function captureStream(
   return { rate, cum, probit };
 }
 
-async function capturePanel(
+// Exported for the deal-dossier page, which captures its own panel set
+// (scenario maps / gunbarrels / per-curve charts) from the SAME
+// document rather than a slide iframe.
+export async function capturePanel(
   iframeDoc: Document,
   panel: HTMLElement,
   scale: number,

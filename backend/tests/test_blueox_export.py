@@ -412,6 +412,29 @@ def test_handoff_category_rule() -> None:
     assert _handoff_category(w(pdp_count_3mi=9, handoff_category="bogus")) == "PUD"
 
 
+def test_zone_reserve_category_pud_or_upside() -> None:
+    # RES was renamed UPSIDE (aligned with the per-well handoff
+    # vocabulary); the pure builder refuses anything else.
+    zone = _zone("WOLFCAMP A", ("4200000001",))
+    bad = ZoneData(**{**zone.__dict__, "reserve_category": "RES"})
+    with pytest.raises(BlueOxContractError, match="must be PUD or UPSIDE"):
+        build_blueox_workbook(_data(zones=[bad]))
+    ok = ZoneData(**{**zone.__dict__, "reserve_category": "UPSIDE"})
+    build_blueox_workbook(_data(zones=[ok]))
+
+
+def test_zone_spec_coerces_legacy_res() -> None:
+    # Configs saved under contract v1 carry "RES"; the request model
+    # normalizes them so saved configs keep loading and exporting.
+    from app.api.deals import BlueOxZoneSpec
+
+    spec = BlueOxZoneSpec.model_validate({
+        "type_curve_id": str(uuid.uuid4()), "zone_name": "WCA",
+        "reserve_category": "RES", "benches": [],
+    })
+    assert spec.reserve_category == "UPSIDE"
+
+
 def test_manifest_declares_inventory_exclusions() -> None:
     data = _data()
     data = BlueOxExportData(**{
