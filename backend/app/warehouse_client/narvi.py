@@ -43,9 +43,20 @@ class NarviInventoryWell:
     well_type: str
     # narvi's well category: 'generated' (narvi-planned) / 'pud' / 'res'
     # (curated from novi_intel) are plannable inventory; 'pdp' is an
-    # EXISTING producer included for gunbarrel/plan-view context and
-    # must never be counted as a location (its well_name is the api10).
+    # EXISTING producer (its well_name is the api10). PDP wells ride
+    # along on the handoff inventory tab (category PDP) so downstream
+    # gunbarrel automation sees the whole DSU stack — but they are
+    # never counted as locations.
     category: str | None = None
+    # Offset-PDP support count within 3 mi (curated.intel_pdp_support
+    # convention). Drives the handoff category: >=3 -> PUD, <=2/null ->
+    # UPSIDE. NULL until narvi evaluates it for a stick.
+    pdp_count_3mi: int | None = None
+    # narvi's user-facing category (auto from pdp_count_3mi, user-
+    # overridable in the narvi UI, like the TVD override). When
+    # present it WINS over the derivation here. NULL until the narvi
+    # feature lands.
+    handoff_category: str | None = None
 
 
 _FETCH_SQL = (
@@ -53,7 +64,9 @@ _FETCH_SQL = (
         """
         SELECT deal_id, scenario_id, well_name, formation,
                completed_lateral_ft, drilled_lateral_ft, well_type,
-               detail->>'category' AS category
+               detail->>'category' AS category,
+               NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
+               detail->>'handoff_category' AS handoff_category
         FROM narvi.inventory_well
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id, well_name
@@ -92,6 +105,8 @@ def fetch_narvi_inventory(
             ),
             well_type=r.well_type,
             category=r.category,
+            pdp_count_3mi=r.pdp_count_3mi,
+            handoff_category=r.handoff_category,
         )
         for r in rows
     ]
