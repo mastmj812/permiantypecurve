@@ -77,3 +77,4 @@ app.include_router(type_curves.router, prefix="/api", dependencies=protected)
 # "polygons" / "polygons.geojson" as a UUID and 422'ing).
 app.include_router(deal_polygons.router, prefix="/api", dependencies=protected)
 app.include_router(deals.router, prefix="/api", dependencies=protected)
+app.include_router(deals.narvi_router, prefix="/api", dependencies=protected)

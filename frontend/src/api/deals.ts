@@ -106,3 +106,123 @@ async function safeDetail(r: Response): Promise<string | null> {
     return null;
   }
 }
+
+// ---------------- Blue Ox curve-drop config (one deal = one workbook) --------
+
+export type BlueOxLevel = "P10" | "P25" | "P75" | "P90";
+export type BlueOxCategory = "PUD" | "RES";
+
+export interface BlueOxZoneSpec {
+  type_curve_id: string;
+  // adopted verbatim by Blue Ox as the zone identifier (<= 26 chars,
+  // stable across re-drops); null defaults to the curve name server-side
+  zone_name: string | null;
+  reserve_category: BlueOxCategory;
+  // narvi formation_blueox bench codes whose wells belong to this zone
+  benches: string[];
+}
+
+export interface BlueOxNarviSelection {
+  deal_id: string;
+  scenario_id: string;
+  pinned_updated_at?: string | null; // stamped server-side on save
+}
+
+export interface BlueOxConfig {
+  codename: string;
+  curve_months: number;
+  levels: BlueOxLevel[];
+  prepared_by: string;
+  zones: BlueOxZoneSpec[];
+  narvi_selections: BlueOxNarviSelection[];
+  exclude_benches: string[];
+}
+
+export interface BlueOxScenarioStatus {
+  deal_id: string;
+  scenario_id: string;
+  pinned_updated_at: string | null;
+  current_updated_at: string | null;
+  stale: boolean;
+}
+
+export interface BlueOxConfigResponse {
+  config: BlueOxConfig | null;
+  narvi_status: BlueOxScenarioStatus[];
+}
+
+export interface NarviScenario {
+  deal_id: string;
+  scenario_id: string;
+  name: string | null;
+  well_type: string;
+  total_wells: number | null;
+  total_completed_ft: number | null;
+  updated_at: string;
+}
+
+export async function getBlueOxConfig(dealId: string): Promise<BlueOxConfigResponse> {
+  const r = await apiFetch(`/api/deals/${dealId}/blueox-config`);
+  if (!r.ok) throw new Error(`fetch blue ox config failed: ${r.status}`);
+  return (await r.json()) as BlueOxConfigResponse;
+}
+
+export async function putBlueOxConfig(
+  dealId: string,
+  cfg: BlueOxConfig,
+): Promise<BlueOxConfigResponse> {
+  const r = await apiFetch(`/api/deals/${dealId}/blueox-config`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(cfg),
+  });
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`save blue ox config failed: ${detail}`);
+  }
+  return (await r.json()) as BlueOxConfigResponse;
+}
+
+export async function listNarviScenarios(): Promise<NarviScenario[]> {
+  const r = await apiFetch("/api/narvi/scenarios");
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`narvi scenario listing failed: ${detail}`);
+  }
+  return (await r.json()) as NarviScenario[];
+}
+
+// Thrown when the export refuses because a pinned narvi scenario was
+// re-saved since the config was pinned; the caller may confirm and
+// retry with allowStale.
+export class BlueOxStaleError extends Error {}
+
+export async function downloadBlueOxExport(
+  dealId: string,
+  opts: { allowStale?: boolean } = {},
+): Promise<string> {
+  const qs = opts.allowStale ? "?allow_stale=true" : "";
+  const r = await apiFetch(`/api/deals/${dealId}/blueox-export.xlsx${qs}`, {
+    method: "POST",
+  });
+  if (r.status === 409) {
+    throw new BlueOxStaleError((await safeDetail(r)) ?? "narvi scenarios changed");
+  }
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`blue ox export failed: ${detail}`);
+  }
+  // filename comes from Content-Disposition (<codename>_curves_<date>.xlsx)
+  const cd = r.headers.get("content-disposition") ?? "";
+  const filename = /filename="([^"]+)"/.exec(cd)?.[1] ?? "blueox_curves.xlsx";
+  const blob = await r.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  return filename;
+}

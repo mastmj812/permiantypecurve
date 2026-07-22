@@ -75,6 +75,73 @@ _FETCH_SQL = (
 )
 
 
+@dataclass(frozen=True)
+class NarviScenario:
+    """One saved narvi scenario (header row) — the config UI's pick list."""
+
+    deal_id: str
+    scenario_id: str
+    name: str | None
+    well_type: str
+    total_wells: int | None
+    total_completed_ft: float | None
+    updated_at: str  # ISO 8601; pinned into blueox_config for staleness checks
+
+
+_SCENARIOS_SQL = text(
+    """
+    SELECT deal_id, scenario_id, name, well_type, total_wells,
+           total_completed_ft, updated_at
+    FROM narvi.scenario
+    ORDER BY updated_at DESC
+    """
+)
+
+
+def fetch_narvi_scenarios(wh: Session) -> list[NarviScenario]:
+    """All saved narvi scenarios, newest first."""
+    rows = wh.execute(_SCENARIOS_SQL).all()
+    return [
+        NarviScenario(
+            deal_id=r.deal_id,
+            scenario_id=r.scenario_id,
+            name=r.name,
+            well_type=r.well_type,
+            total_wells=r.total_wells,
+            total_completed_ft=(
+                float(r.total_completed_ft) if r.total_completed_ft is not None else None
+            ),
+            updated_at=r.updated_at.isoformat(),
+        )
+        for r in rows
+    ]
+
+
+_UPDATED_AT_SQL = (
+    text(
+        """
+        SELECT deal_id, scenario_id, updated_at
+        FROM narvi.scenario
+        WHERE (deal_id, scenario_id) IN :pairs
+        """
+    ).bindparams(bindparam("pairs", expanding=True))
+)
+
+
+def fetch_scenario_updated_at(
+    wh: Session, selections: Sequence[tuple[str, str]]
+) -> dict[tuple[str, str], str]:
+    """updated_at (ISO) per (deal_id, scenario_id) — the staleness probe
+    for pinned blueox_config selections. Missing scenarios are simply
+    absent from the result."""
+    if not selections:
+        return {}
+    rows = wh.execute(
+        _UPDATED_AT_SQL, {"pairs": [tuple(p) for p in selections]}
+    ).all()
+    return {(r.deal_id, r.scenario_id): r.updated_at.isoformat() for r in rows}
+
+
 def fetch_narvi_inventory(
     wh: Session, selections: Sequence[tuple[str, str]]
 ) -> list[NarviInventoryWell]:

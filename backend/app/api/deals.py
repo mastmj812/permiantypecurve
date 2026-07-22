@@ -60,7 +60,13 @@ from app.exports.well_rows import (
     per_well_rows,
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
-from app.warehouse_client.narvi import NarviInventoryWell, fetch_narvi_inventory
+from app.warehouse_client.narvi import (
+    NarviInventoryWell,
+    NarviScenario,
+    fetch_narvi_inventory,
+    fetch_narvi_scenarios,
+    fetch_scenario_updated_at,
+)
 from app.warehouse_client.session import get_warehouse_session
 
 router = APIRouter(prefix="/deals", tags=["deals"])
@@ -571,6 +577,12 @@ class NarviSelection(BaseModel):
 
     deal_id: str = Field(min_length=1)
     scenario_id: str = Field(min_length=1)
+    # Stamped server-side when the blueox_config is saved: the narvi
+    # scenario's updated_at at pin time. An export from saved config
+    # compares it against the live value and refuses (409) when the
+    # scenario changed since — different inventory must not ship under
+    # an unchanged drop structure without the user seeing it.
+    pinned_updated_at: str | None = None
 
 
 class BlueOxExportRequest(BaseModel):
@@ -1009,13 +1021,151 @@ def _collect_blueox_data(
     )
 
 
-@router.post("/{deal_id}/blueox-export.xlsx")
-def export_deal_blueox(
+def _scenario_status(
+    selections: list[NarviSelection],
+) -> list[dict[str, Any]]:
+    """Pinned vs live updated_at per selection. Warehouse failures
+    degrade to current=None / stale=False (the GET must stay usable
+    when the warehouse is briefly unreachable; export re-checks)."""
+    pairs = [(s.deal_id, s.scenario_id) for s in selections]
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            current = fetch_scenario_updated_at(wh, pairs)
+    except Exception:
+        current = {}
+    out = []
+    for s in selections:
+        cur = current.get((s.deal_id, s.scenario_id))
+        out.append({
+            "deal_id": s.deal_id,
+            "scenario_id": s.scenario_id,
+            "pinned_updated_at": s.pinned_updated_at,
+            "current_updated_at": cur,
+            "stale": (
+                s.pinned_updated_at is not None
+                and cur is not None
+                and cur != s.pinned_updated_at
+            ),
+        })
+    return out
+
+
+class BlueOxConfigResponse(BaseModel):
+    config: BlueOxExportRequest | None
+    narvi_status: list[dict[str, Any]]
+
+
+@router.get("/{deal_id}/blueox-config", response_model=BlueOxConfigResponse)
+def get_blueox_config(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> BlueOxConfigResponse:
+    deal = _load_or_404(session, deal_id)
+    if not deal.blueox_config:
+        return BlueOxConfigResponse(config=None, narvi_status=[])
+    cfg = BlueOxExportRequest.model_validate(deal.blueox_config)
+    return BlueOxConfigResponse(
+        config=cfg, narvi_status=_scenario_status(cfg.narvi_selections)
+    )
+
+
+@router.put("/{deal_id}/blueox-config", response_model=BlueOxConfigResponse)
+def put_blueox_config(
     deal_id: uuid.UUID,
     req: BlueOxExportRequest,
     session: Session = Depends(get_session),
+) -> BlueOxConfigResponse:
+    """Save the deal's drop configuration. Pins each narvi selection's
+    live updated_at (server-side — whatever the client sent is
+    overwritten) so a later export can detect a re-saved scenario."""
+    deal = _load_or_404(session, deal_id)
+    for spec in req.zones:
+        if session.get(TypeCurve, spec.type_curve_id) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=f"type curve {spec.type_curve_id} not found",
+            )
+    pairs = [(s.deal_id, s.scenario_id) for s in req.narvi_selections]
+    if pairs:
+        try:
+            with contextmanager(get_warehouse_session)() as wh:
+                current = fetch_scenario_updated_at(wh, pairs)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502, detail=f"narvi scenario lookup failed: {exc}"
+            ) from exc
+        missing = [p for p in pairs if p not in current]
+        if missing:
+            raise HTTPException(
+                status_code=422,
+                detail="narvi scenarios not found: "
+                + ", ".join(f"{d}/{s}" for d, s in missing),
+            )
+        for sel in req.narvi_selections:
+            sel.pinned_updated_at = current[(sel.deal_id, sel.scenario_id)]
+    deal.blueox_config = req.model_dump(mode="json")
+    session.commit()
+    log.info("deal_blueox_config_saved", id=str(deal_id), codename=req.codename)
+    return BlueOxConfigResponse(
+        config=req, narvi_status=_scenario_status(req.narvi_selections)
+    )
+
+
+# Read-only narvi passthroughs (the config UI's scenario pick list).
+# Separate router: /api/deals/{deal_id} would swallow a /api/deals/narvi
+# path as a UUID parse error.
+narvi_router = APIRouter(prefix="/narvi", tags=["narvi"])
+
+
+class NarviScenarioOut(BaseModel):
+    deal_id: str
+    scenario_id: str
+    name: str | None
+    well_type: str
+    total_wells: int | None
+    total_completed_ft: float | None
+    updated_at: str
+
+
+@narvi_router.get("/scenarios", response_model=list[NarviScenarioOut])
+def list_narvi_scenarios() -> list[NarviScenarioOut]:
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            scenarios: list[NarviScenario] = fetch_narvi_scenarios(wh)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502, detail=f"narvi scenario listing failed: {exc}"
+        ) from exc
+    return [NarviScenarioOut(**s.__dict__) for s in scenarios]
+
+
+@router.post("/{deal_id}/blueox-export.xlsx")
+def export_deal_blueox(
+    deal_id: uuid.UUID,
+    req: BlueOxExportRequest | None = None,
+    allow_stale: bool = False,
+    session: Session = Depends(get_session),
 ) -> Response:
     deal = _load_or_404(session, deal_id)
+    if req is None:
+        # Run from the saved config — the normal path. Staleness gate:
+        # a narvi scenario re-saved after the config was pinned means
+        # different inventory under an unchanged structure; refuse
+        # unless the caller explicitly allows it (or re-saves the
+        # config, which re-pins).
+        if not deal.blueox_config:
+            raise HTTPException(
+                status_code=400,
+                detail="deal has no saved blue ox config and no payload was supplied",
+            )
+        req = BlueOxExportRequest.model_validate(deal.blueox_config)
+        stale = [s for s in _scenario_status(req.narvi_selections) if s["stale"]]
+        if stale and not allow_stale:
+            raise HTTPException(
+                status_code=409,
+                detail="narvi scenarios changed since the config was saved: "
+                + ", ".join(f"{s['deal_id']}/{s['scenario_id']}" for s in stale)
+                + " — re-save the config to re-pin, or pass allow_stale=true",
+            )
     export_date = datetime.now(UTC).date()
     data = _collect_blueox_data(session, deal, req, export_date)
     try:

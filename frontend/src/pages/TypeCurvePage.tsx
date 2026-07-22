@@ -30,6 +30,7 @@ import {
   downloadDealExport,
   listDeals,
 } from "../api/deals";
+import { BlueOxDropModal } from "../components/BlueOxDropModal";
 import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
@@ -197,6 +198,8 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // curve has at most one deal via deal_id.
   const [deals, setDeals] = useState<DealSummary[]>([]);
   const [dealActionError, setDealActionError] = useState<string | null>(null);
+  // Deal whose Blue Ox drop config modal is open (null = closed).
+  const [blueOxDeal, setBlueOxDeal] = useState<DealSummary | null>(null);
   const refreshDeals = useCallback(async () => {
     setDeals(await listDeals());
   }, []);
@@ -1444,6 +1447,14 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                     <button
                       type="button"
                       className="tb-btn"
+                      onClick={() => setBlueOxDeal(d)}
+                      title="Configure + export the Blue Ox curve drop (zones, narvi scenarios, kickoff)"
+                    >
+                      blue ox
+                    </button>
+                    <button
+                      type="button"
+                      className="tb-btn"
                       onClick={() => void onExportDeal(d)}
                       disabled={d.n_curves === 0}
                       title={
@@ -1467,6 +1478,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 </li>
               ))}
             </ul>
+          )}
+          {blueOxDeal && (
+            <BlueOxDropModal deal={blueOxDeal} onClose={() => setBlueOxDeal(null)} />
           )}
         </section>
 
