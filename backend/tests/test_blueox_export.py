@@ -744,3 +744,42 @@ def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
     assert p10_oil["qi_units"] == "bbl/d per 1,000 ft"
     # producing_lateral_ft defaulted to the cohort mean.
     assert zone.inventory[0].producing_lateral_ft == 10_000.0
+
+
+def test_blueox_config_roundtrip_and_staleness() -> None:
+    """The saved config is the JSON dump of the export request model
+    (guaranteeing config and ad-hoc payloads can't drift), and the
+    staleness probe flags a narvi scenario re-saved after pinning."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxExportRequest,
+        BlueOxZoneSpec,
+        NarviSelection,
+        _scenario_status,
+    )
+
+    cfg = BlueOxExportRequest(
+        codename="thecan", prepared_by="m",
+        zones=[BlueOxZoneSpec(
+            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
+            benches=["WCA_1", "WCA_2"],
+        )],
+        narvi_selections=[NarviSelection(
+            deal_id="thecan_south_bs", scenario_id="plan_a",
+            pinned_updated_at="2026-07-22T15:00:00+00:00",
+        )],
+    )
+    assert BlueOxExportRequest.model_validate(cfg.model_dump(mode="json")) == cfg
+
+    def probe(current: str | None) -> list[dict]:
+        res = {("thecan_south_bs", "plan_a"): current} if current else {}
+        with (
+            patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+            patch("app.api.deals.fetch_scenario_updated_at", return_value=res),
+        ):
+            return _scenario_status(cfg.narvi_selections)
+
+    assert probe("2026-07-22T16:00:00+00:00")[0]["stale"] is True   # re-saved since pin
+    assert probe("2026-07-22T15:00:00+00:00")[0]["stale"] is False  # unchanged
+    assert probe(None)[0]["stale"] is False                          # unreachable -> usable

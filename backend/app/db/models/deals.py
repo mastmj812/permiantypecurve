@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import DateTime, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -31,3 +32,11 @@ class Deal(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+    # Persisted Blue Ox curve-drop configuration (migration 0024): the
+    # JSON dump of a BlueOxExportRequest — kickoff params, zone list
+    # (cross-deal curves allowed), narvi scenario selections with pinned
+    # updated_at stamps. One deal = one Blue Ox codename = one governing
+    # workbook; the export endpoint runs from this when no ad-hoc
+    # payload is supplied.
+    blueox_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
