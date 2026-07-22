@@ -159,6 +159,12 @@ class BlueOxExportData:
     # Principle 4: everything declared, nothing implied. Strings like
     # "WDFD (4 wells)".
     inventory_exclusions: tuple[str, ...] = ()
+    # Existing producers whose bench maps to NO zone in this workbook —
+    # still written to the inventory sheet (the downstream gunbarrel
+    # automation needs the whole DSU stack), with the bench code as
+    # `area`. Deliberately the one place an `area` value may not match
+    # a zone sheet; loaders must tolerate it on category=PDP rows only.
+    pdp_context_rows: Sequence[tuple[str, InventoryRow]] = ()
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -391,6 +397,14 @@ def _validate(data: BlueOxExportData) -> None:
                 f"{sorted(orphans)}"
             )
 
+    # Unzoned PDP context rows: display-only, must actually be PDP.
+    for area, invr in data.pdp_context_rows:
+        if invr.category != "PDP":
+            errors.append(
+                f"pdp_context_rows entry {invr.well_name!r} ({area}) must be "
+                f"category PDP (got {invr.category!r})"
+            )
+
     if errors:
         raise BlueOxContractError(
             "Blue Ox contract violations:\n- " + "\n- ".join(errors)
@@ -468,24 +482,33 @@ def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
     # well_name is optional; include the column only when every row has
     # one (contract formatting rule: no blank cells mid-column).
     all_named = all(
-        inv.well_name for z in data.zones for inv in z.inventory
-    )
+        inv.well_name
+        for z in data.zones for inv in z.inventory
+    ) and all(inv.well_name for _area, inv in data.pdp_context_rows)
     header = ["area", "category", "producing_lateral_ft", "drilled_lateral_ft"]
     if all_named:
         header.append("well_name")
     ws.append(header)
     _bold_row(ws, 1, len(header))
+
+    def _row(area: str, inv: InventoryRow) -> None:
+        row: list[Any] = [
+            area,
+            inv.category,
+            float(inv.producing_lateral_ft),
+            float(inv.drilled_lateral_ft),
+        ]
+        if all_named:
+            row.append(inv.well_name)
+        ws.append(row)
+
     for z in data.zones:
         for inv in z.inventory:
-            row: list[Any] = [
-                z.zone_name,
-                inv.category,
-                float(inv.producing_lateral_ft),
-                float(inv.drilled_lateral_ft),
-            ]
-            if all_named:
-                row.append(inv.well_name)
-            ws.append(row)
+            _row(z.zone_name, inv)
+    # Existing producers with no zone here: area = the bench code (the
+    # one sanctioned mismatch with the zone-sheet names; PDP rows only).
+    for area, inv in data.pdp_context_rows:
+        _row(area, inv)
     ws.column_dimensions["A"].width = 28
     ws.column_dimensions["B"].width = 10
     for letter in ("C", "D"):

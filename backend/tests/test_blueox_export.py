@@ -472,13 +472,14 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
         patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
         patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
     ):
-        by_zone, exclusions = _fetch_narvi_by_zone(req, errors)
+        by_zone, exclusions, unzoned_pdp = _fetch_narvi_by_zone(req, errors)
 
     # Planned wells route first; the existing producer rides along as a
     # display row for the gunbarrel automation (category PDP at the
     # InventoryRow stage), never as an error.
     assert [w.well_name for w in by_zone["WCA"]] == ["WCA 1H", "WCA 2H", "4249533594"]
     assert exclusions == ("WDFD (1 wells)",)
+    assert unzoned_pdp == []          # this producer's bench IS mapped
     assert any("BS9 (1 wells)" in e for e in errors)  # unmapped planned -> error
     assert any("plan_missing matched no inventory wells" in e for e in errors)
     assert all("4249533594" not in e for e in errors)
@@ -528,7 +529,7 @@ def test_narvi_pdp_dedupe_and_duplicate_guard() -> None:
         patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
         patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
     ):
-        by_zone, _ = _fetch_narvi_by_zone(req, errors)
+        by_zone, _, _ = _fetch_narvi_by_zone(req, errors)
 
     assert any(
         "'WCA_1-01'" in e and "plan_b" in e and "plan_c" in e for e in errors
@@ -538,6 +539,90 @@ def test_narvi_pdp_dedupe_and_duplicate_guard() -> None:
     names = [w.well_name for w in by_zone["WCA"]]
     assert names.count("4249533594") == 1
     assert names.count("WCA_1-01") == 2
+
+
+def test_narvi_unzoned_pdp_never_dropped() -> None:
+    """A producer whose bench maps to no zone (and one in an excluded
+    bench) comes back as an unzoned PDP well — destined for the
+    inventory sheet with its bench code as area — never dropped."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxExportRequest,
+        BlueOxZoneSpec,
+        NarviSelection,
+        _fetch_narvi_by_zone,
+    )
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    def _w(name: str, bench: str, category: str) -> NarviInventoryWell:
+        return NarviInventoryWell(
+            deal_id="d", scenario_id="plan_a", well_name=name, formation=bench,
+            completed_lateral_ft=4_231.0, drilled_lateral_ft=4_231.0,
+            well_type="single", category=category,
+        )
+
+    wells = [
+        _w("WCA_1-01", "WCA_1", "generated"),
+        _w("4249533990", "WCB_1", "pdp"),   # bench has no zone -> unzoned
+        _w("4249533991", "WDFD", "pdp"),    # excluded bench -> unzoned too
+        _w("WDFD-01", "WDFD", "generated"),
+    ]
+    req = BlueOxExportRequest(
+        codename="x", prepared_by="m",
+        zones=[BlueOxZoneSpec(
+            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
+            benches=["WCA_1"],
+        )],
+        narvi_selections=[NarviSelection(deal_id="d", scenario_id="plan_a")],
+        exclude_benches=["WDFD"],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, exclusions, unzoned_pdp = _fetch_narvi_by_zone(req, errors)
+
+    assert errors == []
+    assert [w.well_name for w in by_zone["WCA"]] == ["WCA_1-01"]
+    assert exclusions == ("WDFD (1 wells)",)      # the PLANNED WDFD well
+    assert sorted(w.well_name for w in unzoned_pdp) == ["4249533990", "4249533991"]
+
+
+def test_builder_writes_unzoned_pdp_rows_with_bench_area() -> None:
+    """Unzoned PDP rows land on the inventory sheet with the bench code
+    as area, invisible to Block B, exempt from lateral bounds."""
+    data = _data()
+    data = BlueOxExportData(**{
+        **data.__dict__,
+        "pdp_context_rows": (
+            ("WCB_1", InventoryRow(producing_lateral_ft=4_231.0,
+                                   drilled_lateral_ft=4_231.0,
+                                   well_name="4249533990", category="PDP")),
+        ),
+    })
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
+    inv = list(wb["inventory"].iter_rows(min_row=2, values_only=True))
+    pdp_row = next(r for r in inv if r[1] == "PDP")
+    assert pdp_row[0] == "WCB_1"            # bench code, not a zone name
+    assert pdp_row[4] == "4249533990"
+    # Block B untouched: gross_locations still count only zone rows.
+    rows = list(wb["manifest"].iter_rows(values_only=True))
+    hi = next(i for i, r in enumerate(rows) if r and r[0] == "area")
+    bb = {r[0]: r[4] for r in rows[hi + 1:] if r and r[0]}
+    assert bb["WOLFCAMP A"] == 3
+    # non-PDP category in the context rows is a hard error
+    bad = BlueOxExportData(**{
+        **data.__dict__,
+        "pdp_context_rows": (
+            ("WCB_1", InventoryRow(producing_lateral_ft=10_000.0,
+                                   drilled_lateral_ft=10_000.0,
+                                   well_name="X", category="PUD")),
+        ),
+    })
+    with pytest.raises(BlueOxContractError, match="must be category PDP"):
+        build_blueox_workbook(bad)
 
 
 def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:
