@@ -13,6 +13,7 @@ import {
   type BlueOxCategory,
   type BlueOxConfig,
   type BlueOxLevel,
+  type BlueOxScenarioRef,
   type BlueOxScenarioStatus,
   BlueOxStaleError,
   type DealSummary,
@@ -30,6 +31,17 @@ const ALL_LEVELS: BlueOxLevel[] = ["P10", "P25", "P75", "P90"];
 // slugs ([a-z0-9_]), so "/" cannot collide — and it matches how the
 // pair is displayed everywhere else.
 const pairKey = (dealId: string, scenarioId: string) => `${dealId}/${scenarioId}`;
+
+const sameRef = (a: BlueOxScenarioRef, b: BlueOxScenarioRef) =>
+  a.deal_id === b.deal_id && a.scenario_id === b.scenario_id;
+
+// Does this zone's scope cover the scenario? Empty/absent scope = ALL
+// selected scenarios (the legacy behavior). Mirrors the backend's
+// routing semantics in _fetch_narvi_by_zone.
+const scopeCovers = (
+  scope: BlueOxScenarioRef[] | null | undefined,
+  ref: BlueOxScenarioRef,
+) => !scope || scope.length === 0 || scope.some((r) => sameRef(r, ref));
 
 // "PUD WCA_1×3, WCA_2×2 · UPSIDE 3BSSD×4 · PDP×12" — what a scenario
 // actually contains, so the zone categories and bench list can be
@@ -80,6 +92,8 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
   const [busy, setBusy] = useState<"load" | "save" | "export" | null>("load");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Zone index whose scenario-scope picker is expanded (null = none).
+  const [scopeOpen, setScopeOpen] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -198,8 +212,9 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
 
   // Default each zone's category to the declaration carried by its
   // narvi wells: majority PUD vs UPSIDE across the zone's benches in
-  // the selected scenarios (tie -> PUD). Runs on scenario/bench edits
-  // only — a manual dropdown pick sticks until the data changes.
+  // the selected scenarios COVERED BY ITS SCOPE (tie -> PUD). Runs on
+  // scenario/bench/scope edits only — a manual dropdown pick sticks
+  // until the data changes.
   const deriveZoneCategories = (next: BlueOxConfig): BlueOxConfig => {
     const selected = scenarios.filter((s) =>
       next.narvi_selections.some(
@@ -207,24 +222,15 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
       ),
     );
     if (selected.length === 0) return next;
-    const byBench = new Map<string, { pud: number; upside: number }>();
-    for (const s of selected) {
-      for (const b of s.breakdown) {
-        if (!b.formation) continue;
-        const c = byBench.get(b.formation) ?? { pud: 0, upside: 0 };
-        if (b.category === "PUD") c.pud += b.n;
-        else if (b.category === "UPSIDE") c.upside += b.n;
-        byBench.set(b.formation, c);
-      }
-    }
     const zones = next.zones.map((z) => {
       let pud = 0;
       let upside = 0;
-      for (const bench of z.benches) {
-        const c = byBench.get(bench);
-        if (c) {
-          pud += c.pud;
-          upside += c.upside;
+      for (const s of selected) {
+        if (!scopeCovers(z.scenario_scope, s)) continue;
+        for (const b of s.breakdown) {
+          if (!b.formation || !z.benches.includes(b.formation)) continue;
+          if (b.category === "PUD") pud += b.n;
+          else if (b.category === "UPSIDE") upside += b.n;
         }
       }
       if (pud + upside === 0) return z; // no signal — leave as picked
@@ -232,6 +238,23 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
       return cat === z.reserve_category ? z : { ...z, reserve_category: cat };
     });
     return { ...next, zones };
+  };
+
+  // Planned-well count a zone captures under its current benches +
+  // scope — the pre-export sanity number for a west/east split.
+  const zoneWellCount = (z: BlueOxConfig["zones"][number]): number => {
+    let n = 0;
+    for (const s of scenarios) {
+      const isSelected = cfg?.narvi_selections.some(
+        (x) => x.deal_id === s.deal_id && x.scenario_id === s.scenario_id,
+      );
+      if (!isSelected || !scopeCovers(z.scenario_scope, s)) continue;
+      for (const b of s.breakdown) {
+        if (b.category === "PDP") continue;
+        if (b.formation && z.benches.includes(b.formation)) n += b.n;
+      }
+    }
+    return n;
   };
 
   // Pair-shaped so PHANTOM selections (pinned pairs whose narvi
@@ -271,6 +294,35 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
 
   const setZone = (i: number, patch: Partial<BlueOxConfig["zones"][number]>) =>
     edit({ zones: cfg.zones.map((z, j) => (j === i ? { ...z, ...patch } : z)) });
+
+  // Toggle one scenario in a zone's scope. An UNSCOPED zone implicitly
+  // covers every selection, so unchecking a box there materializes
+  // "all minus this one" (not "only this one"). A scope that grows back
+  // to the full selection set — or empties — stores null (= all), so
+  // the config round-trips the legacy shape.
+  const toggleZoneScope = (zi: number, ref: BlueOxScenarioRef) => {
+    const z = cfg.zones[zi];
+    if (!z) return;
+    const cur: BlueOxScenarioRef[] = z.scenario_scope?.length
+      ? z.scenario_scope
+      : cfg.narvi_selections.map((s) => ({
+          deal_id: s.deal_id,
+          scenario_id: s.scenario_id,
+        }));
+    const nextScope = cur.some((r) => sameRef(r, ref))
+      ? cur.filter((r) => !sameRef(r, ref))
+      : [...cur, { deal_id: ref.deal_id, scenario_id: ref.scenario_id }];
+    const coversAll =
+      nextScope.length === cfg.narvi_selections.length || nextScope.length === 0;
+    edit(
+      deriveZoneCategories({
+        ...cfg,
+        zones: cfg.zones.map((zz, j) =>
+          j === zi ? { ...zz, scenario_scope: coversAll ? null : nextScope } : zz,
+        ),
+      }),
+    );
+  };
 
   const setZoneBenches = (i: number, benches: string[]) =>
     edit(
@@ -330,7 +382,11 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left" }}>
-                <th>type curve</th><th>zone name</th><th>category</th><th>benches</th><th />
+                <th>type curve</th><th>zone name</th><th>category</th><th>benches</th>
+                <th title="which selected narvi scenarios (DSUs) this zone captures — lets the same bench carry different curves in different areas">
+                  scenarios
+                </th>
+                <th />
               </tr>
             </thead>
             <tbody>
@@ -381,6 +437,19 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                           e.target.value.split(",").map((b) => b.trim()).filter(Boolean),
                         )} />
                     </td>
+                    <td style={{ paddingRight: 8, whiteSpace: "nowrap" }}>
+                      <button
+                        type="button" className="link-btn"
+                        title="pick which selected scenarios this zone captures"
+                        onClick={() => setScopeOpen(scopeOpen === i ? null : i)}
+                      >
+                        {!z.scenario_scope?.length
+                          ? `all (${cfg.narvi_selections.length})`
+                          : `${z.scenario_scope.length} of ${cfg.narvi_selections.length}`}
+                        {scopeOpen === i ? " ▴" : " ▾"}
+                      </button>
+                      <span className="muted"> · {zoneWellCount(z)}w</span>
+                    </td>
                     <td>
                       <button type="button" className="link-btn" style={{ color: "#dc2626" }}
                         onClick={() => edit({ zones: cfg.zones.filter((_, j) => j !== i) })}>
@@ -392,6 +461,68 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
               })}
             </tbody>
           </table>
+          {scopeOpen != null && cfg.zones[scopeOpen] && (
+            <div
+              style={{
+                margin: "4px 0 6px", padding: "6px 8px", fontSize: 12,
+                border: "1px solid var(--line, #e5e7eb)", borderRadius: 5,
+              }}
+            >
+              <div style={{ marginBottom: 4 }}>
+                <strong>
+                  {cfg.zones[scopeOpen].zone_name ??
+                    curveById.get(cfg.zones[scopeOpen].type_curve_id)?.name}
+                </strong>
+                <span className="muted"> — scenarios this zone captures.</span>{" "}
+                <button
+                  type="button" className="link-btn"
+                  disabled={!cfg.zones[scopeOpen].scenario_scope?.length}
+                  onClick={() =>
+                    edit(
+                      deriveZoneCategories({
+                        ...cfg,
+                        zones: cfg.zones.map((zz, j) =>
+                          j === scopeOpen ? { ...zz, scenario_scope: null } : zz,
+                        ),
+                      }),
+                    )
+                  }
+                >
+                  all scenarios
+                </button>
+              </div>
+              {cfg.narvi_selections.map((sel) => {
+                const zi = scopeOpen;
+                const z = cfg.zones[zi];
+                if (!z) return null;
+                const meta = scenarios.find(
+                  (s) => s.deal_id === sel.deal_id && s.scenario_id === sel.scenario_id,
+                );
+                const scoped = !!z.scenario_scope?.some((r) => sameRef(r, sel));
+                return (
+                  <label
+                    key={pairKey(sel.deal_id, sel.scenario_id)}
+                    style={{ display: "block", marginBottom: 2 }}
+                    title={pairKey(sel.deal_id, sel.scenario_id)}
+                  >
+                    <input
+                      type="checkbox"
+                      // unscoped zone = every box effectively on
+                      checked={!z.scenario_scope?.length || scoped}
+                      onChange={() => toggleZoneScope(zi, sel)}
+                    />{" "}
+                    {meta?.name ?? sel.scenario_id}
+                  </label>
+                );
+              })}
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+                unchecking a scenario narrows this zone to the ones still
+                checked; the same bench may then carry a different curve in
+                another zone scoped to the other scenarios (west/east splits).
+                A scenario left uncovered by every zone blocks the export.
+              </p>
+            </div>
+          )}
           <button type="button" className="tb-btn" style={{ marginTop: 4 }}
             disabled={curves.length === 0}
             onClick={() => {

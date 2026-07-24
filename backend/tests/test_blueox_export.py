@@ -806,3 +806,185 @@ def test_blueox_config_roundtrip_and_staleness() -> None:
     assert probe("2026-07-22T16:00:00+00:00")[0]["stale"] is True   # re-saved since pin
     assert probe("2026-07-22T15:00:00+00:00")[0]["stale"] is False  # unchanged
     assert probe(None)[0]["stale"] is False                          # unreachable -> usable
+
+
+# ==================== scenario-scoped zones ====================
+
+
+def _scoped_req(zones: list[Any], selections: list[str]) -> Any:
+    from app.api.deals import BlueOxExportRequest, NarviSelection
+
+    return BlueOxExportRequest(
+        codename="alchemist", prepared_by="m", zones=zones,
+        narvi_selections=[
+            NarviSelection(deal_id="alch", scenario_id=s) for s in selections
+        ],
+    )
+
+
+def _scoped_zone(
+    name: str, benches: list[str], scope: list[str] | None
+) -> Any:
+    from app.api.deals import BlueOxZoneSpec, ScenarioRef
+
+    return BlueOxZoneSpec(
+        type_curve_id=uuid.uuid4(), zone_name=name, reserve_category="PUD",
+        benches=benches,
+        scenario_scope=(
+            None if scope is None
+            else [ScenarioRef(deal_id="alch", scenario_id=s) for s in scope]
+        ),
+    )
+
+
+def _alch_well(scenario: str, name: str, bench: str) -> Any:
+    from app.warehouse_client.narvi import NarviInventoryWell
+
+    return NarviInventoryWell(
+        deal_id="alch", scenario_id=scenario, well_name=name, formation=bench,
+        completed_lateral_ft=10_000.0, drilled_lateral_ft=10_000.0,
+        well_type="single", category="generated",
+    )
+
+
+def test_scenario_scope_routes_same_bench_to_two_zones() -> None:
+    """The alchemist case: the same bench (BS1_S) carries a WEST curve
+    for the western DSU scenarios and an EAST curve for the SE DSU —
+    disjoint scopes coexist, wells route by their scenario, and an
+    unscoped second bench still routes everything."""
+    from unittest.mock import patch
+
+    from app.api.deals import _fetch_narvi_by_zone
+
+    wells = [
+        _alch_well("plan_west_a", "W A BS1_S-01", "BS1_S"),
+        _alch_well("plan_west_b", "W B BS1_S-01", "BS1_S"),
+        _alch_well("plan_east", "E BS1_S-01", "BS1_S"),
+        _alch_well("plan_east", "E WCA_1-01", "WCA_1"),
+    ]
+    req = _scoped_req(
+        zones=[
+            _scoped_zone("bs1_s west", ["BS1_S"], ["plan_west_a", "plan_west_b"]),
+            _scoped_zone("bs1_s east", ["BS1_S"], ["plan_east"]),
+            _scoped_zone("wca", ["WCA_1"], None),  # unscoped rides along
+        ],
+        selections=["plan_west_a", "plan_west_b", "plan_east"],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, _, _ = _fetch_narvi_by_zone(req, errors)
+
+    assert errors == []
+    assert [w.well_name for w in by_zone["bs1_s west"]] == [
+        "W A BS1_S-01", "W B BS1_S-01",
+    ]
+    assert [w.well_name for w in by_zone["bs1_s east"]] == ["E BS1_S-01"]
+    assert [w.well_name for w in by_zone["wca"]] == ["E WCA_1-01"]
+
+
+def test_scenario_scope_overlap_and_coverage_errors() -> None:
+    """Overlapping scopes on one bench error (incl. unscoped-vs-scoped);
+    a well whose bench is claimed but whose scenario no zone covers is a
+    hard error, never a silent drop; a scope naming an unselected
+    scenario errors."""
+    from unittest.mock import patch
+
+    from app.api.deals import _fetch_narvi_by_zone
+
+    wells = [
+        _alch_well("plan_west_a", "W BS1_S-01", "BS1_S"),
+        _alch_well("plan_east", "E BS1_S-01", "BS1_S"),
+    ]
+
+    # (a) unscoped + scoped on the same bench = overlap error
+    req = _scoped_req(
+        zones=[
+            _scoped_zone("bs1_s west", ["BS1_S"], ["plan_west_a"]),
+            _scoped_zone("bs1_s all", ["BS1_S"], None),
+        ],
+        selections=["plan_west_a", "plan_east"],
+    )
+    errors: list[str] = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        _fetch_narvi_by_zone(req, errors)
+    assert any("overlapping scenario scope" in e for e in errors)
+
+    # (b) scope gap: east scenario's BS1_S wells covered by NO zone
+    req = _scoped_req(
+        zones=[_scoped_zone("bs1_s west", ["BS1_S"], ["plan_west_a"])],
+        selections=["plan_west_a", "plan_east"],
+    )
+    errors = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells),
+    ):
+        by_zone, _, _ = _fetch_narvi_by_zone(req, errors)
+    assert any(
+        "scenario_scope covers" in e and "BS1_S in alch/plan_east (1 wells)" in e
+        for e in errors
+    )
+    assert [w.well_name for w in by_zone["bs1_s west"]] == ["W BS1_S-01"]
+
+    # (c) scope naming an unselected scenario
+    req = _scoped_req(
+        zones=[_scoped_zone("bs1_s west", ["BS1_S"], ["plan_typo"])],
+        selections=["plan_west_a"],
+    )
+    errors = []
+    with (
+        patch("app.api.deals.get_warehouse_session", return_value=iter([None])),
+        patch("app.api.deals.fetch_narvi_inventory", return_value=wells[:1]),
+    ):
+        _fetch_narvi_by_zone(req, errors)
+    assert any("not in this drop's selections" in e and "alch/plan_typo" in e for e in errors)
+
+
+def test_scenario_scope_legacy_config_and_roundtrip() -> None:
+    """Configs saved before scenario_scope validate untouched (None =
+    all scenarios), and a scoped config survives dump -> validate."""
+    from app.api.deals import BlueOxExportRequest
+
+    legacy = {
+        "codename": "thecan", "prepared_by": "m",
+        "zones": [{
+            "type_curve_id": str(uuid.uuid4()), "zone_name": "WCA",
+            "reserve_category": "PUD", "benches": ["WCA_1"],
+        }],
+        "narvi_selections": [], "exclude_benches": [],
+    }
+    cfg = BlueOxExportRequest.model_validate(legacy)
+    assert cfg.zones[0].scenario_scope is None
+    assert cfg.zones[0].scope_pairs() is None
+
+    scoped = _scoped_req(
+        zones=[_scoped_zone("bs1_s west", ["BS1_S"], ["plan_west_a"])],
+        selections=["plan_west_a"],
+    )
+    assert BlueOxExportRequest.model_validate(scoped.model_dump(mode="json")) == scoped
+
+
+def test_manifest_declares_scoped_zones_only() -> None:
+    """Scoped zones declare their DSU subset in Block A; unscoped zones
+    add nothing (legacy drops byte-identical)."""
+    zone = _zone("WOLFCAMP A", ("4200000001",))
+    scoped_zone = type(zone)(**{
+        **zone.__dict__,
+        "zone_name": "BS1S WEST",
+        "scenario_scope": ("alch/plan_west_a", "alch/plan_west_b"),
+    })
+    data = _data(zones=[zone, scoped_zone])
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
+    kv = {
+        r[0]: r[1]
+        for r in wb["manifest"].iter_rows(values_only=True)
+        if r and r[0] is not None and r[1] is not None
+    }
+    assert kv["zone_scenario_scope[BS1S WEST]"] == "alch/plan_west_a; alch/plan_west_b"
+    assert "zone_scenario_scope[WOLFCAMP A]" not in kv

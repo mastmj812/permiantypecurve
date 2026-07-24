@@ -115,14 +115,27 @@ export type BlueOxLevel = "P10" | "P25" | "P75" | "P90";
 // category. (Legacy "RES" is coerced to UPSIDE server-side.)
 export type BlueOxCategory = "PUD" | "UPSIDE";
 
+// One narvi scenario reference (a scenario ≈ one DSU).
+export interface BlueOxScenarioRef {
+  deal_id: string;
+  scenario_id: string;
+}
+
 export interface BlueOxZoneSpec {
   type_curve_id: string;
   // adopted verbatim by Blue Ox as the zone identifier (<= 26 chars,
   // stable across re-drops); null defaults to the curve name server-side
   zone_name: string | null;
   reserve_category: BlueOxCategory;
-  // narvi formation_blueox bench codes whose wells belong to this zone
+  // narvi formation_blueox bench codes whose wells belong to this zone.
+  // Benches must be disjoint across zones WITHIN OVERLAPPING SCENARIO
+  // SCOPE — two zones may claim one bench when their scopes are disjoint.
   benches: string[];
+  // Scenario scope: null/absent/[] = ALL selected scenarios (legacy
+  // behavior). Otherwise the subset of narvi_selections this zone's
+  // benches capture — the geographic grain for same-bench west/east
+  // curve splits on wide deals.
+  scenario_scope?: BlueOxScenarioRef[] | null;
 }
 
 export interface BlueOxNarviSelection {

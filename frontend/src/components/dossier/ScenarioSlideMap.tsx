@@ -32,6 +32,11 @@ interface Props {
   // dossier sets this — a dozen scenario sections of live maps blow the
   // browser's WebGL-context cap and OOM the tab.
   lazy?: boolean;
+  // Per-well leg color override. Default is formation coloring; the
+  // dossier's curve-assignment views pass a zone→curve palette instead.
+  // Load-time input like the wells themselves — changing it after
+  // mount does not restyle a live map.
+  colorForWell?: (w: NarviWellGeo) => string;
 }
 
 const AOI_SOURCE = "dossier-aoi";
@@ -65,7 +70,14 @@ function collectCoords(geom: GeoJSON.Geometry, into: Array<[number, number]>): v
   walk(geom.coordinates);
 }
 
-export function ScenarioSlideMap({ aoiGeojson, wells, width, height, lazy = false }: Props) {
+export function ScenarioSlideMap({
+  aoiGeojson,
+  wells,
+  width,
+  height,
+  lazy = false,
+  colorForWell,
+}: Props) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -106,7 +118,7 @@ export function ScenarioSlideMap({ aoiGeojson, wells, width, height, lazy = fals
             type: "Feature",
             geometry: legs,
             properties: {
-              color: colorForFormation(w.formation),
+              color: colorForWell ? colorForWell(w) : colorForFormation(w.formation),
               category: w.category,
             },
           });
