@@ -146,11 +146,30 @@ export function DealDossierPage({ dealId }: Props) {
         curves: curveIds.map((id) => ({ type_curve_id: id })),
       };
       const files: Record<string, Blob> = {};
+      // Map panels mount lazily (live only near the viewport), so a
+      // section the user never scrolled to has no snapshot img yet —
+      // scroll it in, let the map mount, and wait for its first idle
+      // snapshot before capturing. Panels the user already framed keep
+      // their latest snapshot even after the live map tore down.
+      const ensureMapSnapshot = async (panel: HTMLElement) => {
+        if (!panel.querySelector(".slide-map")) return; // not a map panel
+        if (panel.querySelector("img.slide-map-img")) return;
+        panel.scrollIntoView({ block: "center" });
+        const deadline = Date.now() + 30_000;
+        while (Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 250));
+          if (panel.querySelector("img.slide-map-img")) return;
+        }
+        throw new Error(
+          "map snapshot timed out — scroll through the dossier once and retry",
+        );
+      };
       const grab = async (name: string) => {
         const panel = document.querySelector<HTMLElement>(
           `[data-dossier-panel="${name}"]`,
         );
         if (!panel) throw new Error(`panel ${name} not rendered yet`);
+        await ensureMapSnapshot(panel);
         files[name] = await capturePanel(document, panel, 2);
       };
       for (let i = 0; i < scenarios.length; i++) {
@@ -233,6 +252,7 @@ export function DealDossierPage({ dealId }: Props) {
                 wells={sd.wells}
                 width={SCENARIO_PANEL_W}
                 height={SCENARIO_PANEL_H}
+                lazy
               />
             </div>
             <div className="slide-panel" data-dossier-panel={`s${i}_gunbarrel`}>
@@ -352,6 +372,7 @@ function DossierCurveSection({ curveId, idx, onReady }: CurveSectionProps) {
             wellDetails={data.wellDetails}
             width={629}
             height={418}
+            lazy
           />
         </div>
       </div>

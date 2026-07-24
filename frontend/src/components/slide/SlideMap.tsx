@@ -35,6 +35,7 @@ import {
   loadSections,
   registerPmtilesProtocol,
 } from "./mapShared";
+import { useNearViewport } from "./useNearViewport";
 
 // All cohort wells should render regardless of status (saved type
 // curves can be built on a mix of PDP + DUC + SI), so override the
@@ -64,6 +65,13 @@ interface Props {
   dealVisibility?: Record<string, boolean>;
   width?: number;
   height?: number;
+  // Lazy mount: keep the live MapLibre instance only while the panel is
+  // near the viewport; off-screen the map is torn down (releasing its
+  // WebGL context) and the last idle snapshot shows in its place. The
+  // dossier sets this — its many map panels otherwise blow the
+  // browser's WebGL-context cap and OOM the tab. The single-map slide
+  // pages keep the default eager mount.
+  lazy?: boolean;
 }
 
 const COHORT_GREEN = "#16a34a";
@@ -157,20 +165,27 @@ export function SlideMap({
   dealVisibility = {},
   width = 629,
   height = 418,
+  lazy = false,
 }: Props) {
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
+  // Camera survives lazy teardown so a framed shot isn't lost when the
+  // panel scrolls away and back (the snapshot img covers the interim).
+  const cameraRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);
+  const live = useNearViewport(outerRef, lazy);
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    if (!live || !containerRef.current || mapRef.current) return;
     registerPmtilesProtocol();
 
+    const cam = cameraRef.current;
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: buildStyle(),
-      center: [-102.5, 32.0],
-      zoom: 6,
+      center: cam?.center ?? [-102.5, 32.0],
+      zoom: cam?.zoom ?? 6,
       minZoom: 3,
       maxZoom: 14,
       attributionControl: false,
@@ -224,7 +239,9 @@ export function SlideMap({
       // Fit to the cohort — modest padding so the autozoom lands as
       // tight as the spread allows; the user can drag/scroll-zoom to
       // reframe before exporting (every idle refreshes the capture).
-      const b = cohortBounds(wellDetails);
+      // Never clobber a restored camera (the user's framing from
+      // before a lazy teardown).
+      const b = cam ? null : cohortBounds(wellDetails);
       if (b && !b.isEmpty()) {
         map.fitBounds(b, { padding: 24, duration: 0, maxZoom: 13 });
       }
@@ -289,16 +306,21 @@ export function SlideMap({
 
     mapRef.current = map;
     return () => {
+      cameraRef.current = {
+        center: map.getCenter().toArray(),
+        zoom: map.getZoom(),
+      };
       map.remove();
       mapRef.current = null;
     };
-    // Effect runs once: cohort api10s + details are slide-time inputs,
-    // not live state. Eslint disabled deliberately.
+    // Cohort api10s + details are slide-time inputs, not live state;
+    // `live` alone drives (lazy) mount/teardown. Eslint disabled
+    // deliberately.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [live]);
 
   return (
-    <div className="slide-map" style={{ width, height }}>
+    <div ref={outerRef} className="slide-map" style={{ width, height }}>
       {/* The live canvas stays visible AND interactive — drag /
           scroll-zoom to frame the shot. The img below carries the
           latest idle-time snapshot: hidden on screen (CSS), it's what
@@ -321,6 +343,9 @@ export function SlideMap({
             top: 0,
             left: 0,
             objectFit: "contain",
+            // Torn-down lazy panel: show the last snapshot in place of
+            // the (removed) live canvas. CSS hides this img otherwise.
+            display: live ? undefined : "block",
           }}
         />
       )}
