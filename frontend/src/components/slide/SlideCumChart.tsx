@@ -13,6 +13,7 @@ import type { Stream, WellCurvesResponse } from "../../api/forecasts";
 import type { StreamSeries, TypeCurveRow } from "../../api/typeCurves";
 
 import { TypeCurveChart } from "../../type_curves/TypeCurveChart";
+import { normalizeMultipliers, riskStreamSeries } from "../../type_curves/risking";
 import { buildAlignedWellHistories } from "./slideUtils";
 
 const CUM_X_MONTHS = 36;
@@ -36,9 +37,14 @@ const Y_LABEL_BY_STREAM: Record<Stream, string> = {
   water: "Cumulative Water (BBL / 10k ft)",
 };
 
+// Geologic risking applies here (each curve by its OWN multipliers) —
+// same seam as SlideRateChart; the per-well gray cum traces are actuals
+// and stay unrisked.
 function getStreamSeries(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
   const streams = (curve.series as { streams?: Record<string, StreamSeries> }).streams;
-  return streams?.[stream] ?? null;
+  const s = streams?.[stream] ?? null;
+  if (!s) return null;
+  return riskStreamSeries(s, normalizeMultipliers(curve.risk_multipliers)[stream]);
 }
 
 function cumulateNullable(arr: Array<number | null>): Array<number | null> {
