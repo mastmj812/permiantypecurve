@@ -19,12 +19,19 @@ import {
   loadSections,
   registerPmtilesProtocol,
 } from "../slide/mapShared";
+import { useNearViewport } from "../slide/useNearViewport";
 
 interface Props {
   aoiGeojson: string | null;
   wells: NarviWellGeo[];
   width: number;
   height: number;
+  // Lazy mount: keep the live MapLibre instance only while the panel is
+  // near the viewport; off-screen the map is torn down (releasing its
+  // WebGL context) and the last idle snapshot shows in its place. The
+  // dossier sets this — a dozen scenario sections of live maps blow the
+  // browser's WebGL-context cap and OOM the tab.
+  lazy?: boolean;
 }
 
 const AOI_SOURCE = "dossier-aoi";
@@ -58,20 +65,26 @@ function collectCoords(geom: GeoJSON.Geometry, into: Array<[number, number]>): v
   walk(geom.coordinates);
 }
 
-export function ScenarioSlideMap({ aoiGeojson, wells, width, height }: Props) {
+export function ScenarioSlideMap({ aoiGeojson, wells, width, height, lazy = false }: Props) {
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MlMap | null>(null);
+  // Camera survives lazy teardown so a framed shot isn't lost when the
+  // panel scrolls away and back (the snapshot img covers the interim).
+  const cameraRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);
+  const live = useNearViewport(outerRef, lazy);
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
+    if (!live || !containerRef.current || mapRef.current) return;
     registerPmtilesProtocol();
 
+    const cam = cameraRef.current;
     const map = new maplibregl.Map({
       container: containerRef.current,
       style: buildStyle(),
-      center: [-102.5, 32.0],
-      zoom: 6,
+      center: cam?.center ?? [-102.5, 32.0],
+      zoom: cam?.zoom ?? 6,
       minZoom: 3,
       maxZoom: 16,
       attributionControl: false,
@@ -166,11 +179,12 @@ export function ScenarioSlideMap({ aoiGeojson, wells, width, height }: Props) {
         },
       });
 
-      // Fit to the AOI + legs.
+      // Fit to the AOI + legs — but never clobber a restored camera
+      // (the user's framing from before a lazy teardown).
       const coords: Array<[number, number]> = [];
       if (aoi) collectCoords(aoi, coords);
       for (const f of legFeatures) collectCoords(f.geometry, coords);
-      if (coords.length > 0) {
+      if (!cam && coords.length > 0) {
         const first = coords[0]!;
         const b = new maplibregl.LngLatBounds(first, first);
         for (const c of coords) b.extend(c);
@@ -202,15 +216,20 @@ export function ScenarioSlideMap({ aoiGeojson, wells, width, height }: Props) {
 
     mapRef.current = map;
     return () => {
+      cameraRef.current = {
+        center: map.getCenter().toArray(),
+        zoom: map.getZoom(),
+      };
       map.remove();
       mapRef.current = null;
     };
-    // Scenario geometry is a load-time input, not live state.
+    // Scenario geometry is a load-time input, not live state; `live`
+    // alone drives (lazy) mount/teardown.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [live]);
 
   return (
-    <div className="slide-map" style={{ width, height, position: "relative" }}>
+    <div ref={outerRef} className="slide-map" style={{ width, height, position: "relative" }}>
       <div ref={containerRef} className="slide-map-canvas" style={{ width, height }} />
       {snapshot && (
         <img
@@ -224,6 +243,9 @@ export function ScenarioSlideMap({ aoiGeojson, wells, width, height }: Props) {
             top: 0,
             left: 0,
             objectFit: "contain",
+            // Torn-down lazy panel: show the last snapshot in place of
+            // the (removed) live canvas. CSS hides this img otherwise.
+            display: live ? undefined : "block",
           }}
         />
       )}
