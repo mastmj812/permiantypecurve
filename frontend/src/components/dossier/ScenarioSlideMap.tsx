@@ -37,6 +37,14 @@ interface Props {
   // Load-time input like the wells themselves — changing it after
   // mount does not restyle a live map.
   colorForWell?: (w: NarviWellGeo) => string;
+  // Perpendicular screen-px offset per well (MapLibre line-offset).
+  // Vertically-stacked benches often share IDENTICAL plan-view
+  // laterals (Novi stacks e.g. BS2_S under BS3_C on one stick), so the
+  // later-drawn zone paints over the other — the assignment overview
+  // fans them apart a few px per zone so every color stays visible.
+  // Cosmetic: positions shift by the offset at every zoom; leave unset
+  // on maps meant to be spatially faithful.
+  offsetForWell?: (w: NarviWellGeo) => number;
 }
 
 const AOI_SOURCE = "dossier-aoi";
@@ -77,6 +85,7 @@ export function ScenarioSlideMap({
   height,
   lazy = false,
   colorForWell,
+  offsetForWell,
 }: Props) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -120,6 +129,7 @@ export function ScenarioSlideMap({
             properties: {
               color: colorForWell ? colorForWell(w) : colorForFormation(w.formation),
               category: w.category,
+              offset: offsetForWell ? offsetForWell(w) : 0,
             },
           });
         }
@@ -177,6 +187,9 @@ export function ScenarioSlideMap({
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": ["get", "color"],
+          // Screen-px fan-out for coincident stacked-bench laterals
+          // (0 everywhere except the curve-assignment overview).
+          "line-offset": ["get", "offset"],
           // ["zoom"] interpolate stays OUTERMOST (nesting silently
           // breaks the layer); PDP producers read muted vs planned.
           "line-width": [

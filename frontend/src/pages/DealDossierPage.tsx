@@ -142,7 +142,16 @@ export function DealDossierPage({ dealId }: Props) {
     if (!scenarios || !cfg || cfg.zones.length === 0) return null;
     const wells: NarviWellGeo[] = [];
     const colors = new Map<NarviWellGeo, string>();
+    const offsets = new Map<NarviWellGeo, number>();
     const geoms: unknown[] = [];
+    // Stacked benches often share IDENTICAL plan-view laterals (Novi
+    // puts e.g. BS2_S under BS3_C on one stick), so without a fan-out
+    // the later-drawn zone paints over the other and its color
+    // disappears from the overview (toucan: 4 red BS2_S sticks hidden
+    // under 4 blue BS3_C). Offset each zone's legs a few screen px
+    // perpendicular so every assignment stays visible.
+    const zoneOffsetPx = (index: number) =>
+      (index - (cfg.zones.length - 1) / 2) * 3;
     for (const sd of scenarios) {
       if (sd.aoi_geojson) {
         try {
@@ -157,11 +166,13 @@ export function DealDossierPage({ dealId }: Props) {
         const rz =
           w.category === "PDP" ? null : resolveZone(w.formation, ref, cfg.zones);
         colors.set(w, rz ? zoneColor(rz.index) : UNASSIGNED_COLOR);
+        offsets.set(w, rz ? zoneOffsetPx(rz.index) : 0);
       }
     }
     return {
       wells,
       colors,
+      offsets,
       aoi: geoms.length
         ? JSON.stringify({ type: "GeometryCollection", geometries: geoms })
         : null,
@@ -316,6 +327,7 @@ export function DealDossierPage({ dealId }: Props) {
               height={520}
               lazy
               colorForWell={(w) => overview.colors.get(w) ?? UNASSIGNED_COLOR}
+              offsetForWell={(w) => overview.offsets.get(w) ?? 0}
             />
           </div>
         </section>
