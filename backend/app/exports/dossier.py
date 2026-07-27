@@ -56,6 +56,16 @@ SCENARIO_PANEL_PX = (
     round(_PANEL_HEIGHT_IN * 96),
 )
 
+# TC-vs-Novi comparison slide: one full-width figure (the 6-panel
+# rate/cum grid) under the title + subtitle.
+_COMPARISON_TOP_IN = 1.6
+_COMPARISON_HEIGHT_IN = 5.5
+_COMPARISON_WIDTH_IN = _SLIDE_WIDTH_IN - 2 * _MARGIN_IN
+COMPARISON_PANEL_PX = (
+    round(_COMPARISON_WIDTH_IN * 96),
+    round(_COMPARISON_HEIGHT_IN * 96),
+)
+
 
 @dataclass(frozen=True)
 class ScenarioSlideInput:
@@ -65,6 +75,16 @@ class ScenarioSlideInput:
     subtitle: str  # bench/category well counts, built client-side
     map_png: bytes
     gunbarrel_png: bytes
+
+
+@dataclass(frozen=True)
+class ComparisonSlideInput:
+    """One zone's TC-vs-Novi comparison slide: the client-captured
+    6-panel figure (oil/gas/water x rate/cum, TC band vs Novi median)."""
+
+    title: str
+    subtitle: str  # alignment/normalization/risking basis, built client-side
+    figure_png: bytes
 
 
 @dataclass(frozen=True)
@@ -81,12 +101,14 @@ def build_deal_dossier_pptx(
     session: Session,
     scenarios: list[ScenarioSlideInput],
     curves: list[CurveSlideInput],
+    comparisons: list[ComparisonSlideInput] | None = None,
 ) -> bytes:
     """Assemble the dossier deck from the brand template.
 
     Slide order: scenarios (one each), then per curve the oil / gas /
-    water stream slides. Raises ValueError on an unknown type curve or
-    a missing stream panel.
+    water stream slides, then one TC-vs-Novi comparison slide per zone
+    that has one. Raises ValueError on an unknown type curve or a
+    missing stream panel.
     """
     if not scenarios and not curves:
         raise ValueError("dossier needs at least one scenario or curve")
@@ -118,6 +140,10 @@ def build_deal_dossier_pptx(
             _set_title_text(slide, f"{tc.name} {_STREAM_TITLE[stream]}")
             _fill_param_table(_find_table(slide), tc, None)
             _place_chart_images(slide, rate_png, cum_png, cv.map_png)
+
+    for cp in comparisons or []:
+        _duplicate_slide(pres, source_idx=0)
+        _build_comparison_slide(pres.slides[-1], cp)
 
     # Drop the template slides (indices 0 and 1) now that the content
     # slides are in place — delete back-to-front so indices hold.
@@ -169,6 +195,40 @@ def _build_scenario_slide(slide: Slide, sc: ScenarioSlideInput) -> None:
         Inches(_PANEL_TOP_IN),
         width=Inches(_PANEL_WIDTH_IN),
         height=Inches(_PANEL_HEIGHT_IN),
+    )
+
+
+def _build_comparison_slide(slide: Slide, cp: ComparisonSlideInput) -> None:
+    """Title + subtitle + one full-width 6-panel comparison figure."""
+    _set_title_text(slide, cp.title)
+    for shape in list(slide.shapes):
+        is_table = isinstance(shape, GraphicFrame) and shape.has_table
+        if is_table or isinstance(shape, Picture):
+            shape._element.getparent().remove(shape._element)
+
+    if cp.subtitle:
+        tb = slide.shapes.add_textbox(
+            Inches(_MARGIN_IN),
+            Inches(_SUBTITLE_TOP_IN),
+            Inches(_SLIDE_WIDTH_IN - 2 * _MARGIN_IN),
+            Inches(0.3),
+        )
+        tf = tb.text_frame
+        tf.margin_left = 0
+        tf.margin_right = 0
+        tf.margin_top = 0
+        tf.margin_bottom = 0
+        tf.word_wrap = False
+        run = tf.paragraphs[0].add_run()
+        run.text = cp.subtitle
+        run.font.size = Pt(_SUBTITLE_FONT_PT)
+
+    slide.shapes.add_picture(
+        io.BytesIO(cp.figure_png),
+        Inches(_MARGIN_IN),
+        Inches(_COMPARISON_TOP_IN),
+        width=Inches(_COMPARISON_WIDTH_IN),
+        height=Inches(_COMPARISON_HEIGHT_IN),
     )
 
 

@@ -129,3 +129,35 @@ def test_dossier_rejects_unknown_curve_and_empty() -> None:
         )
     with pytest.raises(ValueError, match="at least one"):
         build_deal_dossier_pptx(_StubSession([]), [], [])  # type: ignore[arg-type]
+
+
+def test_dossier_comparison_slides_append_after_curves() -> None:
+    from app.exports.dossier import ComparisonSlideInput
+
+    tc = _curve("holdTheLine_wca_v1")
+    content = build_deal_dossier_pptx(
+        _StubSession([tc]),  # type: ignore[arg-type]
+        [_scenario("plan_brotime_20")],
+        [_curve_input(tc)],
+        [
+            ComparisonSlideInput(
+                title="WCA — Type Curve vs Novi ML (n=4: 4 PUD / 0 RES)",
+                subtitle="per 1,000 ft lateral · TC aligned to peak, Novi to IP",
+                figure_png=_PNG,
+            ),
+        ],
+    )
+    pres = Presentation(io.BytesIO(content))
+    # 1 scenario + 3 stream slides + 1 comparison slide.
+    assert len(pres.slides) == 5
+    slide = pres.slides[4]
+    pictures = [s for s in slide.shapes if isinstance(s, Picture)]
+    tables = [
+        s for s in slide.shapes
+        if isinstance(s, GraphicFrame) and s.has_table
+    ]
+    assert len(pictures) == 1  # the single full-width figure
+    assert not tables  # param table stripped
+    text = _slide_texts(slide)
+    assert "Type Curve vs Novi ML" in text
+    assert "Novi to IP" in text
