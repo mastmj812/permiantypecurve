@@ -64,8 +64,9 @@ LEVEL_TO_SPE_KEY: dict[str, str] = {
 RESERVED_SHEET_NAMES: frozenset[str] = frozenset(
     {
         "meta", "inventory", "manifest", "analog_production", "curve_params",
-        # 2026-07-27 amendment (pending Blue Ox ack): gunbarrel frame sheet.
-        "dsu_meta",
+        # 2026-07-27 amendments (pending Blue Ox ack): gunbarrel frame
+        # sheet + the TC-vs-Novi comparison sheets.
+        "dsu_meta", "novi_comparison", "novi_comparison_meta",
     }
 )
 ZONE_NAME_MAX = 26
@@ -91,6 +92,13 @@ RISKING_APPLIED = "geologic_multipliers_applied"
 # 2026-07-20 amendment: Blue Ox applies their own yield; the drop
 # carries all-zero ngl_bbl columns.
 NGL_BASIS = "derived_by_blue_ox_via_yield"
+# 2026-07-27 amendment: the TC-vs-Novi comparison is a benchmark screen
+# — the zone-sheet vectors stay the sole economic input. The Novi
+# series is IP-aligned while the TC vectors keep their peak-fit head;
+# Novi per-day rates convert to period volumes on the Novi-native
+# 30-day grid.
+NOVI_ALIGNMENT = "novi_to_ip_tc_to_peak"
+NOVI_RATE_TO_VOLUME_DAYS = 30
 
 _BOLD = Font(bold=True)
 
@@ -150,6 +158,33 @@ _INVENTORY_GEO_COLS: tuple[str, ...] = (
     "heel_a_lon", "heel_a_lat", "toe_a_lon", "toe_a_lat",
     "heel_b_lon", "heel_b_lat", "toe_b_lon", "toe_b_lat",
 )
+
+
+@dataclass(frozen=True)
+class NoviComparisonZone:
+    """One zone's TC-vs-Novi benchmark (2026-07-27 amendment): the
+    MEDIAN Novi Intelligence ML forecast of the representative stick
+    set behind the zone's captured wells — per-1,000-ft period volumes
+    on the Novi-native 30-day grid, IP-aligned. ``n_sticks == 0`` means
+    no eligible sticks (e.g. a PDP-dominant zone): the meta sheet still
+    carries the row (flagged), the long sheet carries no series."""
+
+    zone_name: str
+    n_sticks: int
+    n_self: int  # sticks contributed by curated pud/res wells (their own)
+    n_neighborhood: int  # sticks contributed by generated wells' neighborhoods
+    n_pud: int
+    n_res: int
+    n_wells_no_set: int  # planned wells with no resolvable set
+    radius_m: float
+    lateral_tol: float
+    intel_vintage: str | None
+    low_n: bool  # any contributing set (or the union) below the n floor
+    stale_vintage: bool  # a persisted set predates the current vintage
+    tc_risked: bool  # the TC side of the comparison carries geologic MULs
+    oil_bbl: tuple[float, ...] = ()
+    gas_mcf: tuple[float, ...] = ()
+    water_bbl: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -237,6 +272,12 @@ class BlueOxExportData:
     # the inventory rows' dsu_id (2026-07-27 amendment). Empty = no
     # dsu_meta sheet (legacy output unchanged).
     dsu_meta: Sequence[DsuMetaRow] = ()
+    # TC-vs-Novi benchmark (2026-07-27 amendment). Empty = no
+    # novi_comparison sheets and no manifest keys (legacy output
+    # unchanged); non-empty must cover EVERY zone (n=0 rows included).
+    novi_comparison: Sequence[NoviComparisonZone] = ()
+    # Warehouse intel vintage the comparison was computed against.
+    novi_intel_vintage: str | None = None
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -499,6 +540,37 @@ def _validate(data: BlueOxExportData) -> None:
             + ", ".join(sorted(orphan_frames))
         )
 
+    # TC-vs-Novi comparison (2026-07-27 amendment): when present it
+    # must cover every zone exactly once (n=0 rows for stickless zones
+    # — a missing row is indistinguishable from a forgotten zone), and
+    # every zone with sticks carries three equal-length vectors.
+    if data.novi_comparison:
+        zone_names = {z.zone_name for z in data.zones}
+        comp_names = [c.zone_name for c in data.novi_comparison]
+        if sorted(comp_names) != sorted(zone_names):
+            errors.append(
+                "novi_comparison must cover every zone exactly once "
+                f"(zones {sorted(zone_names)}, comparison {sorted(comp_names)})"
+            )
+        for c in data.novi_comparison:
+            lengths = {len(c.oil_bbl), len(c.gas_mcf), len(c.water_bbl)}
+            if c.n_sticks > 0:
+                if len(lengths) != 1 or 0 in lengths:
+                    errors.append(
+                        f"novi_comparison {c.zone_name!r}: oil/gas/water "
+                        "vectors must be non-empty and equal-length "
+                        f"(got {sorted(len(v) for v in (c.oil_bbl, c.gas_mcf, c.water_bbl))})"
+                    )
+            elif lengths != {0}:
+                errors.append(
+                    f"novi_comparison {c.zone_name!r}: n_sticks=0 rows "
+                    "must carry no series"
+                )
+        if data.novi_intel_vintage is None:
+            errors.append(
+                "novi_comparison present but novi_intel_vintage undeclared"
+            )
+
     if errors:
         raise BlueOxContractError(
             "Blue Ox contract violations:\n- " + "\n- ".join(errors)
@@ -622,6 +694,46 @@ def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
         ws.column_dimensions[letter].number_format = "#,##0"
         ws.column_dimensions[letter].width = 20
     ws.column_dimensions["E"].width = 26
+
+
+def _write_novi_comparison(ws: Any, data: BlueOxExportData) -> None:
+    """Long format: one row per zone per 30-day period — the median
+    Novi ML per-1,000-ft period volumes, IP-aligned. Zones with no
+    eligible sticks contribute no rows (declared on the meta sheet)."""
+    ws.append(["area", "month", "oil_bbl", "gas_mcf", "water_bbl"])
+    _bold_row(ws, 1, 5)
+    for c in data.novi_comparison:
+        for i in range(len(c.oil_bbl)):
+            ws.append([
+                c.zone_name, i + 1,
+                float(c.oil_bbl[i]), float(c.gas_mcf[i]), float(c.water_bbl[i]),
+            ])
+    ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 28
+    for letter in ("C", "D", "E"):
+        ws.column_dimensions[letter].number_format = "#,##0.0"
+        ws.column_dimensions[letter].width = 14
+
+
+_NOVI_META_COLS: tuple[str, ...] = (
+    "area", "n_sticks", "n_self", "n_neighborhood", "n_pud", "n_res",
+    "n_wells_no_set", "radius_m", "lateral_tol", "intel_vintage",
+    "low_n_flag", "stale_vintage_flag", "tc_risked",
+)
+
+
+def _write_novi_comparison_meta(ws: Any, data: BlueOxExportData) -> None:
+    ws.append(list(_NOVI_META_COLS))
+    _bold_row(ws, 1, len(_NOVI_META_COLS))
+    for c in data.novi_comparison:
+        ws.append([
+            c.zone_name, c.n_sticks, c.n_self, c.n_neighborhood,
+            c.n_pud, c.n_res, c.n_wells_no_set, c.radius_m, c.lateral_tol,
+            c.intel_vintage, c.low_n, c.stale_vintage, c.tc_risked,
+        ])
+    ws.column_dimensions["A"].width = 28
+    for col_idx in range(2, len(_NOVI_META_COLS) + 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = 16
 
 
 def _write_dsu_meta(ws: Any, data: BlueOxExportData) -> None:
@@ -749,6 +861,18 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         "PUD = pdp_count_3mi >= 3; UPSIDE = pdp_count_3mi <= 2 or unscored; "
         "narvi user overrides win",
     ))
+    # TC-vs-Novi benchmark declarations (2026-07-27 amendment) — only
+    # when the comparison ships, so legacy drops stay byte-identical.
+    if data.novi_comparison:
+        radius = data.novi_comparison[0].radius_m
+        tol = data.novi_comparison[0].lateral_tol
+        block_a.extend([
+            ("novi_intel_vintage", data.novi_intel_vintage),
+            ("novi_selection_radius_m", radius),
+            ("novi_selection_lateral_tol", tol),
+            ("novi_alignment", NOVI_ALIGNMENT),
+            ("novi_rate_to_volume_days", NOVI_RATE_TO_VOLUME_DAYS),
+        ])
     for key, value in block_a:
         ws.append([key, value])
         ws.cell(row=ws.max_row, column=1).font = _BOLD
@@ -820,6 +944,11 @@ def build_blueox_workbook(data: BlueOxExportData) -> bytes:
         _write_analog_sheet(wb.create_sheet(f"{z.zone_name} meta"), z)
     _write_analog_production(wb.create_sheet("analog_production"), data)
     _write_curve_params(wb.create_sheet("curve_params"), data)
+    if data.novi_comparison:
+        _write_novi_comparison(wb.create_sheet("novi_comparison"), data)
+        _write_novi_comparison_meta(
+            wb.create_sheet("novi_comparison_meta"), data
+        )
     _write_manifest(wb.create_sheet("manifest"), data)
 
     buf = io.BytesIO()

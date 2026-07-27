@@ -53,6 +53,7 @@ from app.exports.blueox import (
     BlueOxExportData,
     DsuMetaRow,
     InventoryRow,
+    NoviComparisonZone,
     ZoneData,
     blueox_filename,
     build_blueox_workbook,
@@ -69,6 +70,14 @@ from app.exports.dossier import (
     CurveSlideInput,
     ScenarioSlideInput,
     build_deal_dossier_pptx,
+)
+from app.warehouse_client.intel_forecast import (
+    REP_LATERAL_TOL,
+    REP_LOW_N,
+    REP_RADIUS_M,
+    fetch_intel_median_series,
+    fetch_intel_vintage,
+    resolve_rep_set,
 )
 from app.warehouse_client.narvi import (
     NarviInventoryWell,
@@ -721,6 +730,74 @@ def _inventory_row_from_narvi(nw: NarviInventoryWell) -> InventoryRow:
     )
 
 
+def _collect_novi_comparison(
+    wh: Session,
+    zone_name: str,
+    wells: list[NarviInventoryWell],
+    tc_risked: bool,
+    vintage: str | None,
+) -> NoviComparisonZone:
+    """One zone's TC-vs-Novi benchmark (2026-07-27 amendment).
+
+    Per captured PLANNED well the representative set resolves via
+    ``resolve_rep_set`` (persisted narvi ``novi_rep`` first, warehouse
+    fallback for legacy saves); the zone medians over the DEDUPED UNION
+    of all sets — a zone mixing generated and curated wells blends
+    neighborhood and self sticks by design (union-median, unweighted).
+    PDP wells contribute nothing (no intel ML forecast exists). A thin
+    result is flagged (low_n), never widened.
+    """
+    self_ids: set[int] = set()
+    hood_ids: set[int] = set()
+    low_n = False
+    stale = False
+    n_no_set = 0
+    for w in wells:
+        if (w.category or "").lower() == "pdp":
+            continue
+        rep = resolve_rep_set(wh, w)
+        if rep is None or not rep.stick_ids:
+            n_no_set += 1
+            if rep is not None and rep.mode == "neighborhood":
+                low_n = True  # an empty neighborhood is the thinnest case
+            continue
+        if rep.mode == "self":
+            self_ids.update(rep.stick_ids)
+        else:
+            hood_ids.update(rep.stick_ids)
+            low_n = low_n or rep.low_n
+        if rep.intel_vintage and vintage and rep.intel_vintage != vintage:
+            stale = True
+
+    union = tuple(sorted(self_ids | hood_ids))
+    series = fetch_intel_median_series(wh, union) if union else None
+    if series is not None and series.dropped_sticks:
+        log.info(
+            "blueox_novi_comparison_dropped_sticks",
+            zone=zone_name,
+            dropped=list(series.dropped_sticks),
+        )
+    n_sticks = series.n_sticks if series is not None else 0
+    return NoviComparisonZone(
+        zone_name=zone_name,
+        n_sticks=n_sticks,
+        n_self=len(self_ids),
+        n_neighborhood=len(hood_ids - self_ids),
+        n_pud=series.n_pud if series is not None else 0,
+        n_res=series.n_res if series is not None else 0,
+        n_wells_no_set=n_no_set,
+        radius_m=REP_RADIUS_M,
+        lateral_tol=REP_LATERAL_TOL,
+        intel_vintage=vintage,
+        low_n=low_n or n_sticks < REP_LOW_N,
+        stale_vintage=stale,
+        tc_risked=tc_risked,
+        oil_bbl=series.oil_bbl if series is not None else (),
+        gas_mcf=series.gas_mcf if series is not None else (),
+        water_bbl=series.water_bbl if series is not None else (),
+    )
+
+
 def _one_yr_effective(di_nominal: float, b: float) -> float | None:
     """1-yr secant effective decline from nominal Di (per-yr) and Arps b.
 
@@ -1073,6 +1150,7 @@ def _collect_blueox_data(
 
     zones: list[ZoneData] = []
     curves: list[TypeCurve] = []
+    risked_by_zone: dict[str, bool] = {}
     all_apis: set[str] = set()
     for spec in req.zones:
         tc = session.get(TypeCurve, spec.type_curve_id)
@@ -1097,6 +1175,7 @@ def _collect_blueox_data(
         )
         if zone is not None:
             zones.append(zone)
+            risked_by_zone[zone.zone_name] = is_risked(tc.risk_multipliers or {})
             all_apis.update(str(r[0]) for r in zone.analog_rows)
 
     prod_rows_db = session.execute(
@@ -1151,6 +1230,8 @@ def _collect_blueox_data(
         | {inv.dsu_id for _a, inv in pdp_context_rows if inv.dsu_id}
     )
     dsu_meta: list[DsuMetaRow] = []
+    novi_comparison: list[NoviComparisonZone] = []
+    novi_vintage: str | None = None
     if referenced_dsu_ids:
         try:
             with contextmanager(get_warehouse_session)() as wh:
@@ -1158,10 +1239,21 @@ def _collect_blueox_data(
                     wh, [pair_by_dsu_id[d] for d in referenced_dsu_ids
                          if d in pair_by_dsu_id],
                 )
+                # TC-vs-Novi benchmark (2026-07-27 amendment): one row
+                # per zone, always — n=0 rows declare stickless zones.
+                novi_vintage = fetch_intel_vintage(wh)
+                for zone in zones:
+                    novi_comparison.append(_collect_novi_comparison(
+                        wh,
+                        zone.zone_name,
+                        narvi_by_zone.get(zone.zone_name, []),
+                        risked_by_zone.get(zone.zone_name, False),
+                        novi_vintage,
+                    ))
         except Exception as exc:  # surface as a 422, not a 500
             raise HTTPException(
                 status_code=422,
-                detail=f"narvi dsu frame fetch failed: {exc}",
+                detail=f"narvi dsu frame / novi comparison fetch failed: {exc}",
             ) from exc
         dsu_meta = [
             DsuMetaRow(
@@ -1199,6 +1291,8 @@ def _collect_blueox_data(
         inventory_exclusions=inventory_exclusions,
         pdp_context_rows=pdp_context_rows,
         dsu_meta=tuple(dsu_meta),
+        novi_comparison=tuple(novi_comparison),
+        novi_intel_vintage=novi_vintage,
     )
 
 
