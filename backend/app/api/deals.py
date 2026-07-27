@@ -583,6 +583,17 @@ class BlueOxInventoryRowIn(BaseModel):
     category: Literal["PDP", "PUD", "UPSIDE"] = "PUD"
 
 
+class ScenarioRef(BaseModel):
+    """A (deal_id, scenario_id) pair naming one narvi scenario."""
+
+    deal_id: str = Field(min_length=1)
+    scenario_id: str = Field(min_length=1)
+
+    @property
+    def pair(self) -> tuple[str, str]:
+        return (self.deal_id, self.scenario_id)
+
+
 class BlueOxZoneSpec(BaseModel):
     type_curve_id: uuid.UUID
     # Adopted verbatim by Blue Ox as the zone identifier (contract
@@ -603,11 +614,26 @@ class BlueOxZoneSpec(BaseModel):
         return v
     # narvi formation_blueox bench codes whose planned wells belong to
     # this zone (a zone commonly spans benches: WCA_1 + WCA_2 -> WCA).
-    # Benches must be disjoint across zones.
+    # Benches must be disjoint across zones WITHIN OVERLAPPING SCENARIO
+    # SCOPE — two zones may claim the same bench when their scopes are
+    # disjoint (the west/east same-bench split on wide deals).
     benches: list[str] = Field(default_factory=list)
+    # Scenario scope: None or [] = ALL selected scenarios (the legacy
+    # behavior — configs saved before this field validate untouched).
+    # Otherwise the subset of narvi_selections whose wells this zone's
+    # benches capture — each scenario is one DSU, so this is the
+    # geographic grain (e.g. a western BS1_S curve scoped to the
+    # western DSU scenarios, an eastern one to the SE DSU).
+    scenario_scope: list[ScenarioRef] | None = None
     # Manual rows — the fallback for deals without narvi coverage, or
     # extras on top of the narvi pull.
     inventory: list[BlueOxInventoryRowIn] = Field(default_factory=list)
+
+    def scope_pairs(self) -> frozenset[tuple[str, str]] | None:
+        """Scope as a pair set; None = unscoped (covers everything)."""
+        if not self.scenario_scope:
+            return None
+        return frozenset(ref.pair for ref in self.scenario_scope)
 
 
 class NarviSelection(BaseModel):
@@ -828,6 +854,11 @@ def _collect_blueox_zone(
         analog_headers=PER_WELL_HEADERS,
         analog_rows=analog_rows,
         inventory=inventory,
+        # Declared in the manifest when non-empty (scoped zones only).
+        scenario_scope=tuple(
+            f"{ref.deal_id}/{ref.scenario_id}"
+            for ref in (spec.scenario_scope or [])
+        ),
     )
 
 
@@ -845,20 +876,49 @@ def _fetch_narvi_by_zone(
     bench has no zone here comes back in the third element and lands on
     the inventory sheet with its bench code as `area` (the downstream
     gunbarrel automation needs the whole DSU stack).
+
+    Scenario scope: a zone may restrict itself to a subset of the
+    selected scenarios (each scenario ≈ one DSU), which is how the same
+    bench gets a WEST curve and an EAST curve on a wide deal. Two zones
+    may claim one bench only when their scopes are disjoint (an
+    unscoped zone overlaps everything). A planned well whose bench is
+    claimed but whose scenario no claiming zone covers is a hard error
+    — scope must never silently shrink the location count.
     """
     if not req.narvi_selections:
         return {}, (), []
 
-    bench_to_zone: dict[str, str] = {}
+    selected_pairs = {(sel.deal_id, sel.scenario_id) for sel in req.narvi_selections}
+    # bench -> [(zone_name, scope-pair-set | None)]; None = all scenarios.
+    bench_claims: dict[str, list[tuple[str, frozenset[tuple[str, str]] | None]]] = {}
     for spec in req.zones:
         zname = spec.zone_name or ""
-        for bench in spec.benches:
-            if bench in bench_to_zone:
+        scope = spec.scope_pairs()
+        if scope is not None:
+            unknown = scope - selected_pairs
+            if unknown:
                 errors.append(
-                    f"bench {bench!r} mapped to more than one zone "
-                    f"({bench_to_zone[bench]!r} and {zname!r})"
+                    f"zone {zname!r} scenario_scope names scenarios not in "
+                    "this drop's selections: "
+                    + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
                 )
-            bench_to_zone[bench] = zname
+        for bench in spec.benches:
+            claims = bench_claims.setdefault(bench, [])
+            for other_zone, other_scope in claims:
+                if scope is None or other_scope is None or (scope & other_scope):
+                    errors.append(
+                        f"bench {bench!r} mapped to more than one zone with "
+                        f"overlapping scenario scope ({other_zone!r} and {zname!r})"
+                    )
+            claims.append((zname, scope))
+
+    def _zone_for(bench: str, pair: tuple[str, str]) -> str | None:
+        """The unique claiming zone whose scope covers this well's
+        scenario (uniqueness is guaranteed by the overlap guard)."""
+        for zname, scope in bench_claims.get(bench, ()):
+            if scope is None or pair in scope:
+                return zname
+        return None
 
     pairs = [(sel.deal_id, sel.scenario_id) for sel in req.narvi_selections]
     try:
@@ -905,20 +965,27 @@ def _fetch_narvi_by_zone(
 
     excluded = dict.fromkeys(req.exclude_benches, 0)
     unmapped: dict[str, int] = {}
+    scope_missed: dict[tuple[str, str, str], int] = {}
     by_zone: dict[str, list[NarviInventoryWell]] = {}
     for w in planned:
         bench = w.formation or "(null)"
         if bench in excluded:
             excluded[bench] += 1
             continue
-        zone = bench_to_zone.get(bench)
+        zone = _zone_for(bench, (w.deal_id, w.scenario_id))
         if zone is None:
-            unmapped[bench] = unmapped.get(bench, 0) + 1
+            if bench in bench_claims:
+                # Claimed bench, uncovered scenario — scoping must never
+                # silently shrink the location count.
+                key = (bench, w.deal_id, w.scenario_id)
+                scope_missed[key] = scope_missed.get(key, 0) + 1
+            else:
+                unmapped[bench] = unmapped.get(bench, 0) + 1
             continue
         by_zone.setdefault(zone, []).append(w)
     unzoned_pdp: list[NarviInventoryWell] = []
     for w in pdp_context:
-        zone = bench_to_zone.get(w.formation or "")
+        zone = _zone_for(w.formation or "", (w.deal_id, w.scenario_id))
         if zone is None or (w.formation or "") in excluded:
             unzoned_pdp.append(w)
             continue
@@ -927,6 +994,16 @@ def _fetch_narvi_by_zone(
         errors.append(
             "narvi benches with no zone mapping and no exclusion: "
             + ", ".join(f"{b} ({n} wells)" for b, n in sorted(unmapped.items()))
+        )
+    if scope_missed:
+        errors.append(
+            "planned wells whose bench is zoned but whose scenario no "
+            "zone's scenario_scope covers: "
+            + ", ".join(
+                f"{b} in {d}/{s} ({n} wells)"
+                for (b, d, s), n in sorted(scope_missed.items())
+            )
+            + " — widen a zone's scope or exclude the bench"
         )
     for bench, n in excluded.items():
         if n == 0:
@@ -1131,11 +1208,25 @@ def put_blueox_config(
     live updated_at (server-side — whatever the client sent is
     overwritten) so a later export can detect a re-saved scenario."""
     deal = _load_or_404(session, deal_id)
+    selected = {(s.deal_id, s.scenario_id) for s in req.narvi_selections}
     for spec in req.zones:
         if session.get(TypeCurve, spec.type_curve_id) is None:
             raise HTTPException(
                 status_code=422,
                 detail=f"type curve {spec.type_curve_id} not found",
+            )
+        # A scope naming an unselected scenario is a config bug — catch
+        # it at save time, not at export.
+        scope = spec.scope_pairs()
+        if scope is not None and (unknown := scope - selected):
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"zone {spec.zone_name or spec.type_curve_id!s} "
+                    "scenario_scope names scenarios not in this config's "
+                    "selections: "
+                    + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
+                ),
             )
     pairs = [(s.deal_id, s.scenario_id) for s in req.narvi_selections]
     if pairs:

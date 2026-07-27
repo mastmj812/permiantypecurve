@@ -22,8 +22,10 @@ import {
 import { type Stream, type WellCurvesResponse, fetchWellCurves } from "../api/forecasts";
 import {
   type NarviScenarioDetail,
+  type NarviWellGeo,
   fetchNarviScenarioDetail,
 } from "../api/narvi";
+import { UNASSIGNED_COLOR, resolveZone, zoneColor } from "../map/blueoxZones";
 import {
   type TypeCurveRow,
   type TypeCurveWellStat,
@@ -128,6 +130,43 @@ export function DealDossierPage({ dealId }: Props) {
     if (!cfg) return [] as string[];
     return [...new Set(cfg.zones.map((z) => z.type_curve_id))];
   }, [cfg]);
+
+  // Curve-assignment overview: every scenario's AOI + wells on ONE map,
+  // each planned well colored by the zone (=> type curve) that captures
+  // it under the SAVED config — the direct answer to "which curve is
+  // each well getting" on a deal whose DSUs sit 20+ miles apart. PDP
+  // producers are context, not assigned, and paint gray like uncovered
+  // benches. Colors key on object identity (well names can repeat only
+  // for PDP api10s shared across scenarios — same color either way).
+  const overview = useMemo(() => {
+    if (!scenarios || !cfg || cfg.zones.length === 0) return null;
+    const wells: NarviWellGeo[] = [];
+    const colors = new Map<NarviWellGeo, string>();
+    const geoms: unknown[] = [];
+    for (const sd of scenarios) {
+      if (sd.aoi_geojson) {
+        try {
+          geoms.push(JSON.parse(sd.aoi_geojson));
+        } catch {
+          // skip an unparseable AOI; wells still render
+        }
+      }
+      const ref = { deal_id: sd.deal_id, scenario_id: sd.scenario_id };
+      for (const w of sd.wells) {
+        wells.push(w);
+        const rz =
+          w.category === "PDP" ? null : resolveZone(w.formation, ref, cfg.zones);
+        colors.set(w, rz ? zoneColor(rz.index) : UNASSIGNED_COLOR);
+      }
+    }
+    return {
+      wells,
+      colors,
+      aoi: geoms.length
+        ? JSON.stringify({ type: "GeometryCollection", geometries: geoms })
+        : null,
+    };
+  }, [scenarios, cfg]);
 
   const allReady =
     scenarios !== null && curveIds.every((_, i) => curvesReady.has(i));
@@ -239,6 +278,49 @@ export function DealDossierPage({ dealId }: Props) {
       </div>
 
       {scenarios === null && <p className="muted">loading narvi scenarios…</p>}
+
+      {overview && (
+        <section style={{ marginTop: 16 }}>
+          <h1 className="slide-title">Curve assignment overview</h1>
+          <p className="muted" style={{ margin: "2px 0 6px", fontSize: 13 }}>
+            every selected scenario on one map — planned wells colored by
+            the type curve their zone assigns under the saved config; gray
+            = PDP context or a well no zone captures
+          </p>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "0 0 6px", fontSize: 12 }}>
+            {cfg.zones.map((z, i) => (
+              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                <span style={{
+                  width: 12, height: 12, borderRadius: 2, display: "inline-block",
+                  background: zoneColor(i),
+                }} />
+                {z.zone_name ?? z.type_curve_id.slice(0, 8)}
+                {!!z.scenario_scope?.length && (
+                  <span className="muted">({z.scenario_scope.length} DSU{z.scenario_scope.length === 1 ? "" : "s"})</span>
+                )}
+              </span>
+            ))}
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+              <span style={{
+                width: 12, height: 12, borderRadius: 2, display: "inline-block",
+                background: UNASSIGNED_COLOR,
+              }} />
+              <span className="muted">PDP / unassigned</span>
+            </span>
+          </div>
+          <div className="slide-panel">
+            <ScenarioSlideMap
+              aoiGeojson={overview.aoi}
+              wells={overview.wells}
+              width={1160}
+              height={520}
+              lazy
+              colorForWell={(w) => overview.colors.get(w) ?? UNASSIGNED_COLOR}
+            />
+          </div>
+        </section>
+      )}
+
       {scenarios?.map((sd, i) => (
         <section key={`${sd.deal_id}/${sd.scenario_id}`} style={{ marginTop: 20 }}>
           <h1 className="slide-title">{sd.name ?? sd.scenario_id}</h1>

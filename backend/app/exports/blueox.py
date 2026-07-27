@@ -140,6 +140,13 @@ class ZoneData:
     analog_headers: Sequence[str]
     analog_rows: Sequence[Sequence[Any]]
     inventory: Sequence[InventoryRow] = field(default_factory=tuple)
+    # narvi scenario scope this zone's inventory was drawn from
+    # ("deal/scenario" strings). Empty = all selected scenarios (the
+    # unscoped default) — nothing is declared in the manifest, keeping
+    # legacy output byte-identical. Non-empty scopes are declared
+    # (Principle 4: everything declared, nothing implied) so a
+    # west/east same-bench split is auditable downstream.
+    scenario_scope: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -626,6 +633,15 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
             "inventory_benches_excluded",
             "; ".join(data.inventory_exclusions),
         ))
+    # Scenario-scoped zones declare their DSU subset (2026-07-24
+    # amendment, optional key — absent on unscoped zones so legacy
+    # drops are byte-identical).
+    for z in data.zones:
+        if z.scenario_scope:
+            block_a.append((
+                f"zone_scenario_scope[{z.zone_name}]",
+                "; ".join(z.scenario_scope),
+            ))
     block_a.append((
         "inventory_category_basis",
         "PDP = existing producer (context only, not counted); "
