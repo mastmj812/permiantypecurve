@@ -62,7 +62,11 @@ LEVEL_TO_SPE_KEY: dict[str, str] = {
 # Contract Principle 2: reserved sheet names (case-insensitive) + zone
 # sheet-name mechanics.
 RESERVED_SHEET_NAMES: frozenset[str] = frozenset(
-    {"meta", "inventory", "manifest", "analog_production", "curve_params"}
+    {
+        "meta", "inventory", "manifest", "analog_production", "curve_params",
+        # 2026-07-27 amendment (pending Blue Ox ack): gunbarrel frame sheet.
+        "dsu_meta",
+    }
 )
 ZONE_NAME_MAX = 26
 _ZONE_FORBIDDEN_RE = re.compile(r"[:\\/?*\[\]]")
@@ -107,12 +111,58 @@ INVENTORY_CATEGORIES: tuple[str, ...] = ("PDP", "PUD", "UPSIDE")
 class InventoryRow:
     """One row on the handoff inventory sheet (contract §1.3 + the
     category amendment): a planned undeveloped well (PUD/UPSIDE) or an
-    existing producer shown for gunbarrel context (PDP)."""
+    existing producer shown for gunbarrel context (PDP).
+
+    The geometry fields (2026-07-27 amendment, pending Blue Ox ack) let
+    the receiver rebuild the per-DSU gunbarrel: plot gunbarrel_offset_ft
+    (signed cross-section X, one per producing leg — the ``_b`` values
+    are U-turn second legs, blank for singles) against landing_tvd_ft,
+    grouped by dsu_id; the projection frame per dsu_id lives on the
+    ``dsu_meta`` sheet. heel/toe lon/lat are the true WGS84 leg
+    endpoints for map QC. All optional — manual inventory rows and
+    legacy narvi saves simply leave them blank."""
 
     producing_lateral_ft: float
     drilled_lateral_ft: float
     well_name: str | None = None
     category: str = "PUD"
+    dsu_id: str | None = None  # "<narvi deal_id>/<scenario_id>"
+    bench: str | None = None  # formation_blueox (finer than `area`)
+    landing_tvd_ft: float | None = None
+    gunbarrel_offset_ft: float | None = None  # producing leg A
+    gunbarrel_offset_b_ft: float | None = None  # leg B (U-turn only)
+    lateral_azimuth_deg: float | None = None
+    heel_a_lon: float | None = None
+    heel_a_lat: float | None = None
+    toe_a_lon: float | None = None
+    toe_a_lat: float | None = None
+    heel_b_lon: float | None = None
+    heel_b_lat: float | None = None
+    toe_b_lon: float | None = None
+    toe_b_lat: float | None = None
+
+
+# The geometry column block appended to the inventory sheet when any
+# row carries geometry (attribute name == column header).
+_INVENTORY_GEO_COLS: tuple[str, ...] = (
+    "dsu_id", "bench", "landing_tvd_ft",
+    "gunbarrel_offset_ft", "gunbarrel_offset_b_ft", "lateral_azimuth_deg",
+    "heel_a_lon", "heel_a_lat", "toe_a_lon", "toe_a_lat",
+    "heel_b_lon", "heel_b_lat", "toe_b_lon", "toe_b_lat",
+)
+
+
+@dataclass(frozen=True)
+class DsuMetaRow:
+    """One row of the ``dsu_meta`` sheet: the gunbarrel projection frame
+    of one DSU/scenario. offset = signed projection of the leg midpoint
+    onto the axis 90° clockwise of azimuth_deg (folded to [0°, 180°))
+    through the origin (parcel centroid), in feet."""
+
+    dsu_id: str
+    azimuth_deg: float | None
+    origin_lon: float | None
+    origin_lat: float | None
 
 
 @dataclass(frozen=True)
@@ -183,6 +233,10 @@ class BlueOxExportData:
     # zone's curve carries a geologic multiplier (2026-07-24 amendment).
     # The caller computes this from the curves it assembled.
     risking: str = RISKING_UNRISKED
+    # Gunbarrel projection frames, one per DSU/scenario referenced by
+    # the inventory rows' dsu_id (2026-07-27 amendment). Empty = no
+    # dsu_meta sheet (legacy output unchanged).
+    dsu_meta: Sequence[DsuMetaRow] = ()
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -423,6 +477,28 @@ def _validate(data: BlueOxExportData) -> None:
                 f"category PDP (got {invr.category!r})"
             )
 
+    # Gunbarrel geometry (2026-07-27 amendment): every dsu_id referenced
+    # by an inventory row must have its projection frame on dsu_meta —
+    # an offset without its frame is not reproducible downstream.
+    frame_ids = {f.dsu_id for f in data.dsu_meta}
+    referenced = {
+        inv.dsu_id
+        for inv in _all_inventory_rows(data)
+        if inv.dsu_id is not None
+    }
+    missing_frames = referenced - frame_ids
+    if missing_frames:
+        errors.append(
+            "inventory rows reference DSUs with no dsu_meta frame: "
+            + ", ".join(sorted(missing_frames))
+        )
+    orphan_frames = frame_ids - referenced
+    if orphan_frames:
+        errors.append(
+            "dsu_meta frames with no inventory rows: "
+            + ", ".join(sorted(orphan_frames))
+        )
+
     if errors:
         raise BlueOxContractError(
             "Blue Ox contract violations:\n- " + "\n- ".join(errors)
@@ -496,16 +572,27 @@ def _write_meta(ws: Any, data: BlueOxExportData) -> None:
     ws.column_dimensions["C"].width = 18
 
 
+def _all_inventory_rows(data: BlueOxExportData) -> list[InventoryRow]:
+    return [inv for z in data.zones for inv in z.inventory] + [
+        inv for _area, inv in data.pdp_context_rows
+    ]
+
+
 def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
+    all_rows = _all_inventory_rows(data)
     # well_name is optional; include the column only when every row has
     # one (contract formatting rule: no blank cells mid-column).
-    all_named = all(
-        inv.well_name
-        for z in data.zones for inv in z.inventory
-    ) and all(inv.well_name for _area, inv in data.pdp_context_rows)
+    all_named = all(inv.well_name for inv in all_rows)
+    # Geometry columns (2026-07-27 amendment) ride along whenever any
+    # row carries them — strictly appended after the v1 columns so a
+    # lenient loader keeps working unchanged. Blank cells inside the
+    # block are sanctioned (e.g. `_b` legs on single-lateral wells).
+    with_geo = any(inv.dsu_id is not None for inv in all_rows)
     header = ["area", "category", "producing_lateral_ft", "drilled_lateral_ft"]
     if all_named:
         header.append("well_name")
+    if with_geo:
+        header.extend(_INVENTORY_GEO_COLS)
     ws.append(header)
     _bold_row(ws, 1, len(header))
 
@@ -518,6 +605,8 @@ def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
         ]
         if all_named:
             row.append(inv.well_name)
+        if with_geo:
+            row.extend(getattr(inv, col) for col in _INVENTORY_GEO_COLS)
         ws.append(row)
 
     for z in data.zones:
@@ -533,6 +622,18 @@ def _write_inventory(ws: Any, data: BlueOxExportData) -> None:
         ws.column_dimensions[letter].number_format = "#,##0"
         ws.column_dimensions[letter].width = 20
     ws.column_dimensions["E"].width = 26
+
+
+def _write_dsu_meta(ws: Any, data: BlueOxExportData) -> None:
+    ws.append(["dsu_id", "azimuth_deg", "origin_lon", "origin_lat"])
+    _bold_row(ws, 1, 4)
+    for frame in data.dsu_meta:
+        ws.append([
+            frame.dsu_id, frame.azimuth_deg, frame.origin_lon, frame.origin_lat,
+        ])
+    ws.column_dimensions["A"].width = 34
+    for letter in ("B", "C", "D"):
+        ws.column_dimensions[letter].width = 14
 
 
 def _write_analog_sheet(ws: Any, z: ZoneData) -> None:
@@ -713,6 +814,8 @@ def build_blueox_workbook(data: BlueOxExportData) -> bytes:
         _write_zone_sheet(wb.create_sheet(z.zone_name), z, data)
     _write_meta(wb.create_sheet("meta"), data)
     _write_inventory(wb.create_sheet("inventory"), data)
+    if data.dsu_meta:
+        _write_dsu_meta(wb.create_sheet("dsu_meta"), data)
     for z in data.zones:
         _write_analog_sheet(wb.create_sheet(f"{z.zone_name} meta"), z)
     _write_analog_production(wb.create_sheet("analog_production"), data)
