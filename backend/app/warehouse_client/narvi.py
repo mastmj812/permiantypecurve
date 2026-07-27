@@ -96,6 +96,15 @@ class NarviInventoryWell:
     lateral_azimuth_deg: float | None = None
     gunbarrel_xs: tuple[float, ...] = ()
     legs_lonlat: tuple[tuple[float, float, float, float], ...] = ()
+    # Representative novi_intel set persisted by narvi at scenario save
+    # (detail->novi_rep: mode 'self' | 'neighborhood', stick_ids, n,
+    # low_n, intel_vintage, ...). None on legacy saves — the export
+    # assembly falls back to the same warehouse rule
+    # (curated.intel_representative_sticks) on the fly.
+    novi_rep: dict[str, Any] | None = None
+    # Novi unique_id for pud/res pass-through wells (the intel_locations
+    # / intel_forecast join key); None for generated wells and PDP.
+    novi_wellname: str | None = None
 
 
 _FETCH_SQL = (
@@ -107,7 +116,9 @@ _FETCH_SQL = (
                detail->>'category' AS category,
                NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
                detail->>'handoff_category' AS handoff_category,
-               detail->'legs' AS legs_detail
+               detail->'legs' AS legs_detail,
+               detail->'novi_rep' AS novi_rep,
+               detail->>'novi_wellname' AS novi_wellname
         FROM narvi.inventory_well
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id, well_name
@@ -475,6 +486,8 @@ def fetch_narvi_inventory(
                 ),
                 gunbarrel_xs=xs,
                 legs_lonlat=quads,
+                novi_rep=(r.novi_rep if isinstance(r.novi_rep, dict) else None),
+                novi_wellname=r.novi_wellname,
             )
         )
     return out

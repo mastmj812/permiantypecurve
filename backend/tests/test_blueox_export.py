@@ -26,6 +26,7 @@ from app.exports.blueox import (
     BlueOxExportData,
     DsuMetaRow,
     InventoryRow,
+    NoviComparisonZone,
     ZoneData,
     blueox_filename,
     build_blueox_workbook,
@@ -1092,3 +1093,108 @@ def test_dsu_meta_two_way_tie_enforced() -> None:
     data = BlueOxExportData(**{**data.__dict__, "dsu_meta": (_dsu_frame(),)})
     with pytest.raises(BlueOxContractError, match="no inventory rows"):
         build_blueox_workbook(data)
+
+
+# ================= TC-vs-Novi comparison sheets (2026-07-27) =================
+
+
+def _novi_zone(name: str, n_sticks: int = 4, months: int = 12) -> NoviComparisonZone:
+    series = tuple(100.0 - i for i in range(months)) if n_sticks else ()
+    return NoviComparisonZone(
+        zone_name=name,
+        n_sticks=n_sticks,
+        n_self=1 if n_sticks else 0,
+        n_neighborhood=max(n_sticks - 1, 0),
+        n_pud=n_sticks,
+        n_res=0,
+        n_wells_no_set=0 if n_sticks else 2,
+        radius_m=1609.0,
+        lateral_tol=0.25,
+        intel_vintage="2025-09-30",
+        low_n=n_sticks < 3,
+        stale_vintage=False,
+        tc_risked=False,
+        oil_bbl=series,
+        gas_mcf=tuple(v * 3.0 for v in series),
+        water_bbl=tuple(v * 2.0 for v in series),
+    )
+
+
+def _with_novi(data: BlueOxExportData,
+               comps: tuple[NoviComparisonZone, ...]) -> BlueOxExportData:
+    return BlueOxExportData(**{
+        **data.__dict__,
+        "novi_comparison": comps,
+        "novi_intel_vintage": "2025-09-30",
+    })
+
+
+def test_novi_comparison_sheets_and_manifest_keys() -> None:
+    data = _data()
+    comps = (_novi_zone("WOLFCAMP A"), _novi_zone("THIRD BONE SPRING", n_sticks=0))
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, comps))))
+
+    names = wb.sheetnames
+    assert names.index("novi_comparison") == names.index("curve_params") + 1
+    assert names.index("novi_comparison_meta") == names.index("novi_comparison") + 1
+    assert names.index("manifest") == names.index("novi_comparison_meta") + 1
+
+    ws = wb["novi_comparison"]
+    assert [c.value for c in ws[1]] == ["area", "month", "oil_bbl", "gas_mcf", "water_bbl"]
+    rows = list(ws.iter_rows(min_row=2, values_only=True))
+    # Only the zone with sticks contributes series rows, months 1..12.
+    assert {r[0] for r in rows} == {"WOLFCAMP A"}
+    assert [r[1] for r in rows] == list(range(1, 13))
+    assert rows[0][2] == 100.0 and rows[0][3] == 300.0 and rows[0][4] == 200.0
+
+    meta_rows = list(wb["novi_comparison_meta"].iter_rows(values_only=True))
+    assert meta_rows[0] == (
+        "area", "n_sticks", "n_self", "n_neighborhood", "n_pud", "n_res",
+        "n_wells_no_set", "radius_m", "lateral_tol", "intel_vintage",
+        "low_n_flag", "stale_vintage_flag", "tc_risked",
+    )
+    by_zone = {r[0]: r for r in meta_rows[1:]}
+    assert by_zone["WOLFCAMP A"][1] == 4
+    assert by_zone["THIRD BONE SPRING"][1] == 0
+    assert by_zone["THIRD BONE SPRING"][10] is True  # low_n flagged, not hidden
+
+    kv = _manifest_kv(wb)
+    assert kv["novi_intel_vintage"] == "2025-09-30"
+    assert kv["novi_selection_radius_m"] == 1609.0
+    assert kv["novi_selection_lateral_tol"] == 0.25
+    assert kv["novi_alignment"] == "novi_to_ip_tc_to_peak"
+    assert kv["novi_rate_to_volume_days"] == 30
+
+
+def test_novi_comparison_absent_keeps_legacy_shape() -> None:
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(_data())))
+    assert "novi_comparison" not in wb.sheetnames
+    assert "novi_comparison_meta" not in wb.sheetnames
+    kv = _manifest_kv(wb)
+    assert "novi_intel_vintage" not in kv
+    assert "novi_alignment" not in kv
+
+
+def test_novi_comparison_must_cover_every_zone() -> None:
+    data = _data()
+    with pytest.raises(BlueOxContractError, match="cover every zone"):
+        build_blueox_workbook(_with_novi(data, (_novi_zone("WOLFCAMP A"),)))
+
+
+def test_novi_comparison_vector_rules() -> None:
+    data = _data()
+    ragged = NoviComparisonZone(**{
+        **_novi_zone("WOLFCAMP A").__dict__,
+        "gas_mcf": (1.0, 2.0),
+    })
+    with pytest.raises(BlueOxContractError, match="equal-length"):
+        build_blueox_workbook(_with_novi(
+            data, (ragged, _novi_zone("THIRD BONE SPRING", n_sticks=0))))
+
+    sneaky = NoviComparisonZone(**{
+        **_novi_zone("WOLFCAMP A", n_sticks=0).__dict__,
+        "oil_bbl": (1.0,), "gas_mcf": (1.0,), "water_bbl": (1.0,),
+    })
+    with pytest.raises(BlueOxContractError, match="must carry no series"):
+        build_blueox_workbook(_with_novi(
+            data, (sneaky, _novi_zone("THIRD BONE SPRING", n_sticks=0))))
