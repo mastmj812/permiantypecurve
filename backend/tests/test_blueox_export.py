@@ -24,6 +24,7 @@ from app.exports.blueox import (
     NGL_BASIS,
     BlueOxContractError,
     BlueOxExportData,
+    DsuMetaRow,
     InventoryRow,
     ZoneData,
     blueox_filename,
@@ -988,3 +989,106 @@ def test_manifest_declares_scoped_zones_only() -> None:
     }
     assert kv["zone_scenario_scope[BS1S WEST]"] == "alch/plan_west_a; alch/plan_west_b"
     assert "zone_scenario_scope[WOLFCAMP A]" not in kv
+
+
+# ================= inventory gunbarrel geometry (2026-07-27) =================
+
+
+def _geo_inv(name: str, category: str = "PUD", dsu: str = "1_4_9/plan_a",
+             xs: tuple[float, ...] = (-660.0,), legs: int = 1) -> InventoryRow:
+    return InventoryRow(
+        producing_lateral_ft=10_000.0,
+        drilled_lateral_ft=12_000.0,
+        well_name=name,
+        category=category,
+        dsu_id=dsu,
+        bench="WCA_1",
+        landing_tvd_ft=11_480.0,
+        gunbarrel_offset_ft=xs[0],
+        gunbarrel_offset_b_ft=xs[1] if len(xs) > 1 else None,
+        lateral_azimuth_deg=105.3,
+        heel_a_lon=-103.81, heel_a_lat=31.92,
+        toe_a_lon=-103.78, toe_a_lat=31.92,
+        heel_b_lon=-103.81 if legs > 1 else None,
+        heel_b_lat=31.921 if legs > 1 else None,
+        toe_b_lon=-103.78 if legs > 1 else None,
+        toe_b_lat=31.921 if legs > 1 else None,
+    )
+
+
+def _dsu_frame(dsu: str = "1_4_9/plan_a") -> DsuMetaRow:
+    return DsuMetaRow(
+        dsu_id=dsu, azimuth_deg=105.3, origin_lon=-103.795, origin_lat=31.9205,
+    )
+
+
+def test_inventory_geometry_columns_and_dsu_meta() -> None:
+    """Geometry columns append strictly AFTER the v1 columns; the U-turn
+    second leg fills the _b cells; dsu_meta carries the projection frame."""
+    z = _zone("WOLFCAMP A", ("4200000001",))
+    inv = [
+        _geo_inv("PLANNED 1"),
+        _geo_inv("PLANNED 2 UTURN", xs=(-660.0, 660.0), legs=2),
+        _geo_inv("4249533594", category="PDP"),
+    ]
+    zz = ZoneData(**{**z.__dict__, "inventory": inv})
+    data = _data(zones=[zz])
+    data = BlueOxExportData(**{**data.__dict__, "dsu_meta": (_dsu_frame(),)})
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
+
+    ws = wb["inventory"]
+    header = [c.value for c in ws[1]]
+    assert header == [
+        "area", "category", "producing_lateral_ft", "drilled_lateral_ft",
+        "well_name",
+        "dsu_id", "bench", "landing_tvd_ft",
+        "gunbarrel_offset_ft", "gunbarrel_offset_b_ft", "lateral_azimuth_deg",
+        "heel_a_lon", "heel_a_lat", "toe_a_lon", "toe_a_lat",
+        "heel_b_lon", "heel_b_lat", "toe_b_lon", "toe_b_lat",
+    ]
+    rows = {r[4]: r for r in ws.iter_rows(min_row=2, values_only=True)}
+    single = rows["PLANNED 1"]
+    uturn = rows["PLANNED 2 UTURN"]
+    col = {h: i for i, h in enumerate(header)}
+    assert single[col["gunbarrel_offset_ft"]] == -660.0
+    assert single[col["gunbarrel_offset_b_ft"]] is None
+    assert single[col["heel_b_lon"]] is None
+    assert uturn[col["gunbarrel_offset_b_ft"]] == 660.0
+    assert uturn[col["toe_b_lat"]] == 31.921
+    assert single[col["dsu_id"]] == "1_4_9/plan_a"
+    assert single[col["landing_tvd_ft"]] == 11_480.0
+
+    # dsu_meta sheet, right after inventory.
+    names = wb.sheetnames
+    assert names.index("dsu_meta") == names.index("inventory") + 1
+    frames = list(wb["dsu_meta"].iter_rows(values_only=True))
+    assert frames[0] == ("dsu_id", "azimuth_deg", "origin_lon", "origin_lat")
+    assert frames[1] == ("1_4_9/plan_a", 105.3, -103.795, 31.9205)
+
+
+def test_inventory_without_geometry_is_byte_stable_shape() -> None:
+    """Legacy/manual inventory (no dsu_id anywhere) keeps the v1 header
+    and writes no dsu_meta sheet."""
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(_data())))
+    header = [c.value for c in wb["inventory"][1]]
+    assert header == [
+        "area", "category", "producing_lateral_ft", "drilled_lateral_ft",
+        "well_name",
+    ]
+    assert "dsu_meta" not in wb.sheetnames
+
+
+def test_dsu_meta_two_way_tie_enforced() -> None:
+    z = _zone("WOLFCAMP A", ("4200000001",))
+    zz = ZoneData(**{**z.__dict__, "inventory": [_geo_inv("PLANNED 1")]})
+
+    # Referenced DSU with no frame -> hard error.
+    data = _data(zones=[zz])
+    with pytest.raises(BlueOxContractError, match="no dsu_meta frame"):
+        build_blueox_workbook(data)
+
+    # Frame with no referencing rows -> hard error too.
+    data = _data()
+    data = BlueOxExportData(**{**data.__dict__, "dsu_meta": (_dsu_frame(),)})
+    with pytest.raises(BlueOxContractError, match="no inventory rows"):
+        build_blueox_workbook(data)

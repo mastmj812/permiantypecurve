@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.orm import Session
@@ -85,6 +86,16 @@ class NarviInventoryWell:
     # present it WINS over the derivation here. NULL until the narvi
     # feature lands.
     handoff_category: str | None = None
+    # Gunbarrel geometry (the inventory sheet's geometry columns —
+    # 2026-07-27 amendment): landing TVD, lateral azimuth, per-leg
+    # cross-section offsets (narvi's gunbarrel_x_ft, one per producing
+    # leg) and per-leg heel/toe WGS84 endpoints as (heel_lon, heel_lat,
+    # toe_lon, toe_lat). Empty/None for rows saved before narvi
+    # persisted them or for manually specified inventory.
+    target_tvd_ft: float | None = None
+    lateral_azimuth_deg: float | None = None
+    gunbarrel_xs: tuple[float, ...] = ()
+    legs_lonlat: tuple[tuple[float, float, float, float], ...] = ()
 
 
 _FETCH_SQL = (
@@ -92,15 +103,43 @@ _FETCH_SQL = (
         """
         SELECT deal_id, scenario_id, well_name, formation,
                completed_lateral_ft, drilled_lateral_ft, well_type,
+               target_tvd_ft, lateral_azimuth_deg,
                detail->>'category' AS category,
                NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
-               detail->>'handoff_category' AS handoff_category
+               detail->>'handoff_category' AS handoff_category,
+               detail->'legs' AS legs_detail
         FROM narvi.inventory_well
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id, well_name
         """
     ).bindparams(bindparam("pairs", expanding=True))
 )
+
+
+def _parse_legs(
+    legs_detail: list[Any] | None,
+) -> tuple[tuple[float, ...], tuple[tuple[float, float, float, float], ...]]:
+    """(gunbarrel offsets, heel/toe lonlat quads) from a detail->'legs'
+    JSON array. Tolerates missing/odd shapes (legacy rows) by simply
+    omitting the value — callers treat empty as "not persisted"."""
+    xs: list[float] = []
+    quads: list[tuple[float, float, float, float]] = []
+    for leg in legs_detail or []:
+        if not isinstance(leg, dict):
+            continue
+        x = leg.get("gunbarrel_x_ft")
+        if isinstance(x, (int, float)):
+            xs.append(float(x))
+        heel = leg.get("heel_lonlat")
+        toe = leg.get("toe_lonlat")
+        if (
+            isinstance(heel, (list, tuple)) and len(heel) == 2
+            and isinstance(toe, (list, tuple)) and len(toe) == 2
+        ):
+            quads.append(
+                (float(heel[0]), float(heel[1]), float(toe[0]), float(toe[1]))
+            )
+    return tuple(xs), tuple(quads)
 
 
 @dataclass(frozen=True)
@@ -329,6 +368,68 @@ def fetch_narvi_scenario_detail(
     )
 
 
+@dataclass(frozen=True)
+class NarviDsuFrame:
+    """The gunbarrel projection frame of one DSU/scenario — everything
+    needed to reproduce narvi's cross-section offsets externally:
+    offset = signed projection of a leg midpoint onto the axis 90°
+    clockwise of azimuth_deg (folded to [0°, 180°)) through the origin
+    (the parcel centroid), in feet. Feeds the workbook's dsu_meta sheet
+    (2026-07-27 amendment)."""
+
+    dsu_id: str  # "<narvi deal_id>/<scenario_id>"
+    azimuth_deg: float | None
+    origin_lon: float | None
+    origin_lat: float | None
+
+
+# Origin must match narvi exactly: narvi takes the parcel centroid in
+# its WORK CRS (UTM 13N / EPSG:32613), so centroid there, then back to
+# WGS84 — a 4326 centroid can differ by metres on stretched parcels.
+_DSU_FRAME_SQL = (
+    text(
+        """
+        SELECT deal_id, scenario_id, azimuth_deg,
+               ST_X(ST_Transform(
+                   ST_Centroid(ST_Transform(aoi_geom, 32613)), 4326)) AS origin_lon,
+               ST_Y(ST_Transform(
+                   ST_Centroid(ST_Transform(aoi_geom, 32613)), 4326)) AS origin_lat
+        FROM narvi.scenario
+        WHERE (deal_id, scenario_id) IN :pairs
+        ORDER BY deal_id, scenario_id
+        """
+    ).bindparams(bindparam("pairs", expanding=True))
+)
+
+
+def fetch_narvi_dsu_frames(
+    wh: Session, selections: Sequence[tuple[str, str]]
+) -> list[NarviDsuFrame]:
+    """Gunbarrel projection frames for the selected scenarios (missing
+    scenarios are simply absent — the caller's zero-rows check on the
+    inventory fetch already flags typos)."""
+    if not selections:
+        return []
+    rows = wh.execute(
+        _DSU_FRAME_SQL, {"pairs": [tuple(p) for p in selections]}
+    ).all()
+    return [
+        NarviDsuFrame(
+            dsu_id=f"{r.deal_id}/{r.scenario_id}",
+            azimuth_deg=(
+                float(r.azimuth_deg) if r.azimuth_deg is not None else None
+            ),
+            origin_lon=(
+                float(r.origin_lon) if r.origin_lon is not None else None
+            ),
+            origin_lat=(
+                float(r.origin_lat) if r.origin_lat is not None else None
+            ),
+        )
+        for r in rows
+    ]
+
+
 def fetch_narvi_inventory(
     wh: Session, selections: Sequence[tuple[str, str]]
 ) -> list[NarviInventoryWell]:
@@ -341,26 +442,39 @@ def fetch_narvi_inventory(
     if not selections:
         return []
     rows = wh.execute(_FETCH_SQL, {"pairs": [tuple(p) for p in selections]}).all()
-    return [
-        NarviInventoryWell(
-            deal_id=r.deal_id,
-            scenario_id=r.scenario_id,
-            well_name=r.well_name,
-            formation=r.formation,
-            completed_lateral_ft=(
-                float(r.completed_lateral_ft)
-                if r.completed_lateral_ft is not None
-                else None
-            ),
-            drilled_lateral_ft=(
-                float(r.drilled_lateral_ft)
-                if r.drilled_lateral_ft is not None
-                else None
-            ),
-            well_type=r.well_type,
-            category=r.category,
-            pdp_count_3mi=r.pdp_count_3mi,
-            handoff_category=r.handoff_category,
+    out: list[NarviInventoryWell] = []
+    for r in rows:
+        xs, quads = _parse_legs(r.legs_detail)
+        out.append(
+            NarviInventoryWell(
+                deal_id=r.deal_id,
+                scenario_id=r.scenario_id,
+                well_name=r.well_name,
+                formation=r.formation,
+                completed_lateral_ft=(
+                    float(r.completed_lateral_ft)
+                    if r.completed_lateral_ft is not None
+                    else None
+                ),
+                drilled_lateral_ft=(
+                    float(r.drilled_lateral_ft)
+                    if r.drilled_lateral_ft is not None
+                    else None
+                ),
+                well_type=r.well_type,
+                category=r.category,
+                pdp_count_3mi=r.pdp_count_3mi,
+                handoff_category=r.handoff_category,
+                target_tvd_ft=(
+                    float(r.target_tvd_ft) if r.target_tvd_ft is not None else None
+                ),
+                lateral_azimuth_deg=(
+                    float(r.lateral_azimuth_deg)
+                    if r.lateral_azimuth_deg is not None
+                    else None
+                ),
+                gunbarrel_xs=xs,
+                legs_lonlat=quads,
+            )
         )
-        for r in rows
-    ]
+    return out

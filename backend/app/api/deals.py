@@ -51,6 +51,7 @@ from app.exports.blueox import (
     RISKING_UNRISKED,
     BlueOxContractError,
     BlueOxExportData,
+    DsuMetaRow,
     InventoryRow,
     ZoneData,
     blueox_filename,
@@ -73,6 +74,7 @@ from app.warehouse_client.narvi import (
     NarviInventoryWell,
     NarviScenario,
     derive_handoff_category,
+    fetch_narvi_dsu_frames,
     fetch_narvi_inventory,
     fetch_narvi_scenario_detail,
     fetch_narvi_scenarios,
@@ -693,6 +695,32 @@ def _handoff_category(w: NarviInventoryWell) -> str:
     )
 
 
+def _inventory_row_from_narvi(nw: NarviInventoryWell) -> InventoryRow:
+    """InventoryRow with the gunbarrel geometry columns (2026-07-27
+    amendment) filled from what narvi persisted. Legs order is narvi's:
+    leg A first, leg B = the U-turn second leg (absent on singles)."""
+    xs = nw.gunbarrel_xs
+    quads = nw.legs_lonlat
+    leg_a = quads[0] if len(quads) >= 1 else (None, None, None, None)
+    leg_b = quads[1] if len(quads) >= 2 else (None, None, None, None)
+    return InventoryRow(
+        producing_lateral_ft=nw.completed_lateral_ft or 0.0,
+        drilled_lateral_ft=nw.drilled_lateral_ft or 0.0,
+        well_name=nw.well_name,
+        category=_handoff_category(nw),
+        dsu_id=f"{nw.deal_id}/{nw.scenario_id}",
+        bench=nw.formation,
+        landing_tvd_ft=nw.target_tvd_ft,
+        gunbarrel_offset_ft=xs[0] if len(xs) >= 1 else None,
+        gunbarrel_offset_b_ft=xs[1] if len(xs) >= 2 else None,
+        lateral_azimuth_deg=nw.lateral_azimuth_deg,
+        heel_a_lon=leg_a[0], heel_a_lat=leg_a[1],
+        toe_a_lon=leg_a[2], toe_a_lat=leg_a[3],
+        heel_b_lon=leg_b[0], heel_b_lat=leg_b[1],
+        toe_b_lon=leg_b[2], toe_b_lat=leg_b[3],
+    )
+
+
 def _one_yr_effective(di_nominal: float, b: float) -> float | None:
     """1-yr secant effective decline from nominal Di (per-yr) and Arps b.
 
@@ -823,12 +851,7 @@ def _collect_blueox_zone(
                 f"({nw.deal_id}/{nw.scenario_id}) has no laterals persisted"
             )
             continue
-        inventory.append(InventoryRow(
-            producing_lateral_ft=nw.completed_lateral_ft,
-            drilled_lateral_ft=nw.drilled_lateral_ft,
-            well_name=nw.well_name,
-            category=_handoff_category(nw),
-        ))
+        inventory.append(_inventory_row_from_narvi(nw))
     # Manual rows — fallback / extras on top of the narvi pull.
     for i, inv in enumerate(spec.inventory, start=1):
         producing = inv.producing_lateral_ft or cohort_mean_lat
@@ -1045,12 +1068,7 @@ def _collect_blueox_data(
             continue
         pdp_context_rows.append((
             w.formation or "(unknown)",
-            InventoryRow(
-                producing_lateral_ft=w.completed_lateral_ft,
-                drilled_lateral_ft=w.drilled_lateral_ft,
-                well_name=w.well_name,
-                category="PDP",
-            ),
+            _inventory_row_from_narvi(w),
         ))
 
     zones: list[ZoneData] = []
@@ -1121,6 +1139,38 @@ def _collect_blueox_data(
     history_through = max(r.prod_date for r in prod_rows_db).strftime("%Y-%m")
     history_exceptions = tuple(sorted(all_apis - {r.api10 for r in prod_rows_db}))
 
+    # Gunbarrel projection frames (dsu_meta sheet) for exactly the DSUs
+    # the written inventory rows reference — the builder validates the
+    # two-way tie (no offset without its frame, no orphan frame).
+    pair_by_dsu_id = {
+        f"{sel.deal_id}/{sel.scenario_id}": (sel.deal_id, sel.scenario_id)
+        for sel in req.narvi_selections
+    }
+    referenced_dsu_ids = sorted(
+        {inv.dsu_id for z in zones for inv in z.inventory if inv.dsu_id}
+        | {inv.dsu_id for _a, inv in pdp_context_rows if inv.dsu_id}
+    )
+    dsu_meta: list[DsuMetaRow] = []
+    if referenced_dsu_ids:
+        try:
+            with contextmanager(get_warehouse_session)() as wh:
+                frames = fetch_narvi_dsu_frames(
+                    wh, [pair_by_dsu_id[d] for d in referenced_dsu_ids
+                         if d in pair_by_dsu_id],
+                )
+        except Exception as exc:  # surface as a 422, not a 500
+            raise HTTPException(
+                status_code=422,
+                detail=f"narvi dsu frame fetch failed: {exc}",
+            ) from exc
+        dsu_meta = [
+            DsuMetaRow(
+                dsu_id=f.dsu_id, azimuth_deg=f.azimuth_deg,
+                origin_lon=f.origin_lon, origin_lat=f.origin_lat,
+            )
+            for f in frames
+        ]
+
     filename = blueox_filename(req.codename, export_date)
     return BlueOxExportData(
         codename=req.codename,
@@ -1148,6 +1198,7 @@ def _collect_blueox_data(
         history_exceptions=history_exceptions,
         inventory_exclusions=inventory_exclusions,
         pdp_context_rows=pdp_context_rows,
+        dsu_meta=tuple(dsu_meta),
     )
 
 
