@@ -12,6 +12,7 @@
 
 import { effectiveDecline } from "../../api/forecasts";
 import type { TypeCurveRow } from "../../api/typeCurves";
+import { isRisked, normalizeMultipliers } from "../../type_curves/risking";
 
 interface Props {
   current: TypeCurveRow;
@@ -28,9 +29,22 @@ const PER_10K_FACTOR = 10;
 
 type Stream = "oil" | "gas" | "water";
 
+// Geologic risking applies to the rate/EUR-dimensioned params this
+// table renders (qi/qo/eur_per_unit); b/Di/Mo are shape params and pass
+// through. MUST stay byte-for-byte with the backend's
+// app/exports/param_row.py (the PPTX cell strings) — change both.
 function getFitted(curve: TypeCurveRow, stream: Stream) {
   const streams = (curve.series as { streams?: Record<string, { fitted?: Record<string, unknown> | null }> }).streams;
-  return streams?.[stream]?.fitted ?? null;
+  const fitted = streams?.[stream]?.fitted;
+  if (!fitted) return null;
+  const mul = normalizeMultipliers(curve.risk_multipliers)[stream];
+  if (mul === 1.0) return fitted;
+  const risked: Record<string, unknown> = { ...fitted };
+  for (const key of ["qi", "qo", "eur_per_unit"]) {
+    const n = num(fitted[key]);
+    if (n != null) risked[key] = n * mul;
+  }
+  return risked;
 }
 
 function num(v: unknown): number | null {
@@ -92,8 +106,12 @@ function rowCells(curve: TypeCurveRow): string[] {
   const gas = getFitted(curve, "gas") ?? {};
   const wat = getFitted(curve, "water") ?? {};
   const F = PER_10K_FACTOR;
+  // [RISKED] suffix mirrors app/exports/param_row.py exactly.
+  const name = isRisked(curve.risk_multipliers)
+    ? `${curve.name} [RISKED]`
+    : curve.name;
   return [
-    curve.name,
+    name,
     fmtRate(scaleNum(oil["qo"], F)),
     fmtMo(oil["peak_index"]),
     fmtRate(scaleNum(oil["qi"], F)),

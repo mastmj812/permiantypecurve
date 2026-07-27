@@ -78,7 +78,12 @@ LATERAL_MAX_FT = 25_000.0
 # Manifest Block A constants the contract mandates verbatim.
 PERCENTILE_ORIENTATION = "ascending"
 GAS_BASIS = "wellhead_unshrunk"
-RISKING = "unrisked"
+# Manifest `risking` tokens (2026-07-24 amendment, pending Blue Ox ack):
+# `unrisked` when every curve ships at MUL 1.0; the risked token when
+# any zone's volumes carry a declared geologic multiplier — the
+# per-stream values are disclosed in curve_params.risk_mult.
+RISKING_UNRISKED = "unrisked"
+RISKING_APPLIED = "geologic_multipliers_applied"
 # 2026-07-20 amendment: Blue Ox applies their own yield; the drop
 # carries all-zero ngl_bbl columns.
 NGL_BASIS = "derived_by_blue_ox_via_yield"
@@ -122,7 +127,9 @@ class ZoneData:
 
     ``curve_params`` rows carry the engineer's decline params per
     stream x level with keys ``stream`` / ``level`` / ``qi`` /
-    ``qi_units`` / ``b_factor`` / ``di`` / ``dmin`` / ``notes``.
+    ``qi_units`` / ``qi_basis`` / ``risk_mult`` / ``b_factor`` /
+    ``di`` / ``dmin`` / ``notes``. ``qi_basis`` defaults to
+    ``fitted_qi`` and ``risk_mult`` to 1.0 when a row omits them.
     """
 
     zone_name: str
@@ -165,6 +172,10 @@ class BlueOxExportData:
     # `area`. Deliberately the one place an `area` value may not match
     # a zone sheet; loaders must tolerate it on category=PDP rows only.
     pdp_context_rows: Sequence[tuple[str, InventoryRow]] = ()
+    # Manifest Block A `risking` value — RISKING_UNRISKED unless any
+    # zone's curve carries a geologic multiplier (2026-07-24 amendment).
+    # The caller computes this from the curves it assembled.
+    risking: str = RISKING_UNRISKED
 
 
 def blueox_filename(codename: str, export_date: date) -> str:
@@ -548,7 +559,7 @@ def _write_analog_production(ws: Any, data: BlueOxExportData) -> None:
 
 _CURVE_PARAM_COLS: tuple[str, ...] = (
     "area", "stream", "level", "qi", "qi_units", "qi_basis",
-    "b_factor", "di", "di_convention", "dmin", "notes",
+    "b_factor", "di", "di_convention", "dmin", "risk_mult", "notes",
 )
 QI_BASIS = "fitted_qi"
 DI_CONVENTION = "nominal_annual"
@@ -570,15 +581,20 @@ def _write_curve_params(ws: Any, data: BlueOxExportData) -> None:
                 r.get("level"),
                 r.get("qi"),
                 r.get("qi_units"),
-                QI_BASIS,
+                # Per-row basis (2026-07-24 risking amendment): a risked
+                # row declares fitted_qi_risked + its multiplier; rows
+                # from callers predating the amendment fall back to the
+                # unrisked constants.
+                r.get("qi_basis", QI_BASIS),
                 r.get("b_factor"),
                 r.get("di"),
                 DI_CONVENTION,
                 r.get("dmin"),
+                r.get("risk_mult", 1.0),
                 r.get("notes"),
             ])
     ws.column_dimensions["A"].width = 28
-    for letter in ("D", "G", "H", "J"):
+    for letter in ("D", "G", "H", "J", "K"):
         ws.column_dimensions[letter].number_format = "0.000"
     for col_idx in range(2, len(_CURVE_PARAM_COLS) + 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = 16
@@ -594,7 +610,7 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         ("percentile_orientation", PERCENTILE_ORIENTATION),
         ("gas_basis", GAS_BASIS),
         ("ngl_basis", NGL_BASIS),
-        ("risking", RISKING),
+        ("risking", data.risking),
         ("curve_months", data.curve_months),
         ("production_history_through", data.production_history_through),
         ("curve_params_source", data.curve_params_source),

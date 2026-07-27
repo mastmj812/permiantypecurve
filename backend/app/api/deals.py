@@ -47,6 +47,8 @@ from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
     LEVEL_TO_SPE_KEY,
+    RISKING_APPLIED,
+    RISKING_UNRISKED,
     BlueOxContractError,
     BlueOxExportData,
     InventoryRow,
@@ -61,6 +63,7 @@ from app.exports.well_rows import (
     per_well_rows,
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
+from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.exports.dossier import (
     CurveSlideInput,
     ScenarioSlideInput,
@@ -285,7 +288,7 @@ _NORMALIZATION_LABEL: dict[str, str] = {
 
 
 def _write_metadata_sheet(
-    ws: Any, tc: TypeCurve, session: Session | None
+    ws: Any, tc: TypeCurve, session: Session | None, series: dict[str, Any]
 ) -> None:
     """Two-column field/value layout mirroring ``_metadata_csv`` for the
     top section, then a wide per-well summary block at the bottom that
@@ -296,7 +299,11 @@ def _write_metadata_sheet(
 
     ``session`` may be None — the per-well summary block is then
     skipped (the rest of the metadata sheet still renders). Used by
-    pure-function workbook-shape tests that don't stand up a DB."""
+    pure-function workbook-shape tests that don't stand up a DB.
+
+    ``series`` is the (possibly risked) view the sibling forecast sheet
+    was written from — passed in so EUR/param blocks can never disagree
+    with the rate columns in the same workbook."""
     from openpyxl.styles import Font
 
     bold = Font(bold=True)
@@ -318,6 +325,16 @@ def _write_metadata_sheet(
     # case (exceeded by 10% of wells), p90 the LOW case. Stamped here
     # so downstream econ tooling can't misread the percentile columns.
     ws.append(["percentile_convention", "SPE (P10 = high case, P90 = low case)"])
+    # Geologic risking disclosure — this sheet's EUR/param blocks and
+    # the sibling forecast sheet already carry the multiplier.
+    if is_risked(tc.risk_multipliers or {}):
+        ws.append(["risking", "geologic_multipliers_applied"])
+        for s_name, mul in sorted(
+            normalize_multipliers(tc.risk_multipliers or {}).items()
+        ):
+            ws.append([f"risk_mult_{s_name}", round(mul, 4)])
+    else:
+        ws.append(["risking", "unrisked"])
     ws.append(["created_at", tc.created_at.isoformat()])
     ws.append(["version_of", str(tc.version_of) if tc.version_of else ""])
     ws.append(["n_wells", len(tc.included_api10s or [])])
@@ -345,7 +362,7 @@ def _write_metadata_sheet(
     ws.append(header)
     for col_idx in range(1, len(header) + 1):
         ws.cell(row=ws.max_row, column=col_idx).font = bold
-    streams = (tc.series or {}).get("streams", {})
+    streams = series.get("streams", {})
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name, {})
         eur = _fitted_eur_per_1000ft(s)
@@ -407,7 +424,7 @@ def _write_metadata_sheet(
         ws.column_dimensions[col_letter].width = 14
 
 
-def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
+def _write_forecast_sheet(ws: Any, tc: TypeCurve, series: dict[str, Any]) -> None:
     """Wide layout: month index then ``{stream}_{pct}_{rate|cum}`` columns.
 
     Three streams × six percentiles × two value columns = 36 data columns
@@ -417,7 +434,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve) -> None:
     from openpyxl.styles import Font
     from openpyxl.utils import get_column_letter
 
-    streams = (tc.series or {}).get("streams", {})
+    streams = series.get("streams", {})
     alignment_val = tc.alignment_method.value
     month_col = (
         "month_since_first_prod" if alignment_val == "first_prod_month" else "month_since_peak"
@@ -501,10 +518,13 @@ def _build_workbook(
     used_slugs: set[str] = set()
     for tc in curves:
         slug = _sheet_slug(tc.name, used_slugs)
+        # Export boundary: geologic risking applies here (stored series
+        # is the clean fit; identity pass-through when unrisked).
+        series = apply_risking(tc.series or {}, tc.risk_multipliers)
         meta_ws = wb.create_sheet(f"{slug} — meta")
-        _write_metadata_sheet(meta_ws, tc, session)
+        _write_metadata_sheet(meta_ws, tc, session, series)
         forecast_ws = wb.create_sheet(f"{slug} — forecast")
-        _write_forecast_sheet(forecast_ws, tc)
+        _write_forecast_sheet(forecast_ws, tc, series)
 
     buf = io.BytesIO()
     wb.save(buf)
@@ -689,7 +709,12 @@ def _collect_blueox_zone(
         )
         return None
 
-    streams = (tc.series or {}).get("streams", {})
+    # Export boundary: geologic risking applies here — the risked view
+    # feeds the fits, so zone-sheet volumes, curve_params qi, and the
+    # manifest's Block B sums stay self-consistent by construction.
+    muls = normalize_multipliers(tc.risk_multipliers or {})
+    series = apply_risking(tc.series or {}, tc.risk_multipliers)
+    streams = series.get("streams", {})
     fits_by_stream = {
         s: _fitted_params_by_pct(streams.get(s) or {})
         for s in ("oil", "gas", "water")
@@ -732,8 +757,12 @@ def _collect_blueox_zone(
             params_rows.append({
                 "stream": stream,
                 "level": lv,
+                # Already risked (the fit came from the risked series);
+                # risk_mult + qi_basis disclose it per the amendment.
                 "qi": float(fit["qi"]),
                 "qi_units": qi_units,
+                "qi_basis": "fitted_qi_risked" if muls[stream] != 1.0 else "fitted_qi",
+                "risk_mult": round(muls[stream], 4),
                 "b_factor": b_factor,
                 "di": di,
                 "dmin": float(fit["Df"]),
@@ -1024,6 +1053,14 @@ def _collect_blueox_data(
         prepared_by=req.prepared_by,
         source_system=_BLUEOX_SOURCE_SYSTEM,
         governing_export=f"deal {deal.name} ({deal.id}) — {filename}",
+        # Workbook-level risking token (2026-07-24 amendment): risked
+        # when ANY zone's curve carries a geologic MUL; per-stream
+        # values disclose on curve_params.risk_mult.
+        risking=(
+            RISKING_APPLIED
+            if any(is_risked(tc.risk_multipliers or {}) for tc in curves)
+            else RISKING_UNRISKED
+        ),
         curve_params_source="; ".join(
             f"{tc.name} ({tc.id}) saved {tc.created_at:%Y-%m-%d}" for tc in curves
         ),

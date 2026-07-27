@@ -96,3 +96,13 @@ class TypeCurve(Base):
     forecast_overrides: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+
+    # Geologic risking: per-stream scalar multipliers ``{oil?, gas?,
+    # water?}``; absent key = 1.0 (unrisked). Applied at the read/export
+    # boundary (app/type_curves/risking.py) — ``series`` stays the clean
+    # technical fit, so reaggregation preserves the multiplier and the
+    # TweakPanel round-trip can never double-risk. Setting it does NOT
+    # flip ``is_stale``.
+    risk_multipliers: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )

@@ -8,6 +8,7 @@ import {
   type AggregatePayload,
   type AlignmentMethod,
   type FitOverride,
+  type RiskMultipliers,
   type StreamSeries,
   type TypeCurveRow,
   type TypeCurveSummary,
@@ -34,6 +35,12 @@ import { BlueOxDropModal } from "../components/BlueOxDropModal";
 import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
+import { RiskingBadge } from "../type_curves/RiskingBadge";
+import {
+  normalizeMultipliers,
+  riskStreamSeries,
+  scaleRates,
+} from "../type_curves/risking";
 import { effectiveDecline, nominalDecline } from "../api/forecasts";
 import { navigateHash } from "../navigation";
 import { useMapStore } from "../store/mapStore";
@@ -413,15 +420,17 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   }
 
   async function onTweakPreview() {
-    if (!currentStream?.fitted || !agg) return;
+    // Drafts seed from the CLEAN fit — the tweak panel edits the
+    // pre-risking curve (the preview line is re-risked for display).
+    if (!cleanStream?.fitted || !agg) return;
     setTweakError(null);
     const draft = editValues[stream] ?? {
-      qi: currentStream.fitted.qi,
-      Di: currentStream.fitted.Di,
-      b: currentStream.fitted.b,
-      Df: currentStream.fitted.Df,
-      qo: currentStream.fitted.qo ?? currentStream.fitted.qi,
-      peak_index: currentStream.fitted.peak_index ?? 0,
+      qi: cleanStream.fitted.qi,
+      Di: cleanStream.fitted.Di,
+      b: cleanStream.fitted.b,
+      Df: cleanStream.fitted.Df,
+      qo: cleanStream.fitted.qo ?? cleanStream.fitted.qi,
+      peak_index: cleanStream.fitted.peak_index ?? 0,
     };
     setEditValues((prev) => ({ ...prev, [stream]: draft }));
     try {
@@ -453,15 +462,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   }
 
   function setTweakField(key: keyof FitOverride, value: number) {
-    if (!currentStream?.fitted) return;
+    if (!cleanStream?.fitted) return;
     setEditValues((prev) => {
       const base: FitOverride = prev[stream] ?? {
-        qi: currentStream.fitted!.qi,
-        Di: currentStream.fitted!.Di,
-        b: currentStream.fitted!.b,
-        Df: currentStream.fitted!.Df,
-        qo: currentStream.fitted!.qo ?? currentStream.fitted!.qi,
-        peak_index: currentStream.fitted!.peak_index ?? 0,
+        qi: cleanStream.fitted!.qi,
+        Di: cleanStream.fitted!.Di,
+        b: cleanStream.fitted!.b,
+        Df: cleanStream.fitted!.Df,
+        qo: cleanStream.fitted!.qo ?? cleanStream.fitted!.qi,
+        peak_index: cleanStream.fitted!.peak_index ?? 0,
       };
       return { ...prev, [stream]: { ...base, [key]: value } };
     });
@@ -696,7 +705,20 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     }
   }
 
-  const currentStream = agg?.streams?.[stream];
+  // cleanStream = the stored technical fit — the TweakPanel edits THIS
+  // (pre-risking; editing a risked qi would double-risk on save).
+  // currentStream = the risked display view every chart / EUR readout /
+  // probit reads. Identity when the curve is unrisked or unsaved.
+  const cleanStream = agg?.streams?.[stream];
+  const riskMuls = useMemo(
+    () => normalizeMultipliers(selectedSaved?.risk_multipliers),
+    [selectedSaved],
+  );
+  const streamMul = riskMuls[stream];
+  const currentStream = useMemo(
+    () => (cleanStream ? riskStreamSeries(cleanStream, streamMul) : cleanStream),
+    [cleanStream, streamMul],
+  );
   const units = STREAM_UNITS[stream];
 
   // Data-window cap for the left/center charts (Cartesian rate,
@@ -717,14 +739,38 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     () => (currentStream ? cumulateSeries(currentStream) : null),
     [currentStream],
   );
-  const cumCompareSeries = useMemo(() => {
+  // Compare curve, risked by ITS OWN multipliers — two risked curves
+  // compare on their delivered volumes, same as their exports.
+  const compareStream = useMemo(() => {
     const s = compareWith?.series.streams?.[stream];
-    return s ? cumulateSeries(s) : null;
+    if (!s) return null;
+    return riskStreamSeries(
+      s,
+      normalizeMultipliers(compareWith?.risk_multipliers)[stream],
+    );
   }, [compareWith, stream]);
-  const cumPreviewSmoothed = useMemo(() => {
-    const p = previewSmoothed[stream];
-    return p ? cumulateNumericArray(p) : null;
-  }, [previewSmoothed, stream]);
+  const cumCompareSeries = useMemo(
+    () => (compareStream ? cumulateSeries(compareStream) : null),
+    [compareStream],
+  );
+  // Tweak-preview overlays evaluate the CLEAN draft fit — re-risk them
+  // for display so the preview line sits on the risked bands and shows
+  // the delivered consequence of the edit.
+  const displayPreviewSmoothed = useMemo(
+    () => scaleRates(previewSmoothed[stream], streamMul) as number[] | null,
+    [previewSmoothed, stream, streamMul],
+  );
+  const displayPreviewFullSmoothed = useMemo(
+    () => scaleRates(previewFullSmoothed[stream], streamMul) as number[] | null,
+    [previewFullSmoothed, stream, streamMul],
+  );
+  const previewEurRaw = previewEur[stream];
+  const displayPreviewEur = previewEurRaw != null ? previewEurRaw * streamMul : null;
+  const cumPreviewSmoothed = useMemo(
+    () =>
+      displayPreviewSmoothed ? cumulateNumericArray(displayPreviewSmoothed) : null,
+    [displayPreviewSmoothed],
+  );
 
   // Full-forecast (0–600 months) series for the right-column charts.
   // Each percentile is evaluated from its persisted Arps fit, so the
@@ -738,21 +784,24 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     () => (fullForecastStream ? cumulateSeries(fullForecastStream) : null),
     [fullForecastStream],
   );
-  const fullForecastCompareStream = useMemo(() => {
-    const s = compareWith?.series.streams?.[stream];
-    return s ? fullForecastSeries(s) : null;
-  }, [compareWith, stream]);
+  const fullForecastCompareStream = useMemo(
+    () => (compareStream ? fullForecastSeries(compareStream) : null),
+    [compareStream],
+  );
   const fullForecastCumCompareStream = useMemo(
     () => (fullForecastCompareStream ? cumulateSeries(fullForecastCompareStream) : null),
     [fullForecastCompareStream],
   );
   // Preview-line overrides for the right-column charts. The rate line
-  // is just the 600-month array we computed in onTweakPreview; the cum
-  // line is its time-integral, same convention as cumPreviewSmoothed.
-  const cumPreviewFullSmoothed = useMemo(() => {
-    const p = previewFullSmoothed[stream];
-    return p ? cumulateNumericArray(p) : null;
-  }, [previewFullSmoothed, stream]);
+  // is the (re-risked) 600-month array; the cum line is its
+  // time-integral, same convention as cumPreviewSmoothed.
+  const cumPreviewFullSmoothed = useMemo(
+    () =>
+      displayPreviewFullSmoothed
+        ? cumulateNumericArray(displayPreviewFullSmoothed)
+        : null,
+    [displayPreviewFullSmoothed],
+  );
 
   return (
     <div className="page page-two-col">
@@ -761,6 +810,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
           <strong>
             {selectedSaved ? selectedSaved.name : "New type curve"}
           </strong>
+          <RiskingBadge muls={selectedSaved?.risk_multipliers} />
           <span className="muted">
             {agg ? `${agg.n_wells} wells · ${agg.n_months} months` : "—"}
           </span>
@@ -784,7 +834,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             <div className="chart-row" style={CHART_ROW_GRID_STYLE}>
               <TypeCurveChart
                 series={currentStream}
-                compareSeries={compareWith?.series.streams?.[stream] ?? null}
+                compareSeries={compareStream}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
@@ -792,11 +842,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 title="Cartesian"
                 width={380}
                 xMaxMonths={dataWindowMonths}
-                smoothedOverride={previewSmoothed[stream]}
+                smoothedOverride={displayPreviewSmoothed}
               />
               <TypeCurveChart
                 series={currentStream}
-                compareSeries={compareWith?.series.streams?.[stream] ?? null}
+                compareSeries={compareStream}
                 compareLabel={compareWith?.name}
                 yAxisType="log"
                 yLabel={units.rate}
@@ -804,7 +854,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 title="Semi-log (rate)"
                 width={380}
                 xMaxMonths={dataWindowMonths}
-                smoothedOverride={previewSmoothed[stream]}
+                smoothedOverride={displayPreviewSmoothed}
               />
               {fullForecastStream && (
                 <TypeCurveChart
@@ -816,7 +866,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   xLabel={xAxisLabel(agg?.alignment_method ?? alignment)}
                   title="Full forecast — semi-log (rate)"
                   width={380}
-                  smoothedOverride={previewFullSmoothed[stream]}
+                  smoothedOverride={displayPreviewFullSmoothed}
                 />
               )}
             </div>
@@ -828,7 +878,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             <div className="chart-row" style={CHART_ROW_GRID_STYLE}>
               <TypeCurveChart
                 series={currentStream}
-                compareSeries={compareWith?.series.streams?.[stream] ?? null}
+                compareSeries={compareStream}
                 compareLabel={compareWith?.name}
                 yAxisType="linear"
                 yLabel={units.rate}
@@ -837,7 +887,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 xMaxMonths={12}
                 xTickStep={1}
                 width={380}
-                smoothedOverride={previewSmoothed[stream]}
+                smoothedOverride={displayPreviewSmoothed}
               />
               {cumStream && (
                 <TypeCurveChart
@@ -919,8 +969,8 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                       );
                     })}
                     <td>
-                      {previewEur[stream] != null
-                        ? fmtEur(previewEur[stream])
+                      {displayPreviewEur != null
+                        ? fmtEur(displayPreviewEur)
                         : currentStream.fitted
                           ? fmtEur(
                               eurFromParams(currentStream.fitted) ??
@@ -931,17 +981,25 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   </tr>
                 </tbody>
               </table>
-              {currentStream.fitted && (
-                <TweakPanel
-                  stream={stream}
-                  fitted={currentStream.fitted}
-                  draft={editValues[stream]}
-                  hasPreview={!!previewSmoothed[stream]}
-                  error={tweakError}
-                  onChange={setTweakField}
-                  onPreview={() => void onTweakPreview()}
-                  onReset={onTweakReset}
-                />
+              {cleanStream?.fitted && (
+                <>
+                  {streamMul !== 1.0 && (
+                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+                      tweak panel edits the pre-risking fit — the preview
+                      line and EUR above already include ×{streamMul.toFixed(2)}
+                    </p>
+                  )}
+                  <TweakPanel
+                    stream={stream}
+                    fitted={cleanStream.fitted}
+                    draft={editValues[stream]}
+                    hasPreview={!!previewSmoothed[stream]}
+                    error={tweakError}
+                    onChange={setTweakField}
+                    onPreview={() => void onTweakPreview()}
+                    onReset={onTweakReset}
+                  />
+                </>
               )}
             </section>
 
@@ -1002,14 +1060,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 // table for live preview.
                 typeCurveId={selectedSaved?.id ?? null}
                 tcEurPerUnit={
-                  previewEur[stream] ??
+                  displayPreviewEur ??
                   currentStream.fitted?.eur_per_unit ??
                   null
                 }
-                prevEurPerUnit={
-                  compareWith?.series?.streams?.[stream]?.fitted?.eur_per_unit ??
-                  null
-                }
+                prevEurPerUnit={compareStream?.fitted?.eur_per_unit ?? null}
                 prevLabel={compareWith?.name ?? null}
                 stream={stream}
               />
@@ -1240,6 +1295,13 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 : `save new version (${selectedSaved.included_api10s.length} wells)`}
             </button>
           </section>
+        )}
+
+        {selectedSaved && (
+          <RiskingEditor
+            curve={selectedSaved}
+            onSaved={(row) => setSelectedSaved(row)}
+          />
         )}
 
         {!selectedSaved && (
@@ -1859,6 +1921,116 @@ interface TweakPanelProps {
   onPreview: () => void;
   onReset: () => void;
 }
+
+// Geologic risking editor — per-stream scalar MULs on the selected
+// saved curve. Applying PATCHes risk_multipliers; the stored series is
+// untouched (risking applies at the read/export boundary), so no
+// reaggregate follows and is_stale stays put. Charts/EURs re-render
+// risked immediately via the updated selectedSaved row.
+function RiskingEditor({
+  curve,
+  onSaved,
+}: {
+  curve: TypeCurveRow;
+  onSaved: (row: TypeCurveRow) => void;
+}) {
+  const muls = normalizeMultipliers(curve.risk_multipliers);
+  const [draft, setDraft] = useState<Record<Stream, string>>({
+    oil: String(muls.oil),
+    gas: String(muls.gas),
+    water: String(muls.water),
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Re-seed the inputs when a different curve loads or its saved MULs
+  // change (e.g. after Apply round-trips the canonical values).
+  useEffect(() => {
+    const m = normalizeMultipliers(curve.risk_multipliers);
+    setDraft({ oil: String(m.oil), gas: String(m.gas), water: String(m.water) });
+    setError(null);
+  }, [curve.id, curve.risk_multipliers]);
+
+  const streams: Stream[] = ["oil", "gas", "water"];
+  let invalid: string | null = null;
+  const parsed: RiskMultipliers = {};
+  for (const s of streams) {
+    const v = Number(draft[s]);
+    if (!Number.isFinite(v) || v <= 0) invalid = `${s} MUL must be a positive number`;
+    else if (v !== 1.0) parsed[s] = v;
+  }
+  const dirty = streams.some((s) => Number(draft[s]) !== muls[s]);
+
+  async function onApply() {
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await patchTypeCurve(curve.id, { risk_multipliers: parsed });
+      onSaved(updated);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="filter-section">
+      <h3>
+        Geologic risking <RiskingBadge muls={curve.risk_multipliers} />
+      </h3>
+      <p className="muted" style={{ margin: "4px 0 8px" }}>
+        Scalar MUL per stream, applied to this curve everywhere — charts,
+        EURs, and every export including the Blue Ox drop (disclosed in
+        its curve_params + manifest). The stored technical fit stays
+        clean underneath; 1.0 = unrisked.
+      </p>
+      {streams.map((s) => (
+        <label
+          key={s}
+          className="chk-inline"
+          style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}
+        >
+          <span style={{ width: 44 }}>{s}</span>
+          <input
+            type="number"
+            step={0.05}
+            min={0.01}
+            value={draft[s]}
+            onChange={(e) => setDraft((prev) => ({ ...prev, [s]: e.target.value }))}
+            style={{ width: 90 }}
+          />
+          <span className="muted">×</span>
+        </label>
+      ))}
+      {(error ?? invalid) && dirty && (
+        <div className="alert alert-error" style={{ marginTop: 6 }}>
+          {error ?? invalid}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+        <button
+          type="button"
+          className="btn-primary"
+          disabled={busy || !dirty || invalid != null}
+          onClick={() => void onApply()}
+        >
+          {busy ? "applying…" : "apply risking"}
+        </button>
+        <button
+          type="button"
+          className="tb-btn"
+          disabled={busy}
+          onClick={() => setDraft({ oil: "1", gas: "1", water: "1" })}
+          title="reset the inputs to 1.0 (unrisked) — apply to save"
+        >
+          reset to 1.0
+        </button>
+      </div>
+    </section>
+  );
+}
+
 
 function TweakPanel({
   stream,

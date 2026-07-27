@@ -42,6 +42,7 @@ from app.type_curves.loader import (
     load_well_series,
     load_wells_with_forecast,
 )
+from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 
 # Forecast-aggregation horizon. 50 years × 12 months. Picks up the same
 # horizon the per-well fit_p50_series + frontend FULL_FORECAST_N_MONTHS
@@ -148,6 +149,11 @@ class TypeCurveRow(BaseModel):
     # changed since the last aggregation. Phase 1 reads only; Phase 2
     # sets it from forecast/membership edits.
     is_stale: bool = False
+    # Geologic risking scalars {stream: mul}; {} = unrisked. The series
+    # above is always the CLEAN fit — the frontend applies the MUL at
+    # display time (see risking.py for why the API never serves a
+    # risked series).
+    risk_multipliers: dict[str, float] = Field(default_factory=dict)
 
     @classmethod
     def from_orm_row(cls, tc: TypeCurve) -> "TypeCurveRow":
@@ -164,6 +170,7 @@ class TypeCurveRow(BaseModel):
             version_of=tc.version_of,
             deal_id=tc.deal_id,
             is_stale=bool(tc.is_stale),
+            risk_multipliers=dict(tc.risk_multipliers or {}),
         )
 
 
@@ -180,6 +187,7 @@ class TypeCurveSummary(BaseModel):
     version_of: uuid.UUID | None
     deal_id: uuid.UUID | None
     is_stale: bool = False
+    risk_multipliers: dict[str, float] = Field(default_factory=dict)
 
 
 class TypeCurveWellStat(BaseModel):
@@ -279,6 +287,11 @@ class PatchRequest(BaseModel):
     # peak_ramp without versioning). Sets is_stale — the saved series
     # still reflects the OLD alignment until /reaggregate rebuilds it.
     alignment_method: str | None = None
+    # Geologic risking scalars {oil?/gas?/water?: mul > 0}. Stored
+    # canonically (only non-1.0 entries). Does NOT flip is_stale —
+    # risking is applied at the read/export boundary, never baked into
+    # the stored series, so no reaggregation is needed.
+    risk_multipliers: dict[str, float] | None = None
 
 
 # ============================ helpers ============================
@@ -661,6 +674,13 @@ def save_as_new_version(
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     row = _persist(session, payload=payload, req=req, version_of=parent.id)
+    # Risking rides the lineage: a new version inherits the parent's
+    # geologic MULs (the geology didn't change because the cohort did);
+    # clear or adjust explicitly via PATCH if review says otherwise.
+    if parent.risk_multipliers:
+        row.risk_multipliers = dict(parent.risk_multipliers)
+        session.commit()
+        session.refresh(row)
     took_over_deal = False
     if req.take_over_deal and parent.deal_id is not None:
         # Deal-slot handoff: the version replaces its parent in the
@@ -697,6 +717,7 @@ def list_type_curves(
             version_of=r.version_of,
             deal_id=r.deal_id,
             is_stale=bool(r.is_stale),
+            risk_multipliers=dict(r.risk_multipliers or {}),
         )
         for r in rows
     ]
@@ -757,6 +778,14 @@ def patch_type_curve(
             # alignment — flag it so the workspace banner / the
             # update-in-place flow knows a /reaggregate is required.
             row.is_stale = True
+    if req.risk_multipliers is not None:
+        try:
+            normalized = normalize_multipliers(req.risk_multipliers)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        # Canonical storage: only non-1.0 entries, so {} always means
+        # unrisked. Fresh dict assignment — no flag_modified dance.
+        row.risk_multipliers = {s: m for s, m in normalized.items() if m != 1.0}
     session.commit()
     session.refresh(row)
     return TypeCurveRow.from_orm_row(row)
@@ -1013,7 +1042,10 @@ _NORMALIZATION_LABEL: dict[str, str] = {
 }
 
 
-def _metadata_csv(tc: TypeCurve) -> bytes:
+def _metadata_csv(tc: TypeCurve, series: dict[str, Any]) -> bytes:
+    """``series`` is the (possibly risked) view the sibling CSVs were
+    written from — passed in so the EUR/param blocks below can never
+    disagree with the rate files in the same zip."""
     buf = io.StringIO()
     writer = csv.writer(buf)
     writer.writerow(["field", "value"])
@@ -1031,6 +1063,14 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
     writer.writerow(
         ["percentile_convention", "SPE (P10 = high case, P90 = low case)"]
     )
+    # Geologic risking disclosure — the rate/forecast CSVs in this zip
+    # already carry the multiplier when risked.
+    if is_risked(tc.risk_multipliers):
+        writer.writerow(["risking", "geologic_multipliers_applied"])
+        for s_name, mul in sorted(normalize_multipliers(tc.risk_multipliers).items()):
+            writer.writerow([f"risk_mult_{s_name}", f"{mul:.4f}"])
+    else:
+        writer.writerow(["risking", "unrisked"])
     writer.writerow(["created_at", tc.created_at.isoformat()])
     writer.writerow(["version_of", str(tc.version_of) if tc.version_of else ""])
     writer.writerow(["n_wells", len(tc.included_api10s or [])])
@@ -1047,7 +1087,7 @@ def _metadata_csv(tc: TypeCurve) -> bytes:
     # gets mistaken for an EUR; dropped on purpose.
     writer.writerow(["fitted_eur_per_1000ft (50-yr Arps projection)"])
     writer.writerow(["stream", *PERCENTILE_KEYS, "mean"])
-    streams = (tc.series or {}).get("streams", {})
+    streams = series.get("streams", {})
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name, {})
         eur = _fitted_eur_per_1000ft(s)
@@ -1591,7 +1631,10 @@ def export_type_curve(
         raise HTTPException(status_code=404, detail="not found")
 
     buf = io.BytesIO()
-    streams = (tc.series or {}).get("streams", {})
+    # Export boundary: geologic risking applies here (stored series is
+    # the clean fit; identity pass-through when unrisked).
+    series = apply_risking(tc.series or {}, tc.risk_multipliers)
+    streams = series.get("streams", {})
     alignment_val = tc.alignment_method.value
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for s_name in ("oil", "gas", "water"):
@@ -1606,7 +1649,7 @@ def export_type_curve(
                 zf.writestr(
                     f"{s_name}_forecast.csv", _forecast_csv(s, alignment_val)
                 )
-        zf.writestr("metadata.csv", _metadata_csv(tc))
+        zf.writestr("metadata.csv", _metadata_csv(tc, series))
 
     safe_name = "".join(c if c.isalnum() else "_" for c in tc.name)[:64] or "type_curve"
     return Response(

@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 
 from app.db.models import TypeCurve
+from app.type_curves.risking import is_risked, normalize_multipliers
 
 
 # Per-10k-ft scaling for rate / EUR cells. Mo / B / Di are unit-
@@ -95,9 +96,22 @@ def _fmt_eur(v: object) -> str:
 
 
 def _get_fitted(curve: TypeCurve, stream: str) -> dict[str, object]:
+    """Published P50 fit for one stream, geologic risking applied.
+
+    Risking scales the rate/EUR-dimensioned params (qi/qo/eur_per_unit —
+    the only ones this table renders); b/Di/peak_index are shape params
+    and pass through. Mirrors the frontend's SlideParamTable, which
+    applies the same MUL client-side — the two must stay byte-for-byte.
+    """
     streams = (curve.series or {}).get("streams") or {}
-    fitted = (streams.get(stream) or {}).get("fitted")
-    return fitted or {}
+    fitted = dict((streams.get(stream) or {}).get("fitted") or {})
+    mul = normalize_multipliers(curve.risk_multipliers or {})[stream]
+    if fitted and mul != 1.0:
+        for key in ("qi", "qo", "eur_per_unit"):
+            v = _num(fitted.get(key))
+            if v is not None:
+                fitted[key] = v * mul
+    return fitted
 
 
 def format_param_row(curve: TypeCurve) -> tuple[str, ...]:
@@ -105,14 +119,18 @@ def format_param_row(curve: TypeCurve) -> tuple[str, ...]:
 
     Reads the published P50 fit per stream from
     ``curve.series.streams.<stream>.fitted``. Scales rates / EUR by
-    ``PER_10K_FACTOR`` and converts Di to 1-yr effective.
+    ``PER_10K_FACTOR`` and converts Di to 1-yr effective. Risked curves
+    carry a ``[RISKED]`` name suffix so the deck matches the UI badge.
     """
     oil = _get_fitted(curve, "oil")
     gas = _get_fitted(curve, "gas")
     wat = _get_fitted(curve, "water")
     F = PER_10K_FACTOR
+    name = curve.name
+    if is_risked(curve.risk_multipliers or {}):
+        name = f"{name} [RISKED]"
     return (
-        curve.name,
+        name,
         _fmt_rate(_scale(oil.get("qo"), F)),
         _fmt_mo(oil.get("peak_index")),
         _fmt_rate(_scale(oil.get("qi"), F)),

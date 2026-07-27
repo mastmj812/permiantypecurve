@@ -3,6 +3,11 @@
 import { apiFetch } from "./auth";
 
 export type NormalizationBasis = "per_lateral_ft" | "per_proppant_lb" | "per_well";
+
+// Geologic risking scalars per stream; absent key = 1.0 (unrisked).
+// The API always serves the CLEAN series — display code applies these
+// via src/typeCurves/risking.ts (see that module for why).
+export type RiskMultipliers = Partial<Record<"oil" | "gas" | "water", number>>;
 // peak_ramp = peak-aligned with ramp lookback: every well's peak sits
 // at the cohort-median ramp length, its own ramp in the months before.
 export type AlignmentMethod = "peak_month" | "first_prod_month" | "peak_ramp";
@@ -103,6 +108,9 @@ export interface TypeCurveSummary {
   // have changed since the last aggregation (set by Phase 2). Phase 1
   // surfaces it; defaults false on existing curves.
   is_stale?: boolean;
+  // Geologic risking; {} / absent = unrisked. Baked into every export
+  // server-side; applied client-side for display.
+  risk_multipliers?: RiskMultipliers;
 }
 
 export interface TypeCurveRow extends TypeCurveSummary {
@@ -206,6 +214,9 @@ export async function patchTypeCurve(
     // In-place alignment change — marks the curve stale; follow with
     // reaggregateTypeCurve to rebuild the series under it.
     alignment_method?: AlignmentMethod;
+    // Geologic risking; applied at the read/export boundary, so no
+    // reaggregate is needed and is_stale does NOT flip.
+    risk_multipliers?: RiskMultipliers;
   },
 ): Promise<TypeCurveRow> {
   const r = await apiFetch(`/api/type-curves/${id}`, {
