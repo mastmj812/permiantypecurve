@@ -15,7 +15,9 @@ import {
   type BlueOxConfig,
   type DealRow,
   type DossierManifest,
+  type NoviComparisonZone,
   exportDealDossierPptx,
+  fetchNoviComparison,
   getBlueOxConfig,
   getDeal,
 } from "../api/deals";
@@ -33,6 +35,7 @@ import {
   fetchTypeCurveWellStats,
 } from "../api/typeCurves";
 import { type WellDetailLite, fetchWellDetails } from "../api/wells";
+import { NoviComparisonPanel } from "../components/dossier/NoviComparisonPanel";
 import { ScenarioGunBarrel } from "../components/dossier/ScenarioGunBarrel";
 import { ScenarioSlideMap } from "../components/dossier/ScenarioSlideMap";
 import { capturePanel } from "../components/slide/captureSlideComposite";
@@ -77,6 +80,7 @@ export function DealDossierPage({ dealId }: Props) {
   const [deal, setDeal] = useState<DealRow | null>(null);
   const [cfg, setCfg] = useState<BlueOxConfig | null>(null);
   const [scenarios, setScenarios] = useState<NarviScenarioDetail[] | null>(null);
+  const [comparisons, setComparisons] = useState<NoviComparisonZone[] | null>(null);
   const [curvesReady, setCurvesReady] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -116,6 +120,15 @@ export function DealDossierPage({ dealId }: Props) {
           ),
         );
         if (!cancelled) setScenarios(details);
+        // TC-vs-Novi benchmark — optional: an older backend or a
+        // warehouse hiccup degrades to "no comparison sections", the
+        // rest of the dossier still previews and exports.
+        try {
+          const comps = await fetchNoviComparison(dealId);
+          if (!cancelled) setComparisons(comps);
+        } catch {
+          if (!cancelled) setComparisons([]);
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
       }
@@ -179,8 +192,17 @@ export function DealDossierPage({ dealId }: Props) {
     };
   }, [scenarios, cfg]);
 
+  // Comparison sections render only zones with sticks; index order
+  // here defines the n{i}_figure capture names and the manifest order.
+  const comparisonZones = useMemo(
+    () => (comparisons ?? []).filter((z) => z.n_sticks > 0),
+    [comparisons],
+  );
+
   const allReady =
-    scenarios !== null && curveIds.every((_, i) => curvesReady.has(i));
+    scenarios !== null &&
+    comparisons !== null &&
+    curveIds.every((_, i) => curvesReady.has(i));
 
   const onExport = async () => {
     if (!scenarios) return;
@@ -194,6 +216,10 @@ export function DealDossierPage({ dealId }: Props) {
           subtitle: scenarioSubtitle(sd),
         })),
         curves: curveIds.map((id) => ({ type_curve_id: id })),
+        comparisons: comparisonZones.map((z) => ({
+          title: `${z.zone_name} — Type Curve vs Novi ML (n=${z.n_sticks}: ${z.n_pud} PUD / ${z.n_res} RES)`,
+          subtitle: comparisonSubtitle(z),
+        })),
       };
       const files: Record<string, Blob> = {};
       // Map panels mount lazily (live only near the viewport), so a
@@ -232,6 +258,9 @@ export function DealDossierPage({ dealId }: Props) {
           await grab(`c${i}_cum_${stream}`);
         }
         await grab(`c${i}_map`);
+      }
+      for (let i = 0; i < comparisonZones.length; i++) {
+        await grab(`n${i}_figure`);
       }
       const filename = await exportDealDossierPptx(dealId, manifest, files);
       setNotice(`exported ${filename}`);
@@ -370,8 +399,29 @@ export function DealDossierPage({ dealId }: Props) {
           }
         />
       ))}
+
+      {comparisonZones.map((z, i) => (
+        <NoviComparisonSection key={z.zone_name} zone={z} idx={i} />
+      ))}
     </div>
   );
+}
+
+// Alignment/normalization/risking basis line under the comparison
+// title — every convention that affects how the overlay reads.
+function comparisonSubtitle(z: NoviComparisonZone): string {
+  const parts = [
+    "per 1,000 ft lateral",
+    `TC aligned to peak${z.tc_risked ? " (risked)" : ""}, Novi to IP`,
+    `median of ${z.n_sticks} representative novi_intel sticks (${z.n_self} self / ${z.n_neighborhood} neighborhood)`,
+  ];
+  if (z.intel_vintage) parts.push(`intel vintage ${z.intel_vintage}`);
+  if (z.low_n) parts.push("LOW N");
+  if (z.stale_vintage) parts.push("STALE VINTAGE");
+  if (z.n_wells_no_set > 0) {
+    parts.push(`${z.n_wells_no_set} wells without a representative set`);
+  }
+  return parts.join(" · ");
 }
 
 interface CurveSectionProps {
@@ -495,6 +545,67 @@ function DossierCurveSection({ curveId, idx, onReady }: CurveSectionProps) {
           </div>
         </div>
       ))}
+    </section>
+  );
+}
+
+interface NoviComparisonSectionProps {
+  zone: NoviComparisonZone;
+  idx: number;
+}
+
+// One zone's TC-vs-Novi comparison figure (6 panels), captured as a
+// single full-width PNG for its dossier slide. Fetches the zone's
+// curve itself — the curve sections dedupe by curve id while these
+// key by zone, so sharing state would tangle the two lists.
+function NoviComparisonSection({ zone, idx }: NoviComparisonSectionProps) {
+  const [curve, setCurve] = useState<TypeCurveRow | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const c = await fetchTypeCurve(zone.type_curve_id);
+        if (!cancelled) setCurve(c);
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [zone.type_curve_id]);
+
+  if (error) {
+    return (
+      <section style={{ marginTop: 24 }}>
+        <p style={{ color: "#dc2626" }}>
+          comparison {zone.zone_name}: {error}
+        </p>
+      </section>
+    );
+  }
+  if (!curve) {
+    return (
+      <section style={{ marginTop: 24 }}>
+        <p className="muted">loading TC-vs-Novi comparison…</p>
+      </section>
+    );
+  }
+
+  return (
+    <section style={{ marginTop: 28 }}>
+      <h1 className="slide-title">
+        {zone.zone_name} — Type Curve vs Novi ML (n={zone.n_sticks}:{" "}
+        {zone.n_pud} PUD / {zone.n_res} RES)
+      </h1>
+      <p className="muted" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+        {comparisonSubtitle(zone)}
+      </p>
+      <div className="slide-panel" data-dossier-panel={`n${idx}_figure`}>
+        <NoviComparisonPanel curve={curve} zone={zone} />
+      </div>
     </section>
   );
 }

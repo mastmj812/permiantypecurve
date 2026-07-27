@@ -222,6 +222,43 @@ export async function listNarviScenarios(): Promise<NarviScenario[]> {
 export interface DossierManifest {
   scenarios: Array<{ title: string; subtitle: string }>;
   curves: Array<{ type_curve_id: string }>;
+  // TC-vs-Novi comparison slides (one per zone with sticks); files
+  // named n{i}_figure. Optional — older callers omit it.
+  comparisons?: Array<{ title: string; subtitle: string }>;
+}
+
+// ---------------- TC-vs-Novi comparison (dossier figure data) ----------------
+
+export interface NoviComparisonZone {
+  zone_name: string;
+  type_curve_id: string;
+  n_sticks: number;
+  n_self: number;
+  n_neighborhood: number;
+  n_pud: number;
+  n_res: number;
+  n_wells_no_set: number;
+  low_n: boolean;
+  stale_vintage: boolean;
+  tc_risked: boolean;
+  intel_vintage: string | null;
+  step_days: number;
+  // median Novi ML per-day rates per 1,000 ft, IP-aligned 30-day grid
+  oil_rate: number[];
+  gas_rate: number[];
+  water_rate: number[];
+}
+
+export async function fetchNoviComparison(
+  dealId: string,
+): Promise<NoviComparisonZone[]> {
+  const r = await apiFetch(`/api/deals/${dealId}/novi-comparison`);
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`novi comparison fetch failed: ${detail}`);
+  }
+  const body = (await r.json()) as { zones: NoviComparisonZone[] };
+  return body.zones;
 }
 
 // POSTs the manifest + client-captured panel PNGs; file names must

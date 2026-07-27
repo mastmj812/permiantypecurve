@@ -67,6 +67,7 @@ from app.exports.well_rows import (
 from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.exports.dossier import (
+    ComparisonSlideInput,
     CurveSlideInput,
     ScenarioSlideInput,
     build_deal_dossier_pptx,
@@ -75,6 +76,7 @@ from app.warehouse_client.intel_forecast import (
     REP_LATERAL_TOL,
     REP_LOW_N,
     REP_RADIUS_M,
+    STEP_DAYS,
     fetch_intel_median_series,
     fetch_intel_vintage,
     resolve_rep_set,
@@ -1330,6 +1332,115 @@ class BlueOxConfigResponse(BaseModel):
     narvi_status: list[dict[str, Any]]
 
 
+class NoviComparisonZoneOut(BaseModel):
+    """One zone's TC-vs-Novi benchmark for the dossier figure: median
+    Novi ML per-day rates per 1,000 ft on the Novi-native 30-day grid,
+    IP-aligned (the workbook's novi_comparison sheet carries the same
+    series as period volumes = rate * step_days)."""
+
+    zone_name: str
+    type_curve_id: uuid.UUID
+    n_sticks: int
+    n_self: int
+    n_neighborhood: int
+    n_pud: int
+    n_res: int
+    n_wells_no_set: int
+    low_n: bool
+    stale_vintage: bool
+    tc_risked: bool
+    intel_vintage: str | None
+    step_days: int
+    oil_rate: list[float]
+    gas_rate: list[float]
+    water_rate: list[float]
+
+
+class NoviComparisonResponse(BaseModel):
+    zones: list[NoviComparisonZoneOut]
+
+
+@router.get(
+    "/{deal_id}/novi-comparison", response_model=NoviComparisonResponse
+)
+def get_novi_comparison(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> NoviComparisonResponse:
+    """TC-vs-Novi benchmark per zone of the SAVED blueox config — the
+    data behind the dossier's 6-panel comparison figure. Same
+    collection code as the workbook's novi_comparison sheets (one
+    source of truth)."""
+    deal = _load_or_404(session, deal_id)
+    if not deal.blueox_config:
+        raise HTTPException(
+            status_code=422,
+            detail="this deal has no saved Blue Ox config",
+        )
+    cfg = BlueOxExportRequest.model_validate(deal.blueox_config)
+    if not cfg.narvi_selections:
+        return NoviComparisonResponse(zones=[])
+
+    # Zone names default from curve names (same rule as the export
+    # assembly — the bench map keys on them).
+    for spec in cfg.zones:
+        if spec.zone_name is None:
+            tc = session.get(TypeCurve, spec.type_curve_id)
+            if tc is not None:
+                spec.zone_name = tc.name[:26].strip()
+
+    errors: list[str] = []
+    narvi_by_zone, _exclusions, _unzoned = _fetch_narvi_by_zone(cfg, errors)
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    out: list[NoviComparisonZoneOut] = []
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            vintage = fetch_intel_vintage(wh)
+            for spec in cfg.zones:
+                tc = session.get(TypeCurve, spec.type_curve_id)
+                if tc is None:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"type curve {spec.type_curve_id} not found",
+                    )
+                zone_name = spec.zone_name or tc.name
+                comp = _collect_novi_comparison(
+                    wh,
+                    zone_name,
+                    narvi_by_zone.get(zone_name, []),
+                    is_risked(tc.risk_multipliers or {}),
+                    vintage,
+                )
+                out.append(NoviComparisonZoneOut(
+                    zone_name=comp.zone_name,
+                    type_curve_id=spec.type_curve_id,
+                    n_sticks=comp.n_sticks,
+                    n_self=comp.n_self,
+                    n_neighborhood=comp.n_neighborhood,
+                    n_pud=comp.n_pud,
+                    n_res=comp.n_res,
+                    n_wells_no_set=comp.n_wells_no_set,
+                    low_n=comp.low_n,
+                    stale_vintage=comp.stale_vintage,
+                    tc_risked=comp.tc_risked,
+                    intel_vintage=comp.intel_vintage,
+                    step_days=STEP_DAYS,
+                    # The collection returns period VOLUMES (the
+                    # workbook convention); the chart wants rates.
+                    oil_rate=[v / STEP_DAYS for v in comp.oil_bbl],
+                    gas_rate=[v / STEP_DAYS for v in comp.gas_mcf],
+                    water_rate=[v / STEP_DAYS for v in comp.water_bbl],
+                ))
+    except HTTPException:
+        raise
+    except Exception as exc:  # surface as a 422, not a 500
+        raise HTTPException(
+            status_code=422, detail=f"novi comparison fetch failed: {exc}"
+        ) from exc
+    return NoviComparisonResponse(zones=out)
+
+
 @router.get("/{deal_id}/blueox-config", response_model=BlueOxConfigResponse)
 def get_blueox_config(
     deal_id: uuid.UUID, session: Session = Depends(get_session)
@@ -1596,8 +1707,18 @@ async def export_deal_dossier(
             )
         )
 
+    comparisons: list[ComparisonSlideInput] = []
+    for i, cp in enumerate(manifest.get("comparisons", [])):
+        comparisons.append(
+            ComparisonSlideInput(
+                title=str(cp.get("title") or f"Comparison {i + 1}"),
+                subtitle=str(cp.get("subtitle") or ""),
+                figure_png=png(f"n{i}_figure"),
+            )
+        )
+
     try:
-        content = build_deal_dossier_pptx(session, scenarios, curves)
+        content = build_deal_dossier_pptx(session, scenarios, curves, comparisons)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
