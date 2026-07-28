@@ -9,8 +9,10 @@
 // same Novi series as period volumes.
 //
 // Risking: the TC side renders RISKED (each curve by its own
-// multipliers — same rule as the slide charts); the Novi median is a
-// vendor benchmark and is never risked.
+// multipliers — the figure compares what we'd BOOK against the Novi
+// benchmark); the Novi median is a vendor forecast and is never
+// risked. The legend carries the factor ("TC risked ×0.80") so the
+// captured PNG is self-describing without the slide subtitle.
 
 import { useMemo } from "react";
 
@@ -18,7 +20,12 @@ import type { NoviComparisonZone } from "../../api/deals";
 import type { StreamSeries, TypeCurveRow } from "../../api/typeCurves";
 
 import { DAYS_PER_MONTH, buildRampArpsRate } from "../../forecasts/arps";
-import { normalizeMultipliers, riskStreamSeries } from "../../type_curves/risking";
+import {
+  isRisked,
+  normalizeMultipliers,
+  riskingFactorLabel,
+  riskStreamSeries,
+} from "../../type_curves/risking";
 
 const N_MONTHS = 600;
 
@@ -212,6 +219,20 @@ export function NoviComparisonPanel({
   height = 528,
 }: Props) {
   const data = useMemo(() => buildStreamData(curve, zone), [curve, zone]);
+  // Extra legend row on risked curves: every TC element in this figure
+  // (band, P50, mean, cums) is the delivered post-MUL view, so one
+  // figure-level note covers them all. Compact "×0.80" when all
+  // streams share the factor, per-stream list otherwise.
+  const riskedNote = isRisked(curve.risk_multipliers)
+    ? `TC risked ${riskingFactorLabel(curve.risk_multipliers)}`
+    : null;
+  // Legend box sizing — the default 128px fits the four fixed rows;
+  // a mixed per-stream note ("TC risked ×0.85 oil · ×0.90 gas") needs
+  // more width (~5.3 px/char at fontSize 9.5).
+  const legendW = riskedNote
+    ? Math.max(128, Math.round(riskedNote.length * 5.3) + 30)
+    : 128;
+  const legendH = riskedNote ? 66 : 54;
 
   const cols = 2;
   const rows = 3;
@@ -287,7 +308,7 @@ export function NoviComparisonPanel({
           <path d={logPath(sd.novi, frame, yMin, yMax, xMax)} fill="none" stroke={NOVI_RED} strokeWidth={1.8} />
           {row === 0 && (
             <g fontSize={9.5} fill="#374151">
-              <rect x={frame.x + 8} y={frame.y + 6} width={128} height={54} fill="#ffffff" fillOpacity={0.85} stroke={GRID} />
+              <rect x={frame.x + 8} y={frame.y + 6} width={legendW} height={legendH} fill="#ffffff" fillOpacity={0.85} stroke={GRID} />
               <rect x={frame.x + 14} y={frame.y + 12} width={16} height={8} fill={TC_BAND} />
               <text x={frame.x + 35} y={frame.y + 19}>TC P90–P10</text>
               <line x1={frame.x + 14} y1={frame.y + 29} x2={frame.x + 30} y2={frame.y + 29} stroke={TC_P50} strokeWidth={2} />
@@ -296,6 +317,11 @@ export function NoviComparisonPanel({
               <text x={frame.x + 35} y={frame.y + 44}>TC mean</text>
               <line x1={frame.x + 14} y1={frame.y + 53} x2={frame.x + 30} y2={frame.y + 53} stroke={NOVI_RED} strokeWidth={1.8} />
               <text x={frame.x + 35} y={frame.y + 56}>Novi ML median</text>
+              {riskedNote && (
+                <text x={frame.x + 14} y={frame.y + 68} fontStyle="italic" fill={TC_P50}>
+                  {riskedNote}
+                </text>
+              )}
             </g>
           )}
           <text x={frame.x + frame.w / 2} y={frame.y + frame.h + 12} textAnchor="middle" fontSize={9} fill={AXIS} dx={40}>

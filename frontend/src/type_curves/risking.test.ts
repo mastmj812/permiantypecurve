@@ -9,6 +9,7 @@ import {
   isRisked,
   normalizeMultipliers,
   riskedNameSuffix,
+  riskingFactorLabel,
   riskingLabel,
   riskStreamSeries,
   scaleRates,
@@ -76,6 +77,13 @@ describe("normalizeMultipliers / isRisked / riskingLabel", () => {
   it("labels only the non-1.0 streams", () => {
     expect(riskingLabel({ oil: 0.85, gas: 0.9 })).toBe("×0.85 oil · ×0.90 gas");
     expect(riskingLabel({})).toBe("");
+  });
+
+  it("factor label collapses a uniform factor, lists mixed ones", () => {
+    expect(riskingFactorLabel({ oil: 0.8, gas: 0.8, water: 0.8 })).toBe("×0.80");
+    expect(riskingFactorLabel({ oil: 0.85, gas: 0.9 })).toBe(
+      "×0.85 oil · ×0.90 gas",
+    );
   });
 
   // Mirrors backend risking.risked_name_suffix (byte-for-byte contract
