@@ -45,6 +45,18 @@ export function riskingLabel(raw: RiskMultipliers | null | undefined): string {
 }
 
 /**
+ * Compact factor text: "×0.80" when all three streams share one
+ * multiplier, the per-stream riskingLabel ("×0.85 oil · ×0.90 gas")
+ * otherwise. Callers gate on isRisked — an unrisked curve collapses
+ * to "×1.00", which no caller should ever display.
+ */
+export function riskingFactorLabel(raw: RiskMultipliers | null | undefined): string {
+  const m = normalizeMultipliers(raw);
+  if (m.oil === m.gas && m.gas === m.water) return `×${m.oil.toFixed(2)}`;
+  return riskingLabel(raw);
+}
+
+/**
  * Curve-name suffix carrying the risking factor: " [RISKED ×0.80]"
  * when all three streams share one multiplier, " [RISKED ×0.85 oil ·
  * ×0.90 gas]" (non-1.0 streams only) otherwise, "" when unrisked.
@@ -53,11 +65,7 @@ export function riskingLabel(raw: RiskMultipliers | null | undefined): string {
  */
 export function riskedNameSuffix(raw: RiskMultipliers | null | undefined): string {
   if (!isRisked(raw)) return "";
-  const m = normalizeMultipliers(raw);
-  if (m.oil === m.gas && m.gas === m.water) {
-    return ` [RISKED ×${m.oil.toFixed(2)}]`;
-  }
-  return ` [RISKED ${riskingLabel(raw)}]`;
+  return ` [RISKED ${riskingFactorLabel(raw)}]`;
 }
 
 export function scaleRates(
