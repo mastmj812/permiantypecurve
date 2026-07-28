@@ -1131,7 +1131,13 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               // shapefile on the Map tab remounts the iframe — a hash-only
               // src change alone wouldn't reload it, and the inner app
               // reads its dealVisibility from the URL once on mount.
-              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}-${fitSignature(selectedSaved)}-h${hiddenDeals.join("|")}`}
+              //
+              // Risking multipliers are folded in too: they live OUTSIDE
+              // the fit (the stored series stays clean; risking applies at
+              // display time), so fitSignature doesn't move when the user
+              // edits or resets risking — without the riskMuls key part
+              // the iframe kept showing the previously-risked view.
+              key={`${selectedSaved.id}-${includeProbit ? "probit" : "noprobit"}-${fitSignature(selectedSaved)}-h${hiddenDeals.join("|")}-r${riskMuls.oil}/${riskMuls.gas}/${riskMuls.water}`}
               ref={previewIframeRef}
               src={(() => {
                 const qs = new URLSearchParams();

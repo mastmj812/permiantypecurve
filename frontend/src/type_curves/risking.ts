@@ -44,6 +44,22 @@ export function riskingLabel(raw: RiskMultipliers | null | undefined): string {
     .join(" · ");
 }
 
+/**
+ * Curve-name suffix carrying the risking factor: " [RISKED ×0.80]"
+ * when all three streams share one multiplier, " [RISKED ×0.85 oil ·
+ * ×0.90 gas]" (non-1.0 streams only) otherwise, "" when unrisked.
+ * MUST stay byte-for-byte with backend risking.risked_name_suffix —
+ * the PPTX param table renders the same string server-side.
+ */
+export function riskedNameSuffix(raw: RiskMultipliers | null | undefined): string {
+  if (!isRisked(raw)) return "";
+  const m = normalizeMultipliers(raw);
+  if (m.oil === m.gas && m.gas === m.water) {
+    return ` [RISKED ×${m.oil.toFixed(2)}]`;
+  }
+  return ` [RISKED ${riskingLabel(raw)}]`;
+}
+
 export function scaleRates(
   values: Array<number | null> | null | undefined,
   mul: number,

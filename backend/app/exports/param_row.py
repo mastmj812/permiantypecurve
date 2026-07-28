@@ -19,7 +19,7 @@ from __future__ import annotations
 import math
 
 from app.db.models import TypeCurve
-from app.type_curves.risking import is_risked, normalize_multipliers
+from app.type_curves.risking import normalize_multipliers, risked_name_suffix
 
 
 # Per-10k-ft scaling for rate / EUR cells. Mo / B / Di are unit-
@@ -120,15 +120,15 @@ def format_param_row(curve: TypeCurve) -> tuple[str, ...]:
     Reads the published P50 fit per stream from
     ``curve.series.streams.<stream>.fitted``. Scales rates / EUR by
     ``PER_10K_FACTOR`` and converts Di to 1-yr effective. Risked curves
-    carry a ``[RISKED]`` name suffix so the deck matches the UI badge.
+    carry a ``[RISKED]`` name suffix that includes the factor
+    (per-stream when the multipliers differ) so the deck matches the
+    UI badge.
     """
     oil = _get_fitted(curve, "oil")
     gas = _get_fitted(curve, "gas")
     wat = _get_fitted(curve, "water")
     F = PER_10K_FACTOR
-    name = curve.name
-    if is_risked(curve.risk_multipliers or {}):
-        name = f"{name} [RISKED]"
+    name = f"{curve.name}{risked_name_suffix(curve.risk_multipliers or {})}"
     return (
         name,
         _fmt_rate(_scale(oil.get("qo"), F)),
