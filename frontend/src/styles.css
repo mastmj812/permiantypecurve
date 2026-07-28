@@ -172,6 +172,24 @@ body {
   font-size: 12px;
 }
 
+/* Dossier acreage-shapefile picker — reuses the switcher popover
+   look but anchors LEFT under its button (the dossier header is
+   left-aligned, right:0 would fling the menu off toward the export
+   button). */
+.dossier-shp-menu {
+  left: 0;
+  right: auto;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.dossier-shp-item {
+  display: flex;
+  margin-right: 0;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+.dossier-shp-item:hover { background: #f1f5f9; }
+
 /* ---- deal polygons admin modal ---- */
 .deal-polygon-table {
   width: 100%;

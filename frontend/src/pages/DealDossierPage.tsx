@@ -35,7 +35,9 @@ import {
   fetchTypeCurveWellStats,
 } from "../api/typeCurves";
 import { type WellDetailLite, fetchWellDetails } from "../api/wells";
+import { NO_SOURCE_FILE, fetchDealPolygons } from "../api/dealPolygons";
 import { NoviComparisonPanel } from "../components/dossier/NoviComparisonPanel";
+import { ShapefileSelect } from "../components/dossier/ShapefileSelect";
 import { ScenarioGunBarrel } from "../components/dossier/ScenarioGunBarrel";
 import { ScenarioSlideMap } from "../components/dossier/ScenarioSlideMap";
 import { capturePanel } from "../components/slide/captureSlideComposite";
@@ -85,6 +87,13 @@ export function DealDossierPage({ dealId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Acreage picker: distinct uploaded shapefiles + per-shapefile
+  // visibility (absent/true = visible; default all visible). This page
+  // is its own chrome-free route, so the Map tab's store doesn't carry
+  // over — selection lives here and flows into every SlideMap, which
+  // applies changes live via setFilter (framing survives).
+  const [shapefiles, setShapefiles] = useState<string[]>([]);
+  const [dealVisibility, setDealVisibility] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     const prevMargin = document.body.style.margin;
@@ -94,6 +103,26 @@ export function DealDossierPage({ dealId }: Props) {
     return () => {
       document.body.style.margin = prevMargin;
       document.body.style.background = prevBg;
+    };
+  }, []);
+
+  // Populate the acreage picker. Degrades to no control on failure —
+  // the maps then show all shapefiles, the pre-picker behavior.
+  useEffect(() => {
+    let cancelled = false;
+    void fetchDealPolygons()
+      .then((rows) => {
+        if (cancelled) return;
+        const seen: string[] = [];
+        for (const p of rows) {
+          const key = p.source_file ?? NO_SOURCE_FILE;
+          if (!seen.includes(key)) seen.push(key);
+        }
+        setShapefiles(seen);
+      })
+      .catch((e) => console.warn("acreage shapefile list failed", e));
+    return () => {
+      cancelled = true;
     };
   }, []);
 
@@ -307,6 +336,17 @@ export function DealDossierPage({ dealId }: Props) {
         >
           {exporting ? "exporting…" : "Export dossier .pptx"}
         </button>
+        {shapefiles.length > 0 && (
+          <span style={{ marginLeft: 12 }}>
+            <ShapefileSelect
+              options={shapefiles}
+              visibility={dealVisibility}
+              onChange={(sourceFile, visible) =>
+                setDealVisibility((prev) => ({ ...prev, [sourceFile]: visible }))
+              }
+            />
+          </span>
+        )}
         <span className="muted" style={{ fontSize: 11, marginLeft: 12 }}>
           maps are live — drag / scroll-zoom to frame each shot; the export
           captures the current views
@@ -394,6 +434,7 @@ export function DealDossierPage({ dealId }: Props) {
           key={id}
           curveId={id}
           idx={i}
+          dealVisibility={dealVisibility}
           onReady={() =>
             setCurvesReady((prev) => new Set(prev).add(i))
           }
@@ -427,6 +468,8 @@ function comparisonSubtitle(z: NoviComparisonZone): string {
 interface CurveSectionProps {
   curveId: string;
   idx: number;
+  // Header acreage picker's selection — live prop on the SlideMap.
+  dealVisibility: Record<string, boolean>;
   onReady: () => void;
 }
 
@@ -439,7 +482,7 @@ interface CurveData {
 
 // One type curve's dossier section — the same data + panels as the
 // slide export page (TypeCurveSlidePage), all streams stacked visibly.
-function DossierCurveSection({ curveId, idx, onReady }: CurveSectionProps) {
+function DossierCurveSection({ curveId, idx, dealVisibility, onReady }: CurveSectionProps) {
   const [data, setData] = useState<CurveData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -514,6 +557,7 @@ function DossierCurveSection({ curveId, idx, onReady }: CurveSectionProps) {
           <SlideMap
             api10s={api10s}
             wellDetails={data.wellDetails}
+            dealVisibility={dealVisibility}
             width={629}
             height={418}
             lazy
