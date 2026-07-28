@@ -59,9 +59,11 @@ interface Props {
   showBlocks?: boolean;
   showSections?: boolean;
   showDeals?: boolean;
-  // Per-shapefile acreage visibility from the Map tab. When showDeals is
-  // on, only the shapefiles toggled on here are drawn (default {} = all
-  // visible), so the slide mirrors the Map tab's per-shapefile toggles.
+  // Per-shapefile acreage visibility. When showDeals is on, only the
+  // shapefiles toggled on here are drawn (default {} = all visible).
+  // Unlike the other props this one is LIVE: changes re-filter the
+  // acreage layers in place (setFilter), so the user's framing
+  // survives a selection change — the dossier's picker relies on that.
   dealVisibility?: Record<string, boolean>;
   width?: number;
   height?: number;
@@ -85,7 +87,7 @@ const DEALS_LINE_LAYER = "slide-deal-polygons-line";
 
 async function loadDealPolygons(
   map: MlMap,
-  dealVisibility: Record<string, boolean>,
+  getDealVisibility: () => Record<string, boolean>,
 ): Promise<void> {
   if (map.getSource(DEALS_SOURCE_ID)) return;
   try {
@@ -95,9 +97,11 @@ async function loadDealPolygons(
       type: "geojson",
       data: fc as unknown as GeoJSON.FeatureCollection,
     });
-    // Per-shapefile visibility: only draw the shapefiles toggled on in
-    // the Map tab. Same filter the Map and Review maps use.
-    const filter = dealVisibilityFilter(dealVisibility);
+    // Per-shapefile visibility — same filter the Map and Review maps
+    // use. Read through a getter at add time (not the mount-time
+    // value): the fetch is async and the live dealVisibility prop may
+    // have changed while it was in flight.
+    const filter = dealVisibilityFilter(getDealVisibility());
     // Translucent fill + crisp outline so the wells and section grid
     // remain readable underneath. Single shared ACREAGE_COLOR — same
     // as the Map and Review tabs.
@@ -175,6 +179,25 @@ export function SlideMap({
   const cameraRef = useRef<{ center: [number, number]; zoom: number } | null>(null);
   const [snapshot, setSnapshot] = useState<string | null>(null);
   const live = useNearViewport(outerRef, lazy);
+  // Latest dealVisibility for the async polygon load (see
+  // loadDealPolygons) and for re-application on a lazy remount.
+  const dealVisibilityRef = useRef(dealVisibility);
+
+  // Live per-shapefile visibility: apply selection changes to the
+  // existing acreage layers via setFilter — no remount, so the user's
+  // framing survives. The repaint re-fires the idle snapshot, so the
+  // capture picks up the new selection too. If the polygon fetch is
+  // still in flight the layers don't exist yet; that's fine — the load
+  // reads the ref at add time.
+  useEffect(() => {
+    dealVisibilityRef.current = dealVisibility;
+    const map = mapRef.current;
+    if (!map) return;
+    const filter = dealVisibilityFilter(dealVisibility);
+    for (const id of [DEALS_FILL_LAYER, DEALS_LINE_LAYER]) {
+      if (map.getLayer(id)) map.setFilter(id, filter);
+    }
+  }, [dealVisibility]);
 
   useEffect(() => {
     if (!live || !containerRef.current || mapRef.current) return;
@@ -255,7 +278,11 @@ export function SlideMap({
       const overlayPromises: Array<Promise<unknown>> = [];
       if (showBlocks) overlayPromises.push(loadBlocks(map));
       if (showSections) overlayPromises.push(loadSections(map));
-      if (showDeals) overlayPromises.push(loadDealPolygons(map, dealVisibility));
+      if (showDeals) {
+        overlayPromises.push(
+          loadDealPolygons(map, () => dealVisibilityRef.current),
+        );
+      }
       // Idle-listener fires even when no overlays loaded — the wells
       // still need to paint before we snapshot.
       if (overlayPromises.length === 0) overlayPromises.push(Promise.resolve());
