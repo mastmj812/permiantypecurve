@@ -36,6 +36,16 @@ interface Props {
   // series prop. Length should match series.p50; xMaxMonths slicing is
   // applied here too.
   smoothedOverride?: number[] | null;
+  // Risked-curve overlay: drawn as a DASHED line in the fitted-curve
+  // color on top of everything. The slide charts pass the delivered
+  // (post-MUL) fitted curve here while the solid line stays the clean
+  // technical fit, so a risked slide shows both. Same length/axis
+  // conventions as smoothedOverride; contributes to the y-range so an
+  // upside MUL (>1) can't escape the plot area.
+  dashedOverlay?: Array<number | null> | null;
+  // In-plot legend text for the dashed overlay (e.g. "risked ×0.80").
+  // No legend entry is drawn without it.
+  dashedOverlayLabel?: string;
   // Per-well rate histories rendered as thin gray polylines behind the
   // bands. Drives the slide-export "rep wells" overlay — one faint line
   // per included well, peak-aligned, lateral-normalized by the caller.
@@ -78,6 +88,8 @@ export function TypeCurveChart({
   xMaxMonths,
   xTickStep,
   smoothedOverride,
+  dashedOverlay,
+  dashedOverlayLabel,
   wellHistories,
   yMinFloor,
   compactLayout = false,
@@ -115,6 +127,16 @@ export function TypeCurveChart({
       rate: lim != null ? w.rate.slice(0, lim) : w.rate,
     }));
   }, [wellHistories, xMaxMonths]);
+  // Same xMaxMonths slicing as the series arrays.
+  const dashedSliced = useMemo(
+    () =>
+      dashedOverlay
+        ? xMaxMonths != null
+          ? dashedOverlay.slice(0, Math.max(1, xMaxMonths))
+          : dashedOverlay
+        : null,
+    [dashedOverlay, xMaxMonths],
+  );
   const { mainArea, ribbonArea, xScale, yScale, yTicks, xTicks, countScale } =
     useMemo(
       () =>
@@ -129,10 +151,11 @@ export function TypeCurveChart({
           PAD,
           RIBBON_H,
           RIBBON_GAP,
+          dashedSliced,
         ),
       [
         seriesForAxes, yAxisType, width, height, xTickStep, displayWells,
-        yMinFloor, PAD, RIBBON_H, RIBBON_GAP,
+        yMinFloor, PAD, RIBBON_H, RIBBON_GAP, dashedSliced,
       ],
     );
 
@@ -154,6 +177,9 @@ export function TypeCurveChart({
       : null;
   const fittedPath = fittedSmoothed
     ? linePath(fittedSmoothed, xScale, yScale, yAxisType)
+    : null;
+  const dashedPath = dashedSliced
+    ? linePath(dashedSliced, xScale, yScale, yAxisType)
     : null;
 
   return (
@@ -278,6 +304,18 @@ export function TypeCurveChart({
           strokeWidth={2.5}
         />
       )}
+      {/* Dashed overlay — the risked (delivered) fitted curve. Same
+          color as the solid fit so the pair reads as raw-vs-risked of
+          ONE curve, dashed so they can't be confused. */}
+      {dashedPath && (
+        <path
+          d={dashedPath}
+          fill="none"
+          stroke="#0f172a"
+          strokeWidth={2}
+          strokeDasharray="7 5"
+        />
+      )}
       {/* Comparison P50 from a second curve (Library "compare with") */}
       {comparePath && (
         <path
@@ -302,6 +340,27 @@ export function TypeCurveChart({
           </text>
         </g>
       )}
+      {/* Dashed-overlay legend — stacks below the compare legend when
+          both are present. */}
+      {dashedPath && dashedOverlayLabel && (() => {
+        const ly = mainArea.y + (compareSeries && compareLabel ? 24 : 12);
+        return (
+          <g>
+            <line
+              x1={mainArea.x + 8}
+              x2={mainArea.x + 24}
+              y1={ly}
+              y2={ly}
+              stroke="#0f172a"
+              strokeWidth={2}
+              strokeDasharray="7 5"
+            />
+            <text x={mainArea.x + 28} y={ly + 3} fontSize="10" fill="#374151">
+              {dashedOverlayLabel}
+            </text>
+          </g>
+        );
+      })()}
 
       {/* Ribbon: well_count. Hidden when compactLayout=true (slide-
           export charts) so the plot maximizes its picture-box room. */}
@@ -399,6 +458,7 @@ function computeAxes(
   PAD: { top: number; right: number; bottom: number; left: number } = DEFAULT_PAD,
   RIBBON_H: number = DEFAULT_RIBBON_H,
   RIBBON_GAP: number = DEFAULT_RIBBON_GAP,
+  dashedOverlay?: Array<number | null> | null,
 ) {
   const mainH = height - PAD.top - PAD.bottom - RIBBON_H - RIBBON_GAP;
   const mainArea = { x: PAD.left, y: PAD.top, w: width - PAD.left - PAD.right, h: mainH };
@@ -414,6 +474,7 @@ function computeAxes(
   if (wellHistories) {
     for (const w of wellHistories) months = Math.max(months, w.rate.length);
   }
+  if (dashedOverlay) months = Math.max(months, dashedOverlay.length);
 
   const xMax = Math.max(months - 1, 1);
   const xScale = (i: number) =>
@@ -429,6 +490,9 @@ function computeAxes(
     for (const w of wellHistories) {
       for (const v of w.rate) if (v != null && Number.isFinite(v)) flat.push(v);
     }
+  }
+  if (dashedOverlay) {
+    for (const v of dashedOverlay) if (v != null && Number.isFinite(v)) flat.push(v);
   }
   const xTicks =
     xTickStep != null && xTickStep > 0

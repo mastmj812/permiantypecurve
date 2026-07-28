@@ -184,7 +184,11 @@ def test_param_row_unrisked_unchanged_and_risked_scales() -> None:
     clean = format_param_row(_tc())
     risked = format_param_row(_tc({"oil": 0.5}))
     assert clean[0] == "wca_west"
-    assert risked[0] == "wca_west [RISKED]"
+    # Factor in the suffix: per-stream list when multipliers differ …
+    assert risked[0] == "wca_west [RISKED ×0.50 oil]"
+    # … collapsed to one factor when all three streams share it.
+    uniform = format_param_row(_tc({"oil": 0.8, "gas": 0.8, "water": 0.8}))
+    assert uniform[0] == "wca_west [RISKED ×0.80]"
     # Oil Peak (qi, per-10k scaled): 300 -> 3,000 clean, 1,500 risked
     assert clean[3] == "3,000"
     assert risked[3] == "1,500"

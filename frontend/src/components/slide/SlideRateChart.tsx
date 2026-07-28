@@ -36,13 +36,19 @@ const Y_LABEL_BY_STREAM: Record<Stream, string> = {
   water: "Normalized Water (BWPD / 10k ft)",
 };
 
-// Geologic risking applies here (each curve by its OWN multipliers) so
-// the slide preview — and the PNG the pptx export captures from it —
-// carries the risked bands. The per-well gray histories are actuals
-// and stay unrisked.
-function getStreamSeries(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
+// Risked-curve display: the solid bands/P50/fit are the CLEAN
+// technical fit — they register with the per-well gray histories
+// (actuals, never risked). The delivered (post-MUL) fitted curve is
+// overlaid DASHED via TypeCurveChart's dashedOverlay, matching the
+// risked qi/EUR numbers in the param table. The compare curve stays
+// risked by its OWN multipliers (curves compare on delivered volumes).
+function getCleanStream(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
   const streams = (curve.series as { streams?: Record<string, StreamSeries> }).streams;
-  const s = streams?.[stream] ?? null;
+  return streams?.[stream] ?? null;
+}
+
+function getRiskedStream(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
+  const s = getCleanStream(curve, stream);
   if (!s) return null;
   return riskStreamSeries(s, normalizeMultipliers(curve.risk_multipliers)[stream]);
 }
@@ -85,14 +91,24 @@ export function SlideRateChart({
   width = 520,
   height = 207,
 }: Props) {
-  const currentStream = getStreamSeries(current, stream);
-  const previousStream = previous ? getStreamSeries(previous, stream) : null;
+  const currentStream = getCleanStream(current, stream);
+  const previousStream = previous ? getRiskedStream(previous, stream) : null;
   if (!currentStream) return null;
 
   const scaled = scaleSeries(currentStream, PER_10K_FACTOR);
   const scaledCompare = previousStream
     ? scaleSeries(previousStream, PER_10K_FACTOR)
     : null;
+
+  // Dashed delivered curve for risked saves — the clean fit × MUL
+  // (Arps is homogeneous in qi, so this IS the risked forecast).
+  const mul = normalizeMultipliers(current.risk_multipliers)[stream];
+  const riskedFit =
+    mul !== 1.0 && currentStream.fitted
+      ? currentStream.fitted.smoothed_rate.map((v) =>
+          Number.isFinite(v) ? v * mul * PER_10K_FACTOR : v,
+        )
+      : null;
 
   // Slide spaghetti uses the downtime-filtered history so the grey
   // observed lines are apples-to-apples with the forecast (the fit
@@ -126,6 +142,8 @@ export function SlideRateChart({
       wellHistories={histories}
       yMinFloor={100}
       compactLayout
+      dashedOverlay={riskedFit}
+      dashedOverlayLabel={`risked ×${mul.toFixed(2)}`}
     />
   );
 }

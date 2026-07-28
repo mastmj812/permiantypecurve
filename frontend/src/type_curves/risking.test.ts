@@ -8,6 +8,7 @@ import type { StreamSeries } from "../api/typeCurves";
 import {
   isRisked,
   normalizeMultipliers,
+  riskedNameSuffix,
   riskingLabel,
   riskStreamSeries,
   scaleRates,
@@ -75,6 +76,19 @@ describe("normalizeMultipliers / isRisked / riskingLabel", () => {
   it("labels only the non-1.0 streams", () => {
     expect(riskingLabel({ oil: 0.85, gas: 0.9 })).toBe("×0.85 oil · ×0.90 gas");
     expect(riskingLabel({})).toBe("");
+  });
+
+  // Mirrors backend risking.risked_name_suffix (byte-for-byte contract
+  // with the PPTX param table).
+  it("name suffix collapses a uniform factor, lists mixed ones", () => {
+    expect(riskedNameSuffix({})).toBe("");
+    expect(riskedNameSuffix({ oil: 0.8, gas: 0.8, water: 0.8 })).toBe(
+      " [RISKED ×0.80]",
+    );
+    expect(riskedNameSuffix({ oil: 0.5 })).toBe(" [RISKED ×0.50 oil]");
+    expect(riskedNameSuffix({ oil: 0.85, gas: 0.9 })).toBe(
+      " [RISKED ×0.85 oil · ×0.90 gas]",
+    );
   });
 });
 

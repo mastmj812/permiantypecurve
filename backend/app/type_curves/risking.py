@@ -62,6 +62,24 @@ def is_risked(raw: dict[str, Any] | None) -> bool:
     return any(m != 1.0 for m in normalize_multipliers(raw).values())
 
 
+def risked_name_suffix(raw: dict[str, Any] | None) -> str:
+    """Curve-name suffix carrying the risking factor(s).
+
+    Collapses to a single factor when all three streams share one
+    multiplier; otherwise lists the non-1.0 streams (same text as the
+    UI badge). Empty string when unrisked. MUST stay byte-for-byte
+    with the frontend's ``risking.ts::riskedNameSuffix`` — the slide
+    preview renders the same string client-side.
+    """
+    if not is_risked(raw):
+        return ""
+    muls = normalize_multipliers(raw)
+    if len(set(muls.values())) == 1:
+        return f" [RISKED ×{muls['oil']:.2f}]"  # noqa: RUF001
+    label = " · ".join(f"×{muls[s]:.2f} {s}" for s in STREAMS if muls[s] != 1.0)  # noqa: RUF001
+    return f" [RISKED {label}]"
+
+
 def _scale_rates(values: list[Any], mul: float) -> list[Any]:
     return [v * mul if isinstance(v, (int, float)) else v for v in values]
 

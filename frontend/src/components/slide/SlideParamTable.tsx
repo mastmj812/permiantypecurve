@@ -12,7 +12,7 @@
 
 import { effectiveDecline } from "../../api/forecasts";
 import type { TypeCurveRow } from "../../api/typeCurves";
-import { isRisked, normalizeMultipliers } from "../../type_curves/risking";
+import { normalizeMultipliers, riskedNameSuffix } from "../../type_curves/risking";
 
 interface Props {
   current: TypeCurveRow;
@@ -106,10 +106,8 @@ function rowCells(curve: TypeCurveRow): string[] {
   const gas = getFitted(curve, "gas") ?? {};
   const wat = getFitted(curve, "water") ?? {};
   const F = PER_10K_FACTOR;
-  // [RISKED] suffix mirrors app/exports/param_row.py exactly.
-  const name = isRisked(curve.risk_multipliers)
-    ? `${curve.name} [RISKED]`
-    : curve.name;
+  // [RISKED ×0.80] suffix mirrors app/exports/param_row.py exactly.
+  const name = `${curve.name}${riskedNameSuffix(curve.risk_multipliers)}`;
   return [
     name,
     fmtRate(scaleNum(oil["qo"], F)),

@@ -37,12 +37,18 @@ const Y_LABEL_BY_STREAM: Record<Stream, string> = {
   water: "Cumulative Water (BBL / 10k ft)",
 };
 
-// Geologic risking applies here (each curve by its OWN multipliers) —
-// same seam as SlideRateChart; the per-well gray cum traces are actuals
-// and stay unrisked.
-function getStreamSeries(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
+// Risked-curve display — same seam as SlideRateChart: solid = the
+// CLEAN technical fit (registers with the gray actual cum traces),
+// dashed = the delivered (post-MUL) fitted cum. Integration is linear,
+// so the risked cum is exactly the clean fitted cum × MUL. The compare
+// curve stays risked by its OWN multipliers.
+function getCleanStream(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
   const streams = (curve.series as { streams?: Record<string, StreamSeries> }).streams;
-  const s = streams?.[stream] ?? null;
+  return streams?.[stream] ?? null;
+}
+
+function getRiskedStream(curve: TypeCurveRow, stream: Stream): StreamSeries | null {
+  const s = getCleanStream(curve, stream);
   if (!s) return null;
   return riskStreamSeries(s, normalizeMultipliers(curve.risk_multipliers)[stream]);
 }
@@ -112,14 +118,25 @@ export function SlideCumChart({
   width = 520,
   height = 207,
 }: Props) {
-  const currentStream = getStreamSeries(current, stream);
-  const previousStream = previous ? getStreamSeries(previous, stream) : null;
+  const currentStream = getCleanStream(current, stream);
+  const previousStream = previous ? getRiskedStream(previous, stream) : null;
   if (!currentStream) return null;
 
   const cumScaled = cumulateAndScale(currentStream, PER_10K_FACTOR);
   const cumCompare = previousStream
     ? cumulateAndScale(previousStream, PER_10K_FACTOR)
     : null;
+
+  // Dashed delivered cum for risked saves. cumScaled.fitted holds the
+  // clean fitted CUM (integrated + per-10k scaled above); integration
+  // is linear so × MUL gives the risked cum exactly.
+  const mul = normalizeMultipliers(current.risk_multipliers)[stream];
+  const riskedCum =
+    mul !== 1.0 && cumScaled.fitted
+      ? cumScaled.fitted.smoothed_rate.map((v) =>
+          Number.isFinite(v) ? v * mul : v,
+        )
+      : null;
 
   // Slide spaghetti uses the downtime-filtered cum (re-integrated
   // from the filtered rates) so the grey observed lines are apples-
@@ -150,6 +167,8 @@ export function SlideCumChart({
       xMaxMonths={CUM_X_MONTHS}
       wellHistories={histories}
       compactLayout
+      dashedOverlay={riskedCum}
+      dashedOverlayLabel={`risked ×${mul.toFixed(2)}`}
     />
   );
 }
