@@ -63,10 +63,14 @@ PER_WELL_COL_FORMATS: dict[int, str] = {
 # map draws). Deliberately NOT part of PER_WELL_HEADERS — the deal xlsx
 # per-well block and the dossier pptx table stay at the 12 shared
 # columns.
+# lon-first pairs — the standard across the drop (matches the inventory
+# sheet's heel_a_lon/heel_a_lat block and WKT's inherent "lon lat"
+# order). The first §8 drops (2026-07-29 toucan/bro_time) shipped
+# lat-first; renamed same day, declared in the ledger.
 WELL_GEO_HEADERS: tuple[str, ...] = (
-    "surface_lat", "surface_lon",
-    "heel_lat", "heel_lon",
-    "toe_lat", "toe_lon",
+    "surface_lon", "surface_lat",
+    "heel_lon", "heel_lat",
+    "toe_lon", "toe_lat",
     "wellstick_wkt",
 )
 
@@ -76,8 +80,8 @@ EMPTY_GEO: tuple[None, ...] = (None,) * len(WELL_GEO_HEADERS)
 def well_geo_rows(
     session: Session, api10s: list[str]
 ) -> dict[str, tuple[Any, ...]]:
-    """api10 -> (surface_lat, surface_lon, heel_lat, heel_lon, toe_lat,
-    toe_lon, wellstick_wkt) ordered as ``WELL_GEO_HEADERS``; lat/lon in
+    """api10 -> (surface_lon, surface_lat, heel_lon, heel_lat, toe_lon,
+    toe_lat, wellstick_wkt) ordered as ``WELL_GEO_HEADERS``; lon/lat in
     WGS84 degrees rounded to 6 decimals (~0.1 m), WKT a LINESTRING
     string at the same precision (None when no stick).
 
@@ -98,9 +102,9 @@ def well_geo_rows(
     )
     stmt = select(
         Well.api10,
-        func.ST_Y(Well.sh_geom), func.ST_X(Well.sh_geom),
-        func.ST_Y(heel), func.ST_X(heel),
-        func.ST_Y(Well.bh_geom), func.ST_X(Well.bh_geom),
+        func.ST_X(Well.sh_geom), func.ST_Y(Well.sh_geom),
+        func.ST_X(heel), func.ST_Y(heel),
+        func.ST_X(Well.bh_geom), func.ST_Y(Well.bh_geom),
         func.ST_AsText(Well.wellstick, 6),
     ).where(Well.api10.in_(api10s))
     return {
