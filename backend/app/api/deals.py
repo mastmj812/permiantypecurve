@@ -60,9 +60,12 @@ from app.exports.blueox import (
     monthly_volumes_from_rates,
 )
 from app.exports.well_rows import (
+    EMPTY_GEO,
     PER_WELL_COL_FORMATS,
     PER_WELL_HEADERS,
+    WELL_GEO_HEADERS,
     per_well_rows,
+    well_geo_rows,
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
@@ -918,6 +921,13 @@ def _collect_blueox_zone(
     lat_idx = PER_WELL_HEADERS.index("Lateral Length")
     laterals = [float(r[lat_idx]) for r in analog_rows if r[lat_idx]]
     cohort_mean_lat = sum(laterals) / len(laterals) if laterals else None
+    # SHL / heel (landing point) / toe (BHL) lat-lon appended per row so
+    # the receiver can map the analog cohort (2026-07-29 amendment,
+    # additive columns after the shared 12 — lenient loaders unaffected).
+    geo = well_geo_rows(session, list(tc.included_api10s or []))
+    analog_rows = [
+        tuple(r) + geo.get(str(r[0]), EMPTY_GEO) for r in analog_rows
+    ]
 
     inventory: list[InventoryRow] = []
     # narvi wells first: completed lateral (EUR driver) is the producing
@@ -953,7 +963,7 @@ def _collect_blueox_zone(
         normalization_basis=basis,
         volumes=volumes,
         curve_params=params_rows,
-        analog_headers=PER_WELL_HEADERS,
+        analog_headers=PER_WELL_HEADERS + WELL_GEO_HEADERS,
         analog_rows=analog_rows,
         inventory=inventory,
         # Declared in the manifest when non-empty (scoped zones only).

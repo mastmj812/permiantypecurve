@@ -690,7 +690,7 @@ def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:
     with patch(
         "app.api.deals.per_well_rows",
         return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
-    ):
+    ), patch("app.api.deals.well_geo_rows", return_value={}):
         zone = _collect_blueox_zone(
             None, tc, spec, ["P50"], 12, errors,  # type: ignore[arg-type]
             narvi_wells=narvi_wells,
@@ -700,6 +700,67 @@ def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:
     assert zone.inventory[0].producing_lateral_ft == 8_926.0
     assert zone.inventory[0].drilled_lateral_ft == 10_811.0
     assert zone.inventory[0].well_name == "THECAN 44 U1"
+
+
+def test_analog_sheet_appends_well_geo_columns() -> None:
+    """The zone's analog sheet carries surface/heel/toe lat-lon appended
+    after the shared 12 columns (2026-07-29 amendment); a well with no
+    geometry gets blank cells, and PER_WELL_HEADERS itself is untouched
+    (the deal xlsx / pptx exports stay at 12 columns)."""
+    from unittest.mock import patch
+
+    from app.api.deals import (
+        BlueOxInventoryRowIn,
+        BlueOxZoneSpec,
+        _collect_blueox_zone,
+    )
+    from app.db.models import AlignmentMethod, NormalizationBasis, TypeCurve
+    from app.exports.well_rows import PER_WELL_HEADERS, WELL_GEO_HEADERS
+
+    def _fit(qi: float) -> dict[str, Any]:
+        return {"qi": qi, "Di": 0.0, "b": 0.0, "Df": 0.0, "qo": qi, "peak_index": 0}
+
+    tc = TypeCurve()
+    tc.id = uuid.uuid4()
+    tc.name = "WCA"
+    tc.included_api10s = ["4200000001", "4200000002"]
+    tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
+    tc.alignment_method = AlignmentMethod.PEAK_RAMP
+    tc.created_at = datetime(2026, 7, 18, tzinfo=UTC)
+    tc.series = {
+        "streams": {
+            "oil": {"fitted_per_percentile": {"p50": _fit(100.0)}},
+            "gas": {"fitted_per_percentile": {"p50": _fit(600.0)}},
+        },
+    }
+    spec = BlueOxZoneSpec(
+        type_curve_id=tc.id, zone_name="WCA", reserve_category="PUD",
+        inventory=[BlueOxInventoryRowIn(drilled_lateral_ft=10_000.0)],
+    )
+    geo = {
+        "4200000001": (
+            31.9012, -103.5501, 31.9101, -103.5502, 31.9375, -103.5503,
+        ),
+    }
+    errors: list[str] = []
+    with patch(
+        "app.api.deals.per_well_rows",
+        return_value=[
+            ("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0),
+            ("4200000002", "W 2H", "OP", "WOLFCAMP A", 10_000.0),
+        ],
+    ), patch("app.api.deals.well_geo_rows", return_value=geo):
+        zone = _collect_blueox_zone(
+            None, tc, spec, ["P50"], 12, errors,  # type: ignore[arg-type]
+        )
+    assert errors == []
+    assert zone is not None
+    assert zone.analog_headers == PER_WELL_HEADERS + WELL_GEO_HEADERS
+    rows = {r[0]: r for r in zone.analog_rows}
+    assert rows["4200000001"][-6:] == geo["4200000001"]
+    assert rows["4200000002"][-6:] == (None,) * 6
+    # The shared header tuple is untouched — geo rides on the drop only.
+    assert "surface_lat" not in PER_WELL_HEADERS
 
 
 def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
@@ -749,7 +810,7 @@ def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
     with patch(
         "app.api.deals.per_well_rows",
         return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
-    ):
+    ), patch("app.api.deals.well_geo_rows", return_value={}):
         zone = _collect_blueox_zone(
             None, tc, spec, ["P10", "P50", "P90"], 12, errors,  # type: ignore[arg-type]
         )
