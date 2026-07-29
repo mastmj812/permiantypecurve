@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import Forecast, Well
@@ -55,16 +55,19 @@ PER_WELL_COL_FORMATS: dict[int, str] = {
 }
 
 
-# WGS84 lat/lon triplet appended to the Blue Ox drop's per-zone analog
+# WGS84 geometry block appended to the Blue Ox drop's per-zone analog
 # ("<Zone> meta") sheets so the receiver can map the type-curve wells.
 # Surface = SHL point, heel = the wellstick's landing-point vertex
-# (SHL -> LP -> MP -> BHL), toe = BHL point. Deliberately NOT part of
-# PER_WELL_HEADERS — the deal xlsx per-well block and the dossier pptx
-# table stay at the 12 shared columns.
+# (SHL -> LP -> MP -> BHL), toe = BHL point, wellstick_wkt = the whole
+# polyline as WKT (the authoritative geometry — exactly what the app's
+# map draws). Deliberately NOT part of PER_WELL_HEADERS — the deal xlsx
+# per-well block and the dossier pptx table stay at the 12 shared
+# columns.
 WELL_GEO_HEADERS: tuple[str, ...] = (
     "surface_lat", "surface_lon",
     "heel_lat", "heel_lon",
     "toe_lat", "toe_lon",
+    "wellstick_wkt",
 )
 
 EMPTY_GEO: tuple[None, ...] = (None,) * len(WELL_GEO_HEADERS)
@@ -72,29 +75,39 @@ EMPTY_GEO: tuple[None, ...] = (None,) * len(WELL_GEO_HEADERS)
 
 def well_geo_rows(
     session: Session, api10s: list[str]
-) -> dict[str, tuple[float | None, ...]]:
+) -> dict[str, tuple[Any, ...]]:
     """api10 -> (surface_lat, surface_lon, heel_lat, heel_lon, toe_lat,
-    toe_lon) in WGS84 degrees, ordered as ``WELL_GEO_HEADERS``.
+    toe_lon, wellstick_wkt) ordered as ``WELL_GEO_HEADERS``; lat/lon in
+    WGS84 degrees rounded to 6 decimals (~0.1 m), WKT a LINESTRING
+    string at the same precision (None when no stick).
 
-    Heel is vertex 2 (the landing point) of the 4-point wellstick;
-    ``ST_PointN`` returns NULL when the stick is missing or short, so a
-    well without geometry simply yields None cells. Rounded to 6
-    decimals (~0.1 m) — survey-grade precision would be false accuracy.
+    Heel is emitted ONLY when the stick has all 4 vertices — the
+    upstream builder drops NULL vertices (ARRAY_REMOVE), so a well
+    whose Novi landing point is missing gets a 3-vertex SHL->MP->BHL
+    stick whose vertex 2 is the MID-LATERAL point, and a 2-vertex stick
+    puts the toe there (~4% of sticks; caught by Blue Ox on the
+    2026-07-29 bro_time drop as half-length heel->toe segments). Only
+    a 4-vertex stick guarantees vertex 2 = landing point; everything
+    else gets blank heel cells and the receiver falls back to
+    ``wellstick_wkt``, which is faithful at any vertex count.
     """
     if not api10s:
         return {}
-    heel = func.ST_PointN(Well.wellstick, 2)
+    heel = case(
+        (func.ST_NPoints(Well.wellstick) == 4, func.ST_PointN(Well.wellstick, 2))
+    )
     stmt = select(
         Well.api10,
         func.ST_Y(Well.sh_geom), func.ST_X(Well.sh_geom),
         func.ST_Y(heel), func.ST_X(heel),
         func.ST_Y(Well.bh_geom), func.ST_X(Well.bh_geom),
+        func.ST_AsText(Well.wellstick, 6),
     ).where(Well.api10.in_(api10s))
     return {
         api10: tuple(
             round(float(c), 6) if c is not None else None for c in coords
-        )
-        for api10, *coords in session.execute(stmt)
+        ) + (wkt,)
+        for api10, *coords, wkt in session.execute(stmt)
     }
 
 

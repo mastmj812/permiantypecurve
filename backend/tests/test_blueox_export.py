@@ -740,6 +740,8 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
     geo = {
         "4200000001": (
             31.9012, -103.5501, 31.9101, -103.5502, 31.9375, -103.5503,
+            "LINESTRING(-103.5501 31.9012,-103.5502 31.9101,"
+            "-103.55025 31.9238,-103.5503 31.9375)",
         ),
     }
     errors: list[str] = []
@@ -757,8 +759,8 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
     assert zone is not None
     assert zone.analog_headers == PER_WELL_HEADERS + WELL_GEO_HEADERS
     rows = {r[0]: r for r in zone.analog_rows}
-    assert rows["4200000001"][-6:] == geo["4200000001"]
-    assert rows["4200000002"][-6:] == (None,) * 6
+    assert rows["4200000001"][-7:] == geo["4200000001"]
+    assert rows["4200000002"][-7:] == (None,) * 7
     # The shared header tuple is untouched — geo rides on the drop only.
     assert "surface_lat" not in PER_WELL_HEADERS
 
