@@ -739,7 +739,7 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
     )
     geo = {
         "4200000001": (
-            31.9012, -103.5501, 31.9101, -103.5502, 31.9375, -103.5503,
+            -103.5501, 31.9012, -103.5502, 31.9101, -103.5503, 31.9375,
             "LINESTRING(-103.5501 31.9012,-103.5502 31.9101,"
             "-103.55025 31.9238,-103.5503 31.9375)",
         ),
@@ -762,7 +762,13 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
     assert rows["4200000001"][-7:] == geo["4200000001"]
     assert rows["4200000002"][-7:] == (None,) * 7
     # The shared header tuple is untouched — geo rides on the drop only.
-    assert "surface_lat" not in PER_WELL_HEADERS
+    assert "surface_lon" not in PER_WELL_HEADERS
+    # lon-first pairs — the drop-wide standard (inventory heel_a_lon
+    # precedent + WKT's inherent lon-lat order).
+    assert zone.analog_headers[-7:-1] == (
+        "surface_lon", "surface_lat", "heel_lon", "heel_lat",
+        "toe_lon", "toe_lat",
+    )
 
 
 def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
