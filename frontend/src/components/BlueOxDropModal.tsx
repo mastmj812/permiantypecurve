@@ -24,8 +24,16 @@ import {
   putBlueOxConfig,
 } from "../api/deals";
 import { type TypeCurveSummary, listTypeCurves } from "../api/typeCurves";
+import { codeRank } from "../map/formations";
 
 const ALL_LEVELS: BlueOxLevel[] = ["P10", "P25", "P75", "P90"];
+
+// Stratigraphic rank of a zone = its shallowest bench (a WCA_1+WCA_2
+// zone ranks as WCA_1); zones with no benches sink to the bottom.
+const zoneRank = (z: { benches: string[] }): number =>
+  z.benches.length > 0
+    ? Math.min(...z.benches.map(codeRank))
+    : Number.MAX_SAFE_INTEGER;
 
 // Map key for a (deal_id, scenario_id) pair. Both are dealIdFor-style
 // slugs ([a-z0-9_]), so "/" cannot collide — and it matches how the
@@ -324,6 +332,30 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
     );
   };
 
+  // Zone row order IS the workbook tab order (the backend iterates
+  // zones verbatim), so reordering here is how tab order is controlled.
+  // Both paths close the scope panel — it's index-keyed and would point
+  // at the wrong zone after a move.
+  const moveZone = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= cfg.zones.length) return;
+    const zones = [...cfg.zones];
+    const a = zones[i];
+    const b = zones[j];
+    if (!a || !b) return;
+    zones[i] = b;
+    zones[j] = a;
+    setScopeOpen(null);
+    edit({ zones });
+  };
+
+  const sortZonesStrat = () => {
+    setScopeOpen(null);
+    // stable sort: ties (same shallowest bench, or all bench-less) keep
+    // their current relative order
+    edit({ zones: [...cfg.zones].sort((za, zb) => zoneRank(za) - zoneRank(zb)) });
+  };
+
   const setZoneBenches = (i: number, benches: string[]) =>
     edit(
       deriveZoneCategories({
@@ -373,15 +405,26 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
             </label>
           </div>
 
-          <h4 style={{ margin: "10px 0 4px" }}>Zones</h4>
+          <h4 style={{ margin: "10px 0 4px" }}>
+            Zones{" "}
+            <button type="button" className="link-btn"
+              style={{ fontWeight: 400, fontSize: 11 }}
+              disabled={cfg.zones.length < 2}
+              title="reorder zones shallow → deep by each zone's shallowest bench"
+              onClick={sortZonesStrat}>
+              sort stratigraphic
+            </button>
+          </h4>
           <p className="muted" style={{ fontSize: 11, margin: "0 0 6px" }}>
             Zone names ship to Blue Ox verbatim (≤26 chars, stable across re-drops).
             Curves may come from any deal. Benches = narvi formation codes mapped into
-            the zone (comma-separated, e.g. WCA_1, WCA_2).
+            the zone (comma-separated, e.g. WCA_1, WCA_2). Row order = tab order in
+            the exported workbook (▲▼ or sort stratigraphic).
           </p>
           <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left" }}>
+                <th />
                 <th>type curve</th><th>zone name</th><th>category</th><th>benches</th>
                 <th title="which selected narvi scenarios (DSUs) this zone captures — lets the same bench carry different curves in different areas">
                   scenarios
@@ -395,6 +438,17 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                 const crossDeal = curve && curve.deal_id !== deal.id;
                 return (
                   <tr key={i}>
+                    <td style={{ paddingRight: 4, whiteSpace: "nowrap" }}>
+                      <button type="button" className="link-btn" disabled={i === 0}
+                        title="move up (tab order)" onClick={() => moveZone(i, -1)}>
+                        ▲
+                      </button>
+                      <button type="button" className="link-btn"
+                        disabled={i === cfg.zones.length - 1}
+                        title="move down (tab order)" onClick={() => moveZone(i, 1)}>
+                        ▼
+                      </button>
+                    </td>
                     <td style={{ paddingRight: 8 }}>
                       <select value={z.type_curve_id}
                         onChange={(e) => {
