@@ -757,10 +757,17 @@ def _collect_novi_comparison(
     low_n = False
     stale = False
     n_no_set = 0
+    # ll tolerance the zone's neighborhoods actually selected with —
+    # per-basin since the 2026-07-30 amendment. Wells in one zone share a
+    # basin in practice; max() keeps a mixed zone deterministic (the most
+    # permissive band that contributed).
+    zone_tol: float | None = None
     for w in wells:
         if (w.category or "").lower() == "pdp":
             continue
         rep = resolve_rep_set(wh, w)
+        if rep is not None and rep.lateral_tol is not None:
+            zone_tol = max(zone_tol or 0.0, rep.lateral_tol)
         if rep is None or not rep.stick_ids:
             n_no_set += 1
             if rep is not None and rep.mode == "neighborhood":
@@ -792,7 +799,7 @@ def _collect_novi_comparison(
         n_res=series.n_res if series is not None else 0,
         n_wells_no_set=n_no_set,
         radius_m=REP_RADIUS_M,
-        lateral_tol=REP_LATERAL_TOL,
+        lateral_tol=zone_tol if zone_tol is not None else REP_LATERAL_TOL,
         intel_vintage=vintage,
         low_n=low_n or n_sticks < REP_LOW_N,
         stale_vintage=stale,
@@ -1356,6 +1363,8 @@ class NoviComparisonZoneOut(BaseModel):
     n_pud: int
     n_res: int
     n_wells_no_set: int
+    radius_m: float
+    lateral_tol: float  # per-basin since 2026-07-30 (delaware 0.25 / midland 0.40)
     low_n: bool
     stale_vintage: bool
     tc_risked: bool
@@ -1431,6 +1440,8 @@ def get_novi_comparison(
                     n_pud=comp.n_pud,
                     n_res=comp.n_res,
                     n_wells_no_set=comp.n_wells_no_set,
+                    radius_m=comp.radius_m,
+                    lateral_tol=comp.lateral_tol,
                     low_n=comp.low_n,
                     stale_vintage=comp.stale_vintage,
                     tc_risked=comp.tc_risked,

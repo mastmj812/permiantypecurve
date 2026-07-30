@@ -83,6 +83,7 @@ export function DealDossierPage({ dealId }: Props) {
   const [cfg, setCfg] = useState<BlueOxConfig | null>(null);
   const [scenarios, setScenarios] = useState<NarviScenarioDetail[] | null>(null);
   const [comparisons, setComparisons] = useState<NoviComparisonZone[] | null>(null);
+  const [comparisonError, setComparisonError] = useState<string | null>(null);
   const [curvesReady, setCurvesReady] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -151,12 +152,17 @@ export function DealDossierPage({ dealId }: Props) {
         if (!cancelled) setScenarios(details);
         // TC-vs-Novi benchmark — optional: an older backend or a
         // warehouse hiccup degrades to "no comparison sections", the
-        // rest of the dossier still previews and exports.
+        // rest of the dossier still previews and exports. But say WHY:
+        // silence here made a config error indistinguishable from
+        // "no comparable analogs" (the diamonds lesson, 2026-07-30).
         try {
           const comps = await fetchNoviComparison(dealId);
           if (!cancelled) setComparisons(comps);
-        } catch {
-          if (!cancelled) setComparisons([]);
+        } catch (e) {
+          if (!cancelled) {
+            setComparisons([]);
+            setComparisonError(e instanceof Error ? e.message : String(e));
+          }
         }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));
@@ -441,9 +447,42 @@ export function DealDossierPage({ dealId }: Props) {
         />
       ))}
 
+      {comparisonError && (
+        <section style={{ marginTop: 20 }}>
+          <h1 className="slide-title">Type Curve vs Novi ML</h1>
+          <p style={{ color: "#dc2626", fontSize: 13 }}>
+            comparison unavailable — {comparisonError}
+          </p>
+        </section>
+      )}
+
       {comparisonZones.map((z, i) => (
         <NoviComparisonSection key={z.zone_name} zone={z} idx={i} />
       ))}
+
+      {/* n=0 zones get an explicit placeholder (preview-only, no slide,
+          no capture panel) — an empty analog neighborhood must read as a
+          data condition, not a missing feature. */}
+      {(comparisons ?? [])
+        .filter((z) => z.n_sticks === 0)
+        .map((z) => (
+          <section key={z.zone_name} style={{ marginTop: 20 }}>
+            <h1 className="slide-title">
+              {z.zone_name} — Type Curve vs Novi ML
+            </h1>
+            <p className="muted" style={{ fontSize: 13, maxWidth: 900 }}>
+              no comparison: none of the zone&apos;s{" "}
+              {z.n_wells_no_set} planned well
+              {z.n_wells_no_set === 1 ? "" : "s"} has a representative
+              Novi stick set — no same-bench PUD/RES stick within{" "}
+              {(z.radius_m / 1609).toFixed(0)} mi and ±
+              {Math.round(z.lateral_tol * 100)}% lateral length
+              {z.intel_vintage ? ` (intel vintage ${z.intel_vintage})` : ""}.
+              This zone ships in the workbook as declared-empty; it gets no
+              dossier slide.
+            </p>
+          </section>
+        ))}
     </div>
   );
 }
@@ -455,6 +494,8 @@ function comparisonSubtitle(z: NoviComparisonZone): string {
     "per 1,000 ft lateral",
     `TC aligned to peak${z.tc_risked ? " (risked)" : ""}, Novi to IP`,
     `median of ${z.n_sticks} representative novi_intel sticks (${z.n_self} self / ${z.n_neighborhood} neighborhood)`,
+    // selection band — per-basin ll tolerance since 2026-07-30
+    `selected within ${(z.radius_m / 1609).toFixed(0)} mi, ±${Math.round(z.lateral_tol * 100)}% ll`,
   ];
   if (z.intel_vintage) parts.push(`intel vintage ${z.intel_vintage}`);
   if (z.low_n) parts.push("LOW N");

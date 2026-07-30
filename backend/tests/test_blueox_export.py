@@ -1235,6 +1235,29 @@ def test_novi_comparison_sheets_and_manifest_keys() -> None:
     assert kv["novi_rate_to_volume_days"] == 30
 
 
+def test_novi_comparison_mixed_basin_tol_defers_to_meta() -> None:
+    """Per-basin ll tolerance (2026-07-30): a single-basin deal declares
+    the one value in the manifest; a mixed-basin deal must not declare
+    one zone's tolerance for all — it defers to the per-zone meta column."""
+    data = _data()
+    midland = NoviComparisonZone(**{
+        **_novi_zone("WOLFCAMP A").__dict__, "lateral_tol": 0.40,
+    })
+    comps = (midland, _novi_zone("THIRD BONE SPRING", n_sticks=0))
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, comps))))
+    kv = _manifest_kv(wb)
+    assert kv["novi_selection_lateral_tol"] == "per_zone_see_novi_comparison_meta"
+    by_zone = {r[0]: r for r in wb["novi_comparison_meta"].iter_rows(values_only=True)}
+    assert by_zone["WOLFCAMP A"][8] == 0.40
+    assert by_zone["THIRD BONE SPRING"][8] == 0.25
+
+    # uniform wide tolerance declares the number, as before
+    uniform = tuple(NoviComparisonZone(**{**z.__dict__, "lateral_tol": 0.40})
+                    for z in comps)
+    wb2 = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, uniform))))
+    assert _manifest_kv(wb2)["novi_selection_lateral_tol"] == 0.40
+
+
 def test_novi_comparison_absent_keeps_legacy_shape() -> None:
     wb = load_workbook(io.BytesIO(build_blueox_workbook(_data())))
     assert "novi_comparison" not in wb.sheetnames

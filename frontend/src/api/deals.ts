@@ -238,6 +238,9 @@ export interface NoviComparisonZone {
   n_pud: number;
   n_res: number;
   n_wells_no_set: number;
+  radius_m: number;
+  // per-basin since 2026-07-30 (delaware 0.25 / midland 0.40)
+  lateral_tol: number;
   low_n: boolean;
   stale_vintage: boolean;
   tc_risked: boolean;

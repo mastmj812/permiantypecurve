@@ -865,7 +865,15 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
     # when the comparison ships, so legacy drops stay byte-identical.
     if data.novi_comparison:
         radius = data.novi_comparison[0].radius_m
-        tol = data.novi_comparison[0].lateral_tol
+        # ll tolerance is per-basin (2026-07-30 amendment). Single-basin
+        # deals — the practical case — declare the one value; a
+        # mixed-basin deal defers to the per-zone lateral_tol column in
+        # novi_comparison_meta rather than declaring one zone's value
+        # for all.
+        tols = {z.lateral_tol for z in data.novi_comparison}
+        tol: float | str = (
+            tols.pop() if len(tols) == 1 else "per_zone_see_novi_comparison_meta"
+        )
         block_a.extend([
             ("novi_intel_vintage", data.novi_intel_vintage),
             ("novi_selection_radius_m", radius),

@@ -15,6 +15,8 @@ import pytest
 
 from app.warehouse_client.intel_forecast import (
     N_MONTHS,
+    REP_LATERAL_TOL,
+    REP_LATERAL_TOL_BY_BASIN,
     REP_LOW_N,
     STEP_DAYS,
     RepSet,
@@ -96,7 +98,10 @@ def test_fallback_self_resolves_stick_by_unique_id() -> None:
 
 
 def test_fallback_neighborhood_flags_low_n_never_widens() -> None:
-    wh = _StubSession({"intel_representative_sticks": [(9,), (10,)]})
+    wh = _StubSession({
+        "GROUP BY basin": [("delaware",)],
+        "intel_representative_sticks": [(9,), (10,)],
+    })
     rep = resolve_rep_set(wh, _well())
     assert rep is not None
     assert rep.mode == "neighborhood" and rep.stick_ids == (9, 10)
@@ -104,9 +109,45 @@ def test_fallback_neighborhood_flags_low_n_never_widens() -> None:
     rep_calls = [c for c in wh.calls if "intel_representative_sticks" in c[0]]
     assert len(rep_calls) == 1  # one shot; no second, wider attempt
     # the wine-rack bimodal suffix strips before hitting the warehouse
-    wh2 = _StubSession({"intel_representative_sticks": []})
+    wh2 = _StubSession({
+        "GROUP BY basin": [("delaware",)],
+        "intel_representative_sticks": [],
+    })
     resolve_rep_set(wh2, _well(formation="WCA_1_b"))
-    assert wh2.calls[0][1]["bench"] == "WCA_1"
+    rep_call = next(c for c in wh2.calls if "intel_representative_sticks" in c[0])
+    assert rep_call[1]["bench"] == "WCA_1"
+
+
+def test_fallback_tol_is_per_basin() -> None:
+    """2026-07-30 amendment: midland neighborhoods select with the wider
+    ll tolerance; the RepSet records the tolerance actually used."""
+    wh = _StubSession({
+        "GROUP BY basin": [("midland",)],
+        "intel_representative_sticks": [(1,), (2,), (3,)],
+    })
+    rep = resolve_rep_set(wh, _well())
+    assert rep is not None and rep.lateral_tol == 0.40
+    rep_call = next(c for c in wh.calls if "intel_representative_sticks" in c[0])
+    assert rep_call[1]["tol"] == REP_LATERAL_TOL_BY_BASIN["midland"] == 0.40
+    # unresolved basin (no intel sticks in the lookup radius) -> tight default
+    wh2 = _StubSession({
+        "GROUP BY basin": [],
+        "intel_representative_sticks": [],
+    })
+    rep2 = resolve_rep_set(wh2, _well())
+    assert rep2 is not None and rep2.lateral_tol == REP_LATERAL_TOL == 0.25
+    rep_call2 = next(c for c in wh2.calls if "intel_representative_sticks" in c[0])
+    assert rep_call2[1]["tol"] == REP_LATERAL_TOL
+
+
+def test_persisted_lateral_tol_carried_through() -> None:
+    wh = _StubSession({})  # persisted set never touches the DB
+    rep = resolve_rep_set(wh, _well(novi_rep={
+        "mode": "neighborhood", "stick_ids": [7], "n": 1, "low_n": True,
+        "lateral_tol": 0.40, "basin": "midland", "intel_vintage": "2025-09-30",
+    }))
+    assert rep is not None and rep.lateral_tol == 0.40
+    assert wh.calls == []
 
 
 # ============================ tail evaluation ============================
