@@ -49,8 +49,16 @@ log = get_logger("warehouse_client.intel_forecast")
 # NOVI_REP_RADIUS_M / NOVI_REP_LATERAL_TOL (the persisted sets and the
 # fallback must select identically).
 REP_RADIUS_M = 1609.0  # 1 mi
-REP_LATERAL_TOL = 0.25
+REP_LATERAL_TOL = 0.25  # default ll tolerance (delaware / unresolved basin)
+# Per-basin ll tolerance (amendment 2026-07-30): Midland per-foot
+# productivity is near length-invariant with lateral length, so shorter
+# analogs stay representative there; Delaware degrades — keep tight.
+# Keys = curated.intel_locations.basin. MUST mirror narvi's
+# NOVI_REP_LATERAL_TOL_BY_BASIN (src/narvi/warehouse.py) and the ledger
+# in engineering_db docs/blue_ox_contract_amendments_pending.md.
+REP_LATERAL_TOL_BY_BASIN = {"delaware": 0.25, "midland": 0.40}
 REP_LOW_N = 3
+REP_BASIN_LOOKUP_M = 8047.0  # 5 mi — basin is coarse, robust in sparse areas
 
 # Comparison series grid: Novi-native 30-day periods, 600 of them
 # (~49.3 yr) — the tail beyond the ~30-yr monthly forecast comes from
@@ -70,6 +78,10 @@ class RepSet:
     low_n: bool
     intel_vintage: str | None  # vintage recorded at narvi save; None = fallback
     source: str  # "persisted" | "fallback"
+    # ll tolerance the neighborhood was selected with (per-basin since the
+    # 2026-07-30 amendment). None for self mode (tolerance n/a) and for
+    # persisted payloads that predate the key.
+    lateral_tol: float | None = None
 
 
 _VINTAGE_SQL = text("SELECT curated.intel_vintage_date()::text")
@@ -94,6 +106,19 @@ _STICK_META_SQL = text(
     SELECT il.stick_id, il.unique_id, il.category, il.ll_ft, il.basin
     FROM curated.intel_locations il
     WHERE il.stick_id = ANY(:ids)
+    """
+)
+
+# Modal basin of the intel sticks around a well — hits the expression
+# geography index (sql/26 pattern); basin is coarse, so the lookup radius
+# is wide on purpose.
+_REP_BASIN_SQL = text(
+    """
+    SELECT basin
+    FROM curated.intel_locations
+    WHERE ST_DWithin(wellstick_geom::geography,
+                     ST_GeomFromEWKT(:legs)::geography, :radius)
+    GROUP BY basin ORDER BY COUNT(*) DESC LIMIT 1
     """
 )
 
@@ -152,12 +177,14 @@ def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
     rep = well.novi_rep
     if rep and isinstance(rep.get("stick_ids"), list):
         ids = tuple(int(s) for s in rep["stick_ids"])
+        raw_tol = rep.get("lateral_tol")
         return RepSet(
             mode=str(rep.get("mode") or "neighborhood"),
             stick_ids=ids,
             low_n=bool(rep.get("low_n", len(ids) < REP_LOW_N)),
             intel_vintage=rep.get("intel_vintage"),
             source="persisted",
+            lateral_tol=float(raw_tol) if raw_tol is not None else None,
         )
 
     if provenance in ("pud", "res"):
@@ -178,14 +205,19 @@ def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
     if not well.legs_lonlat or not well.formation or not well.completed_lateral_ft:
         log.info("novi_rep_fallback_ungeoreferenced", well=well.well_name)
         return None
+    legs = _legs_ewkt(well.legs_lonlat)
+    basin = wh.execute(
+        _REP_BASIN_SQL, {"legs": legs, "radius": REP_BASIN_LOOKUP_M}
+    ).scalar()
+    tol = REP_LATERAL_TOL_BY_BASIN.get(str(basin), REP_LATERAL_TOL)
     rows = wh.execute(
         _REP_STICKS_SQL,
         {
-            "legs": _legs_ewkt(well.legs_lonlat),
+            "legs": legs,
             "bench": _bench_code(well.formation),
             "lateral": well.completed_lateral_ft,
             "radius": REP_RADIUS_M,
-            "tol": REP_LATERAL_TOL,
+            "tol": tol,
         },
     ).all()
     ids = tuple(int(r[0]) for r in rows)
@@ -195,6 +227,7 @@ def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
         low_n=len(ids) < REP_LOW_N,
         intel_vintage=None,
         source="fallback",
+        lateral_tol=tol,
     )
 
 
