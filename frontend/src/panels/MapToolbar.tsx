@@ -19,6 +19,10 @@ export function MapToolbar() {
   const setShowBlocks = useMapStore((s) => s.setShowBlocks);
   const showSections = useMapStore((s) => s.showSections);
   const setShowSections = useMapStore((s) => s.setShowSections);
+  const showBasementFaults = useMapStore((s) => s.showBasementFaults);
+  const setShowBasementFaults = useMapStore((s) => s.setShowBasementFaults);
+  const showSnfFaults = useMapStore((s) => s.showSnfFaults);
+  const setShowSnfFaults = useMapStore((s) => s.setShowSnfFaults);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const [dealModalOpen, setDealModalOpen] = useState(false);
 
@@ -70,6 +74,28 @@ export function MapToolbar() {
             onChange={(e) => setShowSections(e.target.checked)}
           />
           Sections
+        </label>
+        <label
+          className="chk-inline"
+          title="Basement-rooted fault traces — Horne et al. 2022 (BEG), top-Ellenburger intersection"
+        >
+          <input
+            type="checkbox"
+            checked={showBasementFaults}
+            onChange={(e) => setShowBasementFaults(e.target.checked)}
+          />
+          Bsmt faults
+        </label>
+        <label
+          className="chk-inline"
+          title="Shallow normal fault traces — Horne 2022 (BEG)"
+        >
+          <input
+            type="checkbox"
+            checked={showSnfFaults}
+            onChange={(e) => setShowSnfFaults(e.target.checked)}
+          />
+          SNF
         </label>
       </div>
       <div className="toolbar-group">

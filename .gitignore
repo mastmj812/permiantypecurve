@@ -36,6 +36,8 @@ infra/basemap/permian.pmtiles
 infra/basemap/plss_tx_nm.geojson
 infra/basemap/blocks_tx_nm.geojson
 infra/basemap/sections_tx_nm.geojson
+infra/basemap/faults_basement.geojson
+infra/basemap/faults_snf.geojson
 # OTLS source extracts — converted into blocks_tx_nm.geojson /
 # sections_tx_nm.geojson by infra/basemap/convert_shapefiles.{ps1,sh}.
 # Multi-MB raw inputs; regenerate from the upstream OTLS download

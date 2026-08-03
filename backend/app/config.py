@@ -28,6 +28,14 @@ class Settings(BaseSettings):
         default=Path("/app/basemap/sections_tx_nm.geojson"),
         alias="SECTIONS_GEOJSON_PATH",
     )
+    basement_faults_geojson_path: Path = Field(
+        default=Path("/app/basemap/faults_basement.geojson"),
+        alias="BASEMENT_FAULTS_GEOJSON_PATH",
+    )
+    snf_faults_geojson_path: Path = Field(
+        default=Path("/app/basemap/faults_snf.geojson"),
+        alias="SNF_FAULTS_GEOJSON_PATH",
+    )
 
     # Read-only DSN for engineering_db's curated.* materialized views. Powers
     # the warehouse_client data layer (replaces enverus_client post-cutover).
