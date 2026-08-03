@@ -9,7 +9,7 @@
 // look like better wells when they're really just longer. Ratio modes
 // ignore (and hide) the normalize toggle: lateral length cancels.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 
 import type { WellDetailLite } from "../api/wells";
 import {
@@ -263,6 +263,7 @@ export function InspectProductionCharts({
           }
           series={wellsWithData}
           accessor={(s) => s.rate}
+          robustScale={isRatio}
           selectedApi10s={selectedApi10s}
           cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
@@ -283,6 +284,7 @@ export function InspectProductionCharts({
           }
           series={wellsWithData}
           accessor={(s) => s.cum}
+          robustScale={isRatio}
           selectedApi10s={selectedApi10s}
           cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
@@ -300,6 +302,7 @@ function OverlayChart({
   yLabel,
   series,
   accessor,
+  robustScale = false,
   selectedApi10s,
   cohortApi10s,
   hoveredApi10 = null,
@@ -311,6 +314,12 @@ function OverlayChart({
   yLabel: string;
   series: WellSeries[];
   accessor: (s: WellSeries) => Array<number | null>;
+  // Percentile-fit the Y axis instead of max-fit. Used by the GOR/WOR
+  // ratio modes, where one dirty month (near-zero oil against normal
+  // gas/water) can put a 10^5–10^6 point on a linear axis and flatten
+  // every real curve. The data itself is untouched — spikes clip off
+  // the top of the plot and get counted in an annotation.
+  robustScale?: boolean;
   selectedApi10s?: Set<string>;
   cohortApi10s?: Set<string>;
   hoveredApi10?: string | null;
@@ -318,6 +327,9 @@ function OverlayChart({
   width?: number;
   height?: number;
 }) {
+  // Unique per chart instance — two charts render side by side, and
+  // duplicate clipPath ids would silently clip both against one rect.
+  const clipId = useId();
   const plot = {
     x: PAD.left,
     y: PAD.top,
@@ -328,16 +340,32 @@ function OverlayChart({
   // X = max series length across the cohort (months since first
   // prod). Auto-fit Y to the visible max (with a small headroom).
   let xMax = 0;
-  let yMax = 0;
+  let dataMax = 0;
+  const pooled: number[] = [];
   for (const s of series) {
     const arr = accessor(s);
     if (arr.length > xMax) xMax = arr.length;
     for (const v of arr) {
-      if (v != null && v > yMax) yMax = v;
+      if (v == null) continue;
+      if (v > dataMax) dataMax = v;
+      if (robustScale) pooled.push(v);
     }
   }
   if (xMax === 0) xMax = 1;
-  yMax = yMax * 1.05 || 1;
+
+  // Smart scaling: fit the axis to the P98 of all plotted points when
+  // the true max sits well above it (dirty data), otherwise keep the
+  // exact max-fit so clean cohorts never clip. Small samples always
+  // max-fit — a percentile of a handful of points is noise.
+  let yFit = dataMax;
+  if (robustScale && pooled.length >= 10) {
+    const p98 = quantile(pooled, 0.98);
+    if (p98 > 0 && dataMax > p98 * 1.5) yFit = p98;
+  }
+  const yMax = yFit * 1.05 || 1;
+  const clippedCount = robustScale
+    ? pooled.reduce((n, v) => (v > yMax ? n + 1 : n), 0)
+    : 0;
 
   const xScale = (v: number) => plot.x + (v / xMax) * plot.w;
   const yScale = (v: number) =>
@@ -424,7 +452,16 @@ function OverlayChart({
 
           Sort so the hovered well's polyline draws last (on top of its
           peers); selection toggles per-well opacity to match the
-          gun-barrel's dimmed-circle convention. */}
+          gun-barrel's dimmed-circle convention.
+
+          Clipped to the plot rect so off-scale points (robustScale)
+          run off the top edge instead of drawing over the title. */}
+      <defs>
+        <clipPath id={clipId}>
+          <rect x={plot.x} y={plot.y} width={plot.w} height={plot.h} />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${clipId})`}>
       {[...series]
         .sort(
           (a, b) =>
@@ -501,6 +538,23 @@ function OverlayChart({
             </g>
           );
         })}
+      </g>
+
+      {/* Off-scale flag — the honest half of robust scaling: the axis
+          ignores the top outliers, but the chart says how many points
+          left the frame so a spiky well reads as dirty data, not as
+          missing data. */}
+      {clippedCount > 0 && (
+        <text
+          x={plot.x + plot.w - 4}
+          y={plot.y + 10}
+          textAnchor="end"
+          fontSize="9"
+          fill="#b91c1c"
+        >
+          ▲ {clippedCount} pt{clippedCount === 1 ? "" : "s"} off-scale
+        </text>
+      )}
 
       {/* Axis labels */}
       <text
@@ -527,6 +581,18 @@ function OverlayChart({
 }
 
 // ---------------- formatting ----------------
+
+// Linear-interpolated quantile (numpy default). Sorts a copy — pooled
+// arrays here are a few thousand points at most.
+function quantile(values: number[], q: number): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  const frac = pos - lo;
+  return sorted[lo]! * (1 - frac) + sorted[hi]! * frac;
+}
 
 function formatTick(v: number): string {
   const abs = Math.abs(v);
