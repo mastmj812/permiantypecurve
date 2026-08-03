@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
-# Convert block + section shapefiles to GeoJSON for the map overlays.
+# Convert block + section + fault shapefiles to GeoJSON for the map overlays.
 #
 # Uses the osgeo/gdal:alpine-small Docker image so you don't have to
 # install GDAL on the host. Reprojects to EPSG:4326 (WGS84) for MapLibre.
 #
 # Drop the shapefile bundles (.shp + .dbf + .prj + .shx + .cpg if present)
-# into infra/basemap/ first. The script expects them named blocks.shp and
-# sections.shp by default; pass arguments to override.
+# into infra/basemap/ first. The script expects them named blocks.shp,
+# sections.shp, faults_basement.shp, and faults_snf.shp by default; pass
+# arguments to override. Missing inputs are skipped with a warning, so
+# it's fine to run with only a subset present.
+#
+# Fault sources (BEG / Horne et al., both delivered in UTM 13N):
+#   faults_basement.shp — Horne et al. 2022 DB-CBP BSMT V4 basement-rooted
+#     fault traces (top-Ellenburger HW intersection), doi.org/10.18738/T8/UHOUX8
+#   faults_snf.shp — Horne 2022 shallow normal fault (SNF) traces
 #
 # Usage:
 #   ./infra/basemap/convert_shapefiles.sh
@@ -15,15 +22,23 @@ set -euo pipefail
 
 BLOCKS_SHP="blocks.shp"
 SECTIONS_SHP="sections.shp"
+BASEMENT_FAULTS_SHP="faults_basement.shp"
+SNF_FAULTS_SHP="faults_snf.shp"
 BLOCKS_OUT="blocks_tx_nm.geojson"
 SECTIONS_OUT="sections_tx_nm.geojson"
+BASEMENT_FAULTS_OUT="faults_basement.geojson"
+SNF_FAULTS_OUT="faults_snf.geojson"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --blocks)   BLOCKS_SHP="$2";   shift 2 ;;
     --sections) SECTIONS_SHP="$2"; shift 2 ;;
+    --basement-faults) BASEMENT_FAULTS_SHP="$2"; shift 2 ;;
+    --snf-faults)      SNF_FAULTS_SHP="$2";      shift 2 ;;
     --blocks-out)   BLOCKS_OUT="$2";   shift 2 ;;
     --sections-out) SECTIONS_OUT="$2"; shift 2 ;;
+    --basement-faults-out) BASEMENT_FAULTS_OUT="$2"; shift 2 ;;
+    --snf-faults-out)      SNF_FAULTS_OUT="$2";      shift 2 ;;
     *) echo "Unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -72,11 +87,15 @@ convert_one() {
   echo ""
 }
 
-convert_one "${BLOCKS_SHP}"   "${BLOCKS_OUT}"   "Blocks"
-convert_one "${SECTIONS_SHP}" "${SECTIONS_OUT}" "Sections"
+convert_one "${BLOCKS_SHP}"          "${BLOCKS_OUT}"          "Blocks"
+convert_one "${SECTIONS_SHP}"        "${SECTIONS_OUT}"        "Sections"
+convert_one "${BASEMENT_FAULTS_SHP}" "${BASEMENT_FAULTS_OUT}" "Basement faults"
+convert_one "${SNF_FAULTS_SHP}"      "${SNF_FAULTS_OUT}"      "SNF"
 
 echo "Done. Backend serves at:"
 echo "  GET /api/basemap/blocks_tx_nm.geojson"
 echo "  GET /api/basemap/sections_tx_nm.geojson"
+echo "  GET /api/basemap/faults_basement.geojson"
+echo "  GET /api/basemap/faults_snf.geojson"
 echo ""
-echo "Toggle Blocks / Sections in the map toolbar to see them."
+echo "Toggle each overlay in the map toolbar to see it."

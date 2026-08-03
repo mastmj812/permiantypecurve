@@ -118,7 +118,7 @@ async def head_pmtiles() -> Response:
 
 
 def _serve_geojson(path: Path, missing_hint: str) -> Response:
-    """Shared helper for the three GeoJSON overlay endpoints."""
+    """Shared helper for the GeoJSON overlay endpoints."""
     if not path.is_file():
         log.info("overlay_missing", path=str(path))
         raise HTTPException(
@@ -158,4 +158,22 @@ async def serve_sections() -> Response:
         "Place the source shapefile (.shp + .dbf + .prj + .shx) in "
         "infra/basemap/ and run infra/basemap/convert_shapefiles.ps1 "
         "(or .sh) to convert it to GeoJSON.",
+    )
+
+
+@router.get("/faults_basement.geojson")
+async def serve_basement_faults() -> Response:
+    return _serve_geojson(
+        settings.basement_faults_geojson_path,
+        "Place faults_basement.shp (+ .dbf/.prj/.shx) in infra/basemap/ "
+        "and run infra/basemap/convert_shapefiles.ps1 (or .sh).",
+    )
+
+
+@router.get("/faults_snf.geojson")
+async def serve_snf_faults() -> Response:
+    return _serve_geojson(
+        settings.snf_faults_geojson_path,
+        "Place faults_snf.shp (+ .dbf/.prj/.shx) in infra/basemap/ "
+        "and run infra/basemap/convert_shapefiles.ps1 (or .sh).",
     )

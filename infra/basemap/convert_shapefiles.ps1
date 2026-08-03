@@ -1,11 +1,18 @@
-# Convert block + section shapefiles to GeoJSON for the map overlays.
+# Convert block + section + fault shapefiles to GeoJSON for the map overlays.
 #
 # Uses the osgeo/gdal:alpine-small Docker image so you don't have to
 # install GDAL on the host. Reprojects to EPSG:4326 (WGS84) for MapLibre.
 #
 # Drop the shapefile bundles (.shp + .dbf + .prj + .shx + .cpg if present)
-# into infra/basemap/ first. The script expects them named blocks.shp and
-# sections.shp by default; pass arguments to override.
+# into infra/basemap/ first. The script expects them named blocks.shp,
+# sections.shp, faults_basement.shp, and faults_snf.shp by default; pass
+# arguments to override. Missing inputs are skipped with a warning, so
+# it's fine to run with only a subset present.
+#
+# Fault sources (BEG / Horne et al., both delivered in UTM 13N):
+#   faults_basement.shp — Horne et al. 2022 DB-CBP BSMT V4 basement-rooted
+#     fault traces (top-Ellenburger HW intersection), doi.org/10.18738/T8/UHOUX8
+#   faults_snf.shp — Horne 2022 shallow normal fault (SNF) traces
 #
 # Usage:
 #   .\infra\basemap\convert_shapefiles.ps1
@@ -14,8 +21,12 @@
 param(
     [string]$BlocksShp = "blocks.shp",
     [string]$SectionsShp = "sections.shp",
+    [string]$BasementFaultsShp = "faults_basement.shp",
+    [string]$SnfFaultsShp = "faults_snf.shp",
     [string]$BlocksOut = "blocks_tx_nm.geojson",
-    [string]$SectionsOut = "sections_tx_nm.geojson"
+    [string]$SectionsOut = "sections_tx_nm.geojson",
+    [string]$BasementFaultsOut = "faults_basement.geojson",
+    [string]$SnfFaultsOut = "faults_snf.geojson"
 )
 
 $ErrorActionPreference = "Stop"
@@ -83,11 +94,15 @@ function Convert-One {
     Write-Host ""
 }
 
-Convert-One -InFile $BlocksShp   -OutFile $BlocksOut   -Label "Blocks"
-Convert-One -InFile $SectionsShp -OutFile $SectionsOut -Label "Sections"
+Convert-One -InFile $BlocksShp         -OutFile $BlocksOut         -Label "Blocks"
+Convert-One -InFile $SectionsShp       -OutFile $SectionsOut       -Label "Sections"
+Convert-One -InFile $BasementFaultsShp -OutFile $BasementFaultsOut -Label "Basement faults"
+Convert-One -InFile $SnfFaultsShp      -OutFile $SnfFaultsOut      -Label "SNF"
 
 Write-Host "Done. Backend will now serve them at:"
 Write-Host "  GET /api/basemap/blocks_tx_nm.geojson"
 Write-Host "  GET /api/basemap/sections_tx_nm.geojson"
+Write-Host "  GET /api/basemap/faults_basement.geojson"
+Write-Host "  GET /api/basemap/faults_snf.geojson"
 Write-Host ""
-Write-Host "Toggle Blocks / Sections in the map toolbar to see them."
+Write-Host "Toggle each overlay in the map toolbar to see it."

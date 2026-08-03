@@ -133,6 +133,10 @@ export interface MapState {
   setShowSections: (v: boolean) => void;
   showWellsticks: boolean;
   setShowWellsticks: (v: boolean) => void;
+  showBasementFaults: boolean;
+  setShowBasementFaults: (v: boolean) => void;
+  showSnfFaults: boolean;
+  setShowSnfFaults: (v: boolean) => void;
 
   // ---- acreage polygons (uploaded shapefiles) ----
   // GeoJSON FeatureCollection cached after a fetch from
@@ -252,6 +256,10 @@ export const useMapStore = create<MapState>((set) => ({
   setShowSections: (showSections) => set({ showSections }),
   showWellsticks: true,
   setShowWellsticks: (showWellsticks) => set({ showWellsticks }),
+  showBasementFaults: false,
+  setShowBasementFaults: (showBasementFaults) => set({ showBasementFaults }),
+  showSnfFaults: false,
+  setShowSnfFaults: (showSnfFaults) => set({ showSnfFaults }),
 
   dealPolygons: null,
   setDealPolygons: (dealPolygons) => set({ dealPolygons }),

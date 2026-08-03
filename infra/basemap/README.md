@@ -51,3 +51,17 @@ If they don't include a recognized label key (`BLOCK_NO`, `BLOCK`,
 
 Blocks render at zoom ≥ 8; sections at zoom ≥ 11. Toggle each with the
 checkboxes in the map's top toolbar.
+
+## Fault overlays (BEG / Horne et al.)
+
+Two line overlays, same converter, no zoom gate:
+
+- `faults_basement.shp` → `faults_basement.geojson` — basement-rooted
+  fault traces of the Delaware Basin + Central Basin Platform (Horne
+  et al. 2022 V4, top-Ellenburger hanging-wall intersection). Source:
+  Texas Data Repository, doi.org/10.18738/T8/UHOUX8.
+- `faults_snf.shp` → `faults_snf.geojson` — shallow normal fault (SNF)
+  traces (Horne 2022). Delivered as `Horne_2022_SNF_Traces.zip`.
+
+Both ship in UTM zone 13N (WGS84 datum); the converter reprojects to
+EPSG:4326. Toggle with "Bsmt faults" / "SNF" in the map toolbar.

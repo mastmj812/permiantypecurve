@@ -67,6 +67,15 @@ const SECTIONS_LINE_LAYER = "sections-line";
 const SECTIONS_LABEL_LAYER = "sections-label";
 const SECTIONS_MIN_ZOOM = 11;
 
+// Fault-trace overlays (BEG / Horne et al. line shapefiles, converted by
+// infra/basemap/convert_shapefiles.{ps1,sh}). Line-only — no fill or
+// label layers, and no minzoom gate: ~750 + ~420 traces render fine at
+// basin scale, which is exactly where you want to see the structure.
+const BASEMENT_FAULTS_SOURCE_ID = "basement-faults";
+const BASEMENT_FAULTS_LINE_LAYER = "basement-faults-line";
+const SNF_FAULTS_SOURCE_ID = "snf-faults";
+const SNF_FAULTS_LINE_LAYER = "snf-faults-line";
+
 // MapLibre text-field expression — try the most common BLM/abstract
 // property names in order. Blank string at the end means "no label" if
 // none of these keys are present, which keeps the layer from throwing.
@@ -150,6 +159,8 @@ export function MapView() {
   const [tilesMissing, setTilesMissing] = useState(false);
   const [blocksError, setBlocksError] = useState<string | null>(null);
   const [sectionsError, setSectionsError] = useState<string | null>(null);
+  const [basementFaultsError, setBasementFaultsError] = useState<string | null>(null);
+  const [snfFaultsError, setSnfFaultsError] = useState<string | null>(null);
   // Style is loaded async; secondary effects that touch sources/layers
   // must wait for this to flip true (or MapLibre throws
   // "Style is not done loading").
@@ -159,6 +170,8 @@ export function MapView() {
   const drawMode = useMapStore((s) => s.drawMode);
   const showBlocks = useMapStore((s) => s.showBlocks);
   const showSections = useMapStore((s) => s.showSections);
+  const showBasementFaults = useMapStore((s) => s.showBasementFaults);
+  const showSnfFaults = useMapStore((s) => s.showSnfFaults);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const dealVisibility = useMapStore((s) => s.dealVisibility);
@@ -552,6 +565,101 @@ export function MapView() {
     }
   }, [showSections, styleLoaded]);
 
+  // -------------- Basement-fault overlay toggle --------------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (showBasementFaults) {
+      if (!map.getSource(BASEMENT_FAULTS_SOURCE_ID)) {
+        fetch("/api/basemap/faults_basement.geojson")
+          .then((r) => {
+            if (r.status === 404) {
+              setBasementFaultsError(
+                "Basement-faults GeoJSON not loaded — run infra/basemap/convert_shapefiles.{ps1,sh}.",
+              );
+              useMapStore.getState().setShowBasementFaults(false);
+              return null;
+            }
+            if (!r.ok) throw new Error(`Basement faults fetch ${r.status}`);
+            return r.json() as Promise<GeoJSON.GeoJSON>;
+          })
+          .then((data) => {
+            if (!data) return;
+            setBasementFaultsError(null);
+            map.addSource(BASEMENT_FAULTS_SOURCE_ID, { type: "geojson", data });
+            map.addLayer({
+              id: BASEMENT_FAULTS_LINE_LAYER,
+              type: "line",
+              source: BASEMENT_FAULTS_SOURCE_ID,
+              paint: {
+                "line-color": "#b91c1c",
+                "line-width": 1.4,
+                "line-opacity": 0.8,
+              },
+            });
+          })
+          .catch((e) => {
+            console.error(e);
+            setBasementFaultsError(String(e));
+          });
+      } else if (map.getLayer(BASEMENT_FAULTS_LINE_LAYER)) {
+        map.setLayoutProperty(BASEMENT_FAULTS_LINE_LAYER, "visibility", "visible");
+      }
+    } else if (map.getLayer(BASEMENT_FAULTS_LINE_LAYER)) {
+      map.setLayoutProperty(BASEMENT_FAULTS_LINE_LAYER, "visibility", "none");
+    }
+  }, [showBasementFaults, styleLoaded]);
+
+  // -------------- Shallow-normal-fault (SNF) overlay toggle --------------
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (showSnfFaults) {
+      if (!map.getSource(SNF_FAULTS_SOURCE_ID)) {
+        fetch("/api/basemap/faults_snf.geojson")
+          .then((r) => {
+            if (r.status === 404) {
+              setSnfFaultsError(
+                "SNF GeoJSON not loaded — run infra/basemap/convert_shapefiles.{ps1,sh}.",
+              );
+              useMapStore.getState().setShowSnfFaults(false);
+              return null;
+            }
+            if (!r.ok) throw new Error(`SNF fetch ${r.status}`);
+            return r.json() as Promise<GeoJSON.GeoJSON>;
+          })
+          .then((data) => {
+            if (!data) return;
+            setSnfFaultsError(null);
+            map.addSource(SNF_FAULTS_SOURCE_ID, { type: "geojson", data });
+            // Dashed to distinguish from the solid basement traces where
+            // the two sets overlap (Waha–Lockridge, Culberson-Reeves).
+            map.addLayer({
+              id: SNF_FAULTS_LINE_LAYER,
+              type: "line",
+              source: SNF_FAULTS_SOURCE_ID,
+              paint: {
+                "line-color": "#d97706",
+                "line-width": 1.4,
+                "line-opacity": 0.9,
+                "line-dasharray": [2, 2],
+              },
+            });
+          })
+          .catch((e) => {
+            console.error(e);
+            setSnfFaultsError(String(e));
+          });
+      } else if (map.getLayer(SNF_FAULTS_LINE_LAYER)) {
+        map.setLayoutProperty(SNF_FAULTS_LINE_LAYER, "visibility", "visible");
+      }
+    } else if (map.getLayer(SNF_FAULTS_LINE_LAYER)) {
+      map.setLayoutProperty(SNF_FAULTS_LINE_LAYER, "visibility", "none");
+    }
+  }, [showSnfFaults, styleLoaded]);
+
   // -------------- Deal-acreage polygons --------------
   // One-shot fetch into the store if not already loaded. The admin
   // modal's refresh-after-mutation flow goes through the store too,
@@ -641,6 +749,16 @@ export function MapView() {
       {sectionsError && (
         <div className="map-warning" style={{ top: 168 }}>
           <strong>Sections overlay:</strong> {sectionsError}
+        </div>
+      )}
+      {basementFaultsError && (
+        <div className="map-warning" style={{ top: 272 }}>
+          <strong>Basement-faults overlay:</strong> {basementFaultsError}
+        </div>
+      )}
+      {snfFaultsError && (
+        <div className="map-warning" style={{ top: 376 }}>
+          <strong>SNF overlay:</strong> {snfFaultsError}
         </div>
       )}
     </div>
