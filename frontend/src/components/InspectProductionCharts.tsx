@@ -3,10 +3,11 @@
 // one set of axes, first-prod-aligned (x = months since first prod),
 // colored to match the gun-barrel circles (by formation).
 //
-// Toggle: stream (oil/gas/water) and normalize-per-10kft. The user
-// asked for per-10,000-ft lateral as the default — the documented
-// trap is that raw rates make longer laterals look like better wells
-// when they're really just longer.
+// Toggle: plot mode (oil/gas/water streams, plus GOR/WOR ratios) and
+// normalize-per-10kft. The user asked for per-10,000-ft lateral as the
+// default — the documented trap is that raw rates make longer laterals
+// look like better wells when they're really just longer. Ratio modes
+// ignore (and hide) the normalize toggle: lateral length cancels.
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -42,7 +43,25 @@ export interface InspectProductionChartsProps {
 }
 
 const PAD = { top: 24, right: 16, bottom: 36, left: 56 };
-const STREAMS: Stream[] = ["oil", "gas", "water"];
+
+// Plot modes: the three raw streams plus the two oil-denominator
+// ratios. GOR/WOR are derived client-side from the same per-well
+// curves bundle — no extra fetch.
+type PlotMode = Stream | "gor" | "wor";
+const PLOT_MODES: PlotMode[] = ["oil", "gas", "water", "gor", "wor"];
+
+// Ratio of two calendar-day rates. Both rates share the same day-count
+// denominator, so this collapses to the monthly volume ratio — downtime
+// cancels instead of distorting the ratio. Null when oil is zero/absent
+// (shut-in months) so the polyline breaks rather than spiking.
+function streamRatio(
+  num: number | null | undefined,
+  denom: number | null,
+  scale: number,
+): number | null {
+  if (num == null || denom == null || denom <= 0) return null;
+  return (num * scale) / denom;
+}
 
 interface WellSeries {
   api10: string;
@@ -62,7 +81,7 @@ export function InspectProductionCharts({
   hoveredApi10 = null,
   onHover,
 }: InspectProductionChartsProps) {
-  const [stream, setStream] = useState<Stream>("oil");
+  const [mode, setMode] = useState<PlotMode>("oil");
   const [normalize, setNormalize] = useState<boolean>(true);
   const [curves, setCurves] = useState<
     Map<string, WellCurvesResponse> | null
@@ -106,31 +125,51 @@ export function InspectProductionCharts({
     };
   }, [api10s]);
 
-  // Build per-well aligned series for the active stream + normalize
-  // mode. Memoized so toggling normalize doesn't re-fetch.
+  // Build per-well aligned series for the active mode + normalize
+  // setting. Memoized so toggling normalize doesn't re-fetch.
   const series = useMemo<WellSeries[]>(() => {
     if (!curves) return [];
     const out: WellSeries[] = [];
     for (const api10 of api10s) {
       const resp = curves.get(api10);
       if (!resp) continue;
-      const sc = resp.streams.find((s) => s.stream === stream);
-      if (!sc) continue;
       const meta = wellsByApi10.get(api10) ?? null;
-      const lateralFt = meta?.lateral_ft ?? null;
-      // Normalize per 10kft when requested AND lateral is known.
-      // Unknown-lateral wells fall back to raw so a missing length
-      // doesn't yank them off the chart (an open question the user
-      // didn't litigate; raw is the conservative default).
-      const norm =
-        normalize && lateralFt && lateralFt > 0 ? 10_000 / lateralFt : 1;
 
-      const rate: Array<number | null> = sc.history_rate.map((v) =>
-        v == null ? null : v * norm,
-      );
-      const cum: Array<number | null> = sc.history_cum.map((v) =>
-        v == null ? null : v * norm,
-      );
+      let rate: Array<number | null>;
+      let cum: Array<number | null>;
+      if (mode === "gor" || mode === "wor") {
+        // Index-wise zip is safe: the backend builds all three streams
+        // from the same prod_rows loop, so `months` is identical across
+        // streams for a given well. GOR ×1000 converts MCF/BBL → SCF/BBL
+        // (the conventional unit); WOR is dimensionless BBL/BBL.
+        const oil = resp.streams.find((s) => s.stream === "oil");
+        const num = resp.streams.find(
+          (s) => s.stream === (mode === "gor" ? "gas" : "water"),
+        );
+        if (!oil || !num) continue;
+        const scale = mode === "gor" ? 1000 : 1;
+        rate = oil.history_rate.map((o, i) =>
+          streamRatio(num.history_rate[i], o, scale),
+        );
+        // Cum ratio = producing GOR/WOR to date (cum gas over cum oil),
+        // not a running integral of the monthly ratio.
+        cum = oil.history_cum.map((o, i) =>
+          streamRatio(num.history_cum[i], o, scale),
+        );
+      } else {
+        const sc = resp.streams.find((s) => s.stream === mode);
+        if (!sc) continue;
+        const lateralFt = meta?.lateral_ft ?? null;
+        // Normalize per 10kft when requested AND lateral is known.
+        // Unknown-lateral wells fall back to raw so a missing length
+        // doesn't yank them off the chart (an open question the user
+        // didn't litigate; raw is the conservative default).
+        const norm =
+          normalize && lateralFt && lateralFt > 0 ? 10_000 / lateralFt : 1;
+        rate = sc.history_rate.map((v) => (v == null ? null : v * norm));
+        cum = sc.history_cum.map((v) => (v == null ? null : v * norm));
+      }
+
       out.push({
         api10,
         // formation_blueox code drives the series color (colorForFormation
@@ -141,7 +180,7 @@ export function InspectProductionCharts({
       });
     }
     return out;
-  }, [curves, api10s, stream, normalize, wellsByApi10]);
+  }, [curves, api10s, mode, normalize, wellsByApi10]);
 
   // Show the overlay for any well that has non-null production. A single
   // well renders its own rate/cum curve (no comparison, but still a valid
@@ -166,47 +205,62 @@ export function InspectProductionCharts({
     );
   }
 
+  const isRatio = mode === "gor" || mode === "wor";
+  const ratioUnits = mode === "gor" ? "scf/bbl" : "bbl/bbl";
+
   return (
     <div className="inspect-charts">
       <div className="inspect-charts-controls">
         <div className="inspect-charts-control-group">
           <span className="inspect-charts-control-label">Stream</span>
-          {STREAMS.map((s) => (
+          {PLOT_MODES.map((m) => (
             <button
-              key={s}
+              key={m}
               type="button"
               className={`inspect-charts-pill ${
-                stream === s ? "is-active" : ""
+                mode === m ? "is-active" : ""
               }`}
-              onClick={() => setStream(s)}
+              onClick={() => setMode(m)}
             >
-              {s}
+              {m === "gor" || m === "wor" ? m.toUpperCase() : m}
             </button>
           ))}
         </div>
-        <div className="inspect-charts-control-group">
-          <span className="inspect-charts-control-label">Scale</span>
-          <button
-            type="button"
-            className={`inspect-charts-pill ${normalize ? "is-active" : ""}`}
-            onClick={() => setNormalize(true)}
-          >
-            per 10,000 ft
-          </button>
-          <button
-            type="button"
-            className={`inspect-charts-pill ${!normalize ? "is-active" : ""}`}
-            onClick={() => setNormalize(false)}
-          >
-            raw
-          </button>
-        </div>
+        {!isRatio && (
+          <div className="inspect-charts-control-group">
+            <span className="inspect-charts-control-label">Scale</span>
+            <button
+              type="button"
+              className={`inspect-charts-pill ${normalize ? "is-active" : ""}`}
+              onClick={() => setNormalize(true)}
+            >
+              per 10,000 ft
+            </button>
+            <button
+              type="button"
+              className={`inspect-charts-pill ${!normalize ? "is-active" : ""}`}
+              onClick={() => setNormalize(false)}
+            >
+              raw
+            </button>
+          </div>
+        )}
       </div>
 
       <div className="inspect-charts-row">
         <OverlayChart
-          title={`${stream.toUpperCase()} rate vs. months from first prod`}
-          yLabel={normalize ? "rate / 10kft" : "rate"}
+          title={
+            isRatio
+              ? `${mode.toUpperCase()} vs. months from first prod`
+              : `${mode.toUpperCase()} rate vs. months from first prod`
+          }
+          yLabel={
+            isRatio
+              ? `${mode.toUpperCase()} (${ratioUnits})`
+              : normalize
+                ? "rate / 10kft"
+                : "rate"
+          }
           series={wellsWithData}
           accessor={(s) => s.rate}
           selectedApi10s={selectedApi10s}
@@ -215,8 +269,18 @@ export function InspectProductionCharts({
           onHover={onHover}
         />
         <OverlayChart
-          title={`${stream.toUpperCase()} cum vs. months from first prod`}
-          yLabel={normalize ? "cum / 10kft" : "cum"}
+          title={
+            isRatio
+              ? `Cum ${mode.toUpperCase()} vs. months from first prod`
+              : `${mode.toUpperCase()} cum vs. months from first prod`
+          }
+          yLabel={
+            isRatio
+              ? `cum ${mode.toUpperCase()} (${ratioUnits})`
+              : normalize
+                ? "cum / 10kft"
+                : "cum"
+          }
           series={wellsWithData}
           accessor={(s) => s.cum}
           selectedApi10s={selectedApi10s}
