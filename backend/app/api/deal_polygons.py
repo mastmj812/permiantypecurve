@@ -1,10 +1,14 @@
 """Deal-acreage polygon endpoints.
 
   POST /api/deals/polygons/upload-shapefile
-      body: multipart .zip containing .shp + .dbf (+ .prj if available)
-      → parse shapes, reproject to EPSG:4326 via PostGIS ST_Transform,
+      body: multipart .zip containing .shp + .dbf (+ .prj if available),
+      OR a GeoPackage .gpkg (dispatch is on file magic, not extension —
+      the route name predates gpkg support and is kept for API stability)
+      → parse features, reproject to EPSG:4326 via PostGIS ST_Transform,
         insert one row per feature with deal_id=NULL (user links via
-        the admin modal afterward).
+        the admin modal afterward). gpkg attributes (Type=DSU/Tract,
+        depth/WI columns) land verbatim in the attributes JSONB plus a
+        "gpkg_layer" key.
 
   GET  /api/deals/polygons
       → list all polygons with their attributes + assigned deal name.
@@ -42,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Deal, DealPolygon
 from app.db.session import get_session
+from app.gpkg_reader import pick_label, read_gpkg, sniff_format
 
 router = APIRouter(prefix="/deals/polygons", tags=["deals"])
 log = get_logger("api.deal_polygons")
@@ -227,6 +232,26 @@ def _jsonable(v: Any) -> Any:
     return str(v)
 
 
+def _parse_gpkg(data: bytes) -> list[tuple[str, str, dict[str, Any], int]]:
+    """GeoPackage -> per-feature (name, wkt, attributes, src_epsg).
+
+    ALL rows are ingested — DSU and Tract alike; the JSONB attributes keep the
+    Type discriminator, plus an injected "gpkg_layer" key for provenance.
+    WKT comes from shapely, so interior rings survive (unlike the legacy
+    ``_shape_to_wkt`` path, which is frozen as-is). Labels use the gpkg
+    whitelist picker, NOT the legacy first-non-numeric ``_pick_label`` (which
+    would happily label a feature by its County column). src_epsg is per
+    feature because layers carry their own CRS."""
+    features: list[tuple[str, str, dict[str, Any], int]] = []
+    for layer in read_gpkg(data):
+        epsg = layer.crs.to_epsg() or 4326
+        for f in layer.features:
+            attrs = {**f.attributes, "gpkg_layer": layer.table_name}
+            name = pick_label(f.attributes, f"{layer.table_name} {f.fid}")
+            features.append((name[:255], f.geometry.wkt, attrs, int(epsg)))
+    return features
+
+
 # =========================== endpoints ===========================
 
 
@@ -235,30 +260,44 @@ async def upload_shapefile(
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> UploadResponse:
-    """Parse the uploaded zip and insert one ``deal_polygons`` row per
-    feature. All polygons land with ``deal_id=NULL``; the user links
-    them via PATCH from the admin modal afterwards."""
+    """Parse the uploaded file (.zip shapefile or .gpkg GeoPackage — sniffed
+    by magic bytes) and insert one ``deal_polygons`` row per feature. All
+    polygons land with ``deal_id=NULL``; the user links them via PATCH from
+    the admin modal afterwards."""
     raw = await file.read()
-    try:
-        features, source_epsg = _parse_shapefile_zip(raw)
-    except HTTPException:
-        raise
-    except Exception as e:  # noqa: BLE001
-        log.exception("shapefile_parse_failed", filename=file.filename)
-        raise HTTPException(
-            status_code=400, detail=f"failed to parse shapefile: {e}"
-        ) from e
-
-    if not features:
+    kind = sniff_format(raw)
+    if kind == "unknown":
         raise HTTPException(
             status_code=400,
-            detail="no polygon features found in the shapefile",
+            detail="upload a zipped shapefile (.zip) or a GeoPackage (.gpkg)",
+        )
+    try:
+        if kind == "gpkg":
+            rows = _parse_gpkg(raw)
+        else:
+            features, zip_epsg = _parse_shapefile_zip(raw)
+            # PostGIS handles the reprojection at insert time. When the .prj
+            # was missing/unrecognized we assume 4326 and skip the transform —
+            # better than silently emitting bogus coordinates.
+            rows = [(n, w, a, zip_epsg if zip_epsg is not None else 4326) for n, w, a in features]
+    except HTTPException:
+        raise
+    except ValueError as e:  # read_gpkg's not-a-gpkg / no-polygons errors
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except Exception as e:  # noqa: BLE001
+        log.exception("deal_upload_parse_failed", filename=file.filename, kind=kind)
+        raise HTTPException(status_code=400, detail=f"failed to parse upload: {e}") from e
+
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="no polygon features found in the upload",
         )
 
-    # PostGIS handles the reprojection at insert time. When source_epsg
-    # is unknown we assume 4326 and skip the transform — better than
-    # silently emitting bogus coordinates.
-    effective_src_epsg = source_epsg if source_epsg is not None else 4326
+    # Response field: the single source EPSG when unambiguous (always the case
+    # for zips; gpkg layers can differ), else None.
+    epsgs = {r[3] for r in rows}
+    source_epsg: int | None = epsgs.pop() if len(epsgs) == 1 else None
 
     # Override semantics: re-uploading a shapefile with the same filename
     # replaces its previous features instead of stacking duplicates. Runs
@@ -287,7 +326,7 @@ async def upload_shapefile(
         "CAST(:attributes AS jsonb), :source_file)"
     )
     polygon_ids: list[uuid.UUID] = []
-    for name, wkt, attributes in features:
+    for name, wkt, attributes, src_epsg in rows:
         new_id = uuid.uuid4()
         session.execute(
             insert_sql,
@@ -295,7 +334,7 @@ async def upload_shapefile(
                 "id": str(new_id),
                 "name": name,
                 "wkt": wkt,
-                "src_epsg": effective_src_epsg,
+                "src_epsg": src_epsg,
                 "attributes": json.dumps(attributes),
                 "source_file": file.filename,
             },

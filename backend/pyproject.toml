@@ -30,6 +30,10 @@ dependencies = [
     # actual reprojection via ST_Transform; pyproj just tells us
     # which source EPSG to transform from.
     "pyproj>=3.6",
+    # GeoPackage upload path (app/gpkg_reader.py): shapely decodes the WKB
+    # inside gpkg geometry blobs. Binary wheels only — the "no GDAL system
+    # deps" rule above still holds.
+    "shapely>=2",
     "python-jose[cryptography]>=3.3.0",
     "passlib[bcrypt]>=1.7.4",
     # bcrypt 4.1+ broke API compat with passlib 1.7.4: even short passwords
@@ -48,6 +52,7 @@ dev = [
     "pytest-cov>=5.0.0",
     "httpx>=0.27.2",
     "types-passlib",
+    "types-shapely",
 ]
 
 [build-system]
