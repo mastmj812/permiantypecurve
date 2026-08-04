@@ -349,15 +349,22 @@ function CohortSwitcher({
   onNew: () => void;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
+  const [query, setQuery] = useState("");
   // Close on outside-click. Stays open while clicking inside the menu.
   useEffect(() => {
     if (!open) return;
+    setQuery("");
     function onDocClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     }
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open, onClose]);
+
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? cohorts.filter((c) => c.name.toLowerCase().includes(q))
+    : cohorts;
 
   return (
     <div ref={ref} style={{ position: "relative", display: "inline-block" }}>
@@ -371,24 +378,45 @@ function CohortSwitcher({
       </button>
       {open && (
         <div className="cohort-switcher-menu">
-          {cohorts.length === 0 && (
-            <div className="cohort-switcher-empty">No cohorts yet.</div>
+          {cohorts.length > 0 && (
+            <div className="cohort-switcher-search">
+              <input
+                type="text"
+                autoFocus
+                value={query}
+                placeholder="Search cohorts…"
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") onClose();
+                  const first = filtered[0];
+                  if (e.key === "Enter" && first) onSwitch(first.id);
+                }}
+              />
+            </div>
           )}
-          {cohorts.map((c) => (
-            <button
-              key={c.id}
-              type="button"
-              className={
-                c.id === activeId
-                  ? "cohort-switcher-item active"
-                  : "cohort-switcher-item"
-              }
-              onClick={() => onSwitch(c.id)}
-            >
-              <span className="cohort-switcher-name">{c.name}</span>
-              <span className="muted">{c.api10s.length}</span>
-            </button>
-          ))}
+          <div className="cohort-switcher-list">
+            {cohorts.length === 0 && (
+              <div className="cohort-switcher-empty">No cohorts yet.</div>
+            )}
+            {cohorts.length > 0 && filtered.length === 0 && (
+              <div className="cohort-switcher-empty">No matches.</div>
+            )}
+            {filtered.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                className={
+                  c.id === activeId
+                    ? "cohort-switcher-item active"
+                    : "cohort-switcher-item"
+                }
+                onClick={() => onSwitch(c.id)}
+              >
+                <span className="cohort-switcher-name">{c.name}</span>
+                <span className="muted">{c.api10s.length}</span>
+              </button>
+            ))}
+          </div>
           <div className="cohort-switcher-divider" />
           <button
             type="button"

@@ -1192,6 +1192,24 @@ input[type="date"], input[type="number"], input[type="search"] {
   padding: 4px 0;
   z-index: 30;
 }
+/* Search box pinned above the scrollable list; the list itself is
+   height-capped so hundreds of cohorts can't fill the screen. */
+.cohort-switcher-search {
+  padding: 6px 8px 4px;
+}
+.cohort-switcher-search input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+}
+.cohort-switcher-list {
+  max-height: min(320px, 50vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .cohort-switcher-empty {
   padding: 8px 12px;
   color: #94a3b8;
