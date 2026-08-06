@@ -3,6 +3,11 @@
 
 export type WellStatus = "PDP" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKNOWN";
 
+// Novi WellSpacing no-neighbor sentinel: LateralCloserXY == 2800.0
+// means "no same-zone neighbor at first production" (a cap, not a
+// measurement). Mirrors backend wells_api/filters.py.
+export const SPACING_SENTINEL_FT = 2800;
+
 export interface FilterSpec {
   formations: string[];
   operators: string[];
@@ -12,6 +17,12 @@ export interface FilterSpec {
   first_prod_end: string | null;
   lateral_min_ft: number | null;
   lateral_max_ft: number | null;
+  // Same-zone spacing (Novi LateralCloserXY, ft, as-of-first-prod).
+  // Bounds apply only to wells with REAL spacing; NULL + the 2800
+  // sentinel form the "no-neighbor" class re-admitted by the toggle.
+  spacing_min_ft: number | null;
+  spacing_max_ft: number | null;
+  spacing_include_unbounded: boolean;
   // Explicit API10 allow-list. When non-empty, only the map's wells
   // that match one of these api10s are shown. Pasted from an external
   // tool's well-list workflow.
@@ -27,6 +38,9 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   first_prod_end: null,
   lateral_min_ft: null,
   lateral_max_ft: null,
+  spacing_min_ft: null,
+  spacing_max_ft: null,
+  spacing_include_unbounded: false,
   api10s: [],
 };
 

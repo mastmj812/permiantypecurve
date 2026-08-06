@@ -84,6 +84,7 @@ def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
         "bh_geom": _point_or_none(h.bh_lon, h.bh_lat),
         "wellstick": _wellstick_or_none(h.wellstick_wkt),
         "novi_oil_eur": h.novi_oil_eur,
+        "lateral_closer_xy_ft": h.lateral_closer_xy_ft,
         "last_synced_at": now,
     }
 

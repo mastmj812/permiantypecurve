@@ -55,6 +55,11 @@ class FilterSpecBody(BaseModel):
     first_prod_end: date | None = None
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
+    # Same-zone spacing (Novi LateralCloserXY); see FilterSpec for the
+    # NULL / 2800-sentinel "unbounded" semantics.
+    spacing_min_ft: float | None = None
+    spacing_max_ft: float | None = None
+    spacing_include_unbounded: bool = False
     # Allow-list pasted in the FilterPanel. Must be honored here too so a
     # box/lasso select after the user has narrowed the map to a specific
     # well set doesn't reach back and pick up filtered-out wells inside
@@ -76,6 +81,9 @@ class FilterSpecBody(BaseModel):
             first_prod_end=self.first_prod_end,
             lateral_min_ft=self.lateral_min_ft,
             lateral_max_ft=self.lateral_max_ft,
+            spacing_min_ft=self.spacing_min_ft,
+            spacing_max_ft=self.spacing_max_ft,
+            spacing_include_unbounded=self.spacing_include_unbounded,
             api10s=tuple(self.api10s),
         )
 
