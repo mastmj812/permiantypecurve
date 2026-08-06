@@ -70,6 +70,15 @@ class Well(Base):
     )
 
     lateral_ft: Mapped[float | None] = mapped_column(Float)
+    # Novi WellSpacing LateralCloserXY (curated.wells_enriched.
+    # lateral_closer_xy_ft): same-zone lateral offset distance (ft, XY
+    # plane) AS-OF-FIRST-PRODUCTION — never treat as current spacing.
+    # NULL = absent from WellSpacing (standalone candidate). Exactly
+    # 2800.0 is Novi's no-neighbor sentinel/cap (~12% of rows), not a
+    # real distance — the spacing filter groups it with NULL as
+    # "unbounded" (wells_api/filters.py::SPACING_SENTINEL_FT). Indexed
+    # for the map filter predicate.
+    lateral_closer_xy_ft: Mapped[float | None] = mapped_column(Float, index=True)
     proppant_lbs: Mapped[float | None] = mapped_column(Float)
     fluid_bbl: Mapped[float | None] = mapped_column(Float)
     tvd_ft: Mapped[float | None] = mapped_column(Float)

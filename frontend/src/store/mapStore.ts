@@ -140,6 +140,8 @@ export interface MapState {
   setStatuses: (statuses: WellStatus[]) => void;
   setVintageRange: (start: string | null, end: string | null) => void;
   setLateralRange: (min: number | null, max: number | null) => void;
+  setSpacingRange: (min: number | null, max: number | null) => void;
+  setSpacingIncludeUnbounded: (v: boolean) => void;
   setApi10s: (api10s: string[]) => void;
   resetFilters: () => void;
 
@@ -269,6 +271,14 @@ export const useMapStore = create<MapState>((set) => ({
   setLateralRange: (min, max) =>
     set((s) => ({
       filters: { ...s.filters, lateral_min_ft: min, lateral_max_ft: max },
+    })),
+  setSpacingRange: (min, max) =>
+    set((s) => ({
+      filters: { ...s.filters, spacing_min_ft: min, spacing_max_ft: max },
+    })),
+  setSpacingIncludeUnbounded: (spacing_include_unbounded) =>
+    set((s) => ({
+      filters: { ...s.filters, spacing_include_unbounded },
     })),
   setApi10s: (api10s) =>
     set((s) => ({ filters: { ...s.filters, api10s } })),

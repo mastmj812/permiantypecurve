@@ -29,6 +29,7 @@ from app.type_curves.buildup import (
     compute_buildup,
     reason_label,
 )
+from app.wells_api.filters import SPACING_SENTINEL_FT
 
 ROSTER_HEADERS = [
     "api10",
@@ -36,6 +37,7 @@ ROSTER_HEADERS = [
     "operator",
     "first_prod_date",
     "lateral_ft",
+    "spacing_ft",
     "formation",
     "disposition",
     "reason_code",
@@ -58,12 +60,18 @@ def _roster_values(r: BuildupRow) -> list[Any]:
     disposition = (
         r.annotation if r.annotation else r.disposition
     )
+    # Sentinel disclosure: 2800.0 is Novi's no-neighbor cap, not a
+    # measured distance — print the class, not the misleading number.
+    spacing: Any = r.lateral_closer_xy_ft
+    if spacing == SPACING_SENTINEL_FT:
+        spacing = "no neighbor (2800 cap)"
     return [
         r.api10,
         r.name,
         r.operator,
         r.first_prod_date,
         r.lateral_ft,
+        spacing,
         r.formation,
         disposition,
         r.reason_code,
@@ -161,7 +169,7 @@ def write_buildup_sheet(ws: Any, tc: TypeCurve) -> None:
     if b.out_of_universe_included:
         for api10 in b.out_of_universe_included:
             ws.append(
-                [api10, None, None, None, None, None,
+                [api10, None, None, None, None, None, None,
                  "added outside AOI/universe", None, None, None]
             )
 
@@ -192,7 +200,7 @@ def buildup_csv(tc: TypeCurve) -> str:
         w.writerow(_roster_values(r))
     for api10 in b.out_of_universe_included:
         w.writerow(
-            [api10, None, None, None, None, None,
+            [api10, None, None, None, None, None, None,
              "added outside AOI/universe", None, None, None]
         )
     return buf.getvalue()

@@ -25,6 +25,16 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.first_prod_end) params.set("first_prod_end", spec.first_prod_end);
   if (spec.lateral_min_ft != null) params.set("lateral_min_ft", String(spec.lateral_min_ft));
   if (spec.lateral_max_ft != null) params.set("lateral_max_ft", String(spec.lateral_max_ft));
+  if (spec.spacing_min_ft != null) params.set("spacing_min_ft", String(spec.spacing_min_ft));
+  if (spec.spacing_max_ft != null) params.set("spacing_max_ft", String(spec.spacing_max_ft));
+  // Only meaningful alongside a spacing bound; omitted otherwise to
+  // keep the tile-cache key compact.
+  if (
+    spec.spacing_include_unbounded &&
+    (spec.spacing_min_ft != null || spec.spacing_max_ft != null)
+  ) {
+    params.set("spacing_include_unbounded", "true");
+  }
   // api10 allow-list. 14 digits each — 500 of them = ~7.5 KB of query
   // string, still inside typical proxy buffer limits. Beyond that the
   // tile URL risks getting rejected; the FilterPanel input warns at

@@ -209,6 +209,7 @@ def test_waterfall_stage_counts() -> None:
     assert culled == {
         "vintage": 1,
         "lateral": 1,
+        "spacing": 0,  # no spacing bounds in this snapshot
         "filters_other": 1,
         "not_selected": 1,
         "no_peak": 1,
@@ -247,6 +248,62 @@ def test_null_lateral_only_culled_when_bound_set() -> None:
     b2 = compute_buildup(_tc(prov, included))
     w12b = next(r for r in b2.rows if r.api10 == "W12")
     assert w12b.disposition == "not_selected"
+
+
+def test_spacing_stage_culls_outside_range_and_unbounded() -> None:
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_min_ft"] = 400
+    prov["filter_snapshot"]["spacing_max_ft"] = 1000
+    # Base fixture wells get real in-range spacing so they keep their
+    # original dispositions (a missing key reads as NULL → unbounded →
+    # spacing cull, which is the intended semantics but not this test).
+    for w in prov["universe"]["wells"]:
+        w["lateral_closer_xy_ft"] = 800.0
+    # W20: real spacing outside range; W21: sentinel (no neighbor);
+    # W22: absent from WellSpacing (NULL); W23: real spacing in range
+    # but never staged → falls through to not_selected.
+    for api10, spacing in (
+        ("W20", 1600.0), ("W21", 2800.0), ("W22", None), ("W23", 660.0),
+    ):
+        w = _uni_well(api10)
+        w["lateral_closer_xy_ft"] = spacing
+        prov["universe"]["wells"].append(w)
+        prov["universe"]["well_count"] += 1
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    assert by["W20"].disposition == "spacing"  # measured, out of range
+    assert by["W21"].disposition == "spacing"  # sentinel, toggle off
+    assert by["W22"].disposition == "spacing"  # NULL, toggle off
+    assert by["W23"].disposition == "not_selected"
+    culled = {w.stage: w.culled for w in b.waterfall}
+    assert culled["spacing"] == 3
+    labels = dict(b.header.criteria) if b.header else {}
+    assert "spacing_criterion" in labels
+    assert "no-neighbor wells excluded" in labels["spacing_criterion"]
+
+
+def test_spacing_include_unbounded_keeps_sentinel_wells() -> None:
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_min_ft"] = 1500
+    prov["filter_snapshot"]["spacing_include_unbounded"] = True
+    w = _uni_well("W21")
+    w["lateral_closer_xy_ft"] = 2800.0  # sentinel — admitted by toggle
+    prov["universe"]["wells"].append(w)
+    prov["universe"]["well_count"] += 1
+    b = compute_buildup(_tc(prov, included))
+    w21 = next(r for r in b.rows if r.api10 == "W21")
+    # Survives spacing, then falls to not_selected (never staged).
+    assert w21.disposition == "not_selected"
+    labels = dict(b.header.criteria) if b.header else {}
+    assert "no-neighbor wells included" in labels["spacing_criterion"]
+
+
+def test_no_spacing_filter_means_no_spacing_stage() -> None:
+    prov, included = _full_provenance()  # snapshot has no spacing bounds
+    b = compute_buildup(_tc(prov, included))
+    assert all(w.stage != "spacing" for w in b.waterfall) or (
+        next(w for w in b.waterfall if w.stage == "spacing").culled == 0
+    )
 
 
 def test_degraded_empty_provenance() -> None:

@@ -70,6 +70,7 @@ def universe_stmt(
             Well.first_prod_date,
             Well.lateral_ft,
             Well.status,
+            Well.lateral_closer_xy_ft,
         )
         .where(spatial, Well.formation_blueox.in_(formations))
         .order_by(Well.api10)
@@ -118,6 +119,13 @@ def compute_universe(
             ),
             "lateral_ft": float(r.lateral_ft) if r.lateral_ft is not None else None,
             "status": r.status.value if r.status is not None else None,
+            # Verbatim incl. the 2800 no-neighbor sentinel — the
+            # waterfall owns the sentinel semantics at read time.
+            "lateral_closer_xy_ft": (
+                float(r.lateral_closer_xy_ft)
+                if r.lateral_closer_xy_ft is not None
+                else None
+            ),
         }
         for r in rows
     ]

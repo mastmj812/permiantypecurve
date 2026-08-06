@@ -25,12 +25,15 @@ Stage order (each universe well takes the FIRST stage that removes it):
 
   1. vintage          first prod outside [first_prod_start, first_prod_end]
   2. lateral          lateral_ft outside [lateral_min_ft, lateral_max_ft]
-  3. filters_other    status / operator / explicit api10 allow-list
-  4. not_selected     survived the filters but never entered the cohort
-  5. no_peak          forecast batch found no production peak
-  6. short_history    < cutoff months post-peak AND not cohort-transferred
-  7. review_excluded  engineer un-ticked on Review (code + note)
-  8. post_save_removed removed from the saved curve later (code + note)
+  3. spacing          same-zone spacing (LateralCloserXY) outside range,
+                      or unbounded (NULL / 2800-sentinel) while the
+                      include-unbounded toggle was off
+  4. filters_other    status / operator / explicit api10 allow-list
+  5. not_selected     survived the filters but never entered the cohort
+  6. no_peak          forecast batch found no production peak
+  7. short_history    < cutoff months post-peak AND not cohort-transferred
+  8. review_excluded  engineer un-ticked on Review (code + note)
+  9. post_save_removed removed from the saved curve later (code + note)
   → included          the final type-curve cohort
 
 Wells in ``included_api10s`` but OUTSIDE the universe (add-wells flow,
@@ -46,11 +49,13 @@ from typing import Any
 
 from app.db.models import TypeCurve
 from app.type_curves.reason_codes import REVIEW_REASON_CODES
+from app.wells_api.filters import SPACING_SENTINEL_FT
 
 # Stage key → sheet description. Order IS the waterfall order.
 STAGE_DESCRIPTIONS: list[tuple[str, str]] = [
     ("vintage", "First prod outside vintage window"),
     ("lateral", "Lateral length outside range"),
+    ("spacing", "Same-zone spacing outside range / unbounded"),
     ("filters_other", "Status / operator / list filters"),
     ("not_selected", "Not carried into cohort (geo / manual)"),
     ("no_peak", "No production peak found"),
@@ -78,6 +83,9 @@ class BuildupRow:
     reason_code: str | None  # user code for review/post-save stages
     note: str | None
     annotation: str | None = None  # e.g. cohort-transferred marker
+    # Same-zone spacing (verbatim snapshot value; 2800.0 = no-neighbor
+    # sentinel, None = absent from WellSpacing).
+    lateral_closer_xy_ft: float | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +139,25 @@ def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
         out.append(("lateral_criterion", f">= {lat_min:,.0f} ft"))
     elif lat_max is not None:
         out.append(("lateral_criterion", f"<= {lat_max:,.0f} ft"))
+    sp_min, sp_max = fs.get("spacing_min_ft"), fs.get("spacing_max_ft")
+    if sp_min is not None or sp_max is not None:
+        if sp_min is not None and sp_max is not None:
+            rng = f"{sp_min:,.0f} - {sp_max:,.0f} ft"
+        elif sp_min is not None:
+            rng = f">= {sp_min:,.0f} ft"
+        else:
+            rng = f"<= {sp_max:,.0f} ft"
+        unbounded = (
+            "no-neighbor wells included"
+            if fs.get("spacing_include_unbounded")
+            else "no-neighbor wells excluded"
+        )
+        out.append(
+            (
+                "spacing_criterion",
+                f"{rng} same-zone offset at first prod ({unbounded})",
+            )
+        )
     statuses = fs.get("statuses") or []
     if statuses:
         out.append(("status_criterion", ", ".join(str(s) for s in statuses)))
@@ -270,6 +297,9 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     # ---- the waterfall ---------------------------------------------
     lo_date, hi_date = fs.get("first_prod_start"), fs.get("first_prod_end")
     lo_lat, hi_lat = fs.get("lateral_min_ft"), fs.get("lateral_max_ft")
+    sp_min, sp_max = fs.get("spacing_min_ft"), fs.get("spacing_max_ft")
+    sp_active = sp_min is not None or sp_max is not None
+    sp_include_unbounded = bool(fs.get("spacing_include_unbounded"))
     statuses = {str(s) for s in (fs.get("statuses") or [])}
     operators = {str(o) for o in (fs.get("operators") or [])}
     allowlist = {str(a) for a in (fs.get("api10s") or [])}
@@ -277,12 +307,25 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     # snapshot carries no county attr — folded into filters_other by
     # design decision; nothing to evaluate here.
 
+    def _spacing_culled(w: dict[str, Any]) -> bool:
+        # Mirrors FilterSpec.to_sqlalchemy_clauses: bounds bind only on
+        # REAL spacing; NULL + the 2800 no-neighbor sentinel form the
+        # "unbounded" class admitted solely by the include toggle.
+        if not sp_active:
+            return False
+        v = w.get("lateral_closer_xy_ft")
+        if v is None or v == SPACING_SENTINEL_FT:
+            return not sp_include_unbounded
+        return _outside(v, sp_min, sp_max)
+
     def disposition_for(w: dict[str, Any]) -> tuple[str, str | None, str | None]:
         api10 = str(w.get("api10"))
         if _outside(w.get("first_prod_date"), lo_date, hi_date):
             return "vintage", None, None
         if _outside(w.get("lateral_ft"), lo_lat, hi_lat):
             return "lateral", None, None
+        if _spacing_culled(w):
+            return "spacing", None, None
         if statuses and str(w.get("status")) not in statuses:
             return "filters_other", None, None
         if operators and str(w.get("operator")) not in operators:
@@ -331,6 +374,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
                 reason_code=code,
                 note=note,
                 annotation=annotation,
+                lateral_closer_xy_ft=w.get("lateral_closer_xy_ft"),
             )
         )
 
