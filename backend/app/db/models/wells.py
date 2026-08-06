@@ -23,6 +23,7 @@ from app.db.enum_helpers import pg_enum
 
 class WellStatus(str, enum.Enum):
     PDP = "PDP"          # producing
+    DUC = "DUC"          # drilled uncompleted (Novi Spud/DUC)
     PA = "PA"            # plugged & abandoned
     SI = "SI"            # shut-in
     TA = "TA"            # temporarily abandoned
