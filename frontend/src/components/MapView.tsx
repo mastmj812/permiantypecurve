@@ -13,6 +13,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
 import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
+import type { GeoJsonPolygon, LastDraw } from "../api/types";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { dealVisibilityFilter } from "../map/dealVisibility";
 import { DrawingController } from "../map/drawing";
@@ -234,30 +235,55 @@ export function MapView() {
       // before the previous spatial request resolves, the older (slower)
       // response is dropped instead of clobbering the fresh selection.
       // (onClick has its own equivalent guard via clickSeqRef.)
-      const runSpatialSelect = latestWins<
-        Awaited<ReturnType<typeof selectWellsSpatial>>
-      >((r) => setSelection(r.api10s, r.summary));
+      // The winning result also records the draw (polygon + filters +
+      // returned api10s) as mapStore.lastDraw, so "Add staged" can
+      // attribute the staged wells to this AOI in the build-up
+      // provenance. Stale (dropped) responses never touch lastDraw.
+      const runSpatialSelect = latestWins<{
+        r: Awaited<ReturnType<typeof selectWellsSpatial>>;
+        draw: Omit<LastDraw, "api10s">;
+      }>(({ r, draw }) => {
+        setSelection(r.api10s, r.summary);
+        useMapStore.getState().setLastDraw({ ...draw, api10s: r.api10s });
+      });
 
       const drawer = new DrawingController(map, {
         onPolygon: async (polygon) => {
+          const filters = useMapStore.getState().filters;
+          const at = new Date().toISOString();
           try {
             await runSpatialSelect(() =>
-              selectWellsSpatial({
-                polygon,
-                filters: useMapStore.getState().filters,
-              }),
+              selectWellsSpatial({ polygon, filters }).then((r) => ({
+                r,
+                draw: { kind: "polygon" as const, polygon, filters, at },
+              })),
             );
           } catch (e) {
             console.error("lasso selection failed", e);
           }
         },
         onBbox: async (bbox) => {
+          const filters = useMapStore.getState().filters;
+          const at = new Date().toISOString();
+          // Provenance speaks Polygon only — convert the box to a
+          // 5-point ring for the record; the server still gets the
+          // bbox (same selection path as before).
+          const [w, s, e, n] = bbox;
+          const boxPolygon: GeoJsonPolygon = {
+            type: "Polygon",
+            coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]],
+          };
           try {
             await runSpatialSelect(() =>
-              selectWellsSpatial({
-                bbox,
-                filters: useMapStore.getState().filters,
-              }),
+              selectWellsSpatial({ bbox, filters }).then((r) => ({
+                r,
+                draw: {
+                  kind: "bbox" as const,
+                  polygon: boxPolygon,
+                  filters,
+                  at,
+                },
+              })),
             );
           } catch (e) {
             console.error("box selection failed", e);

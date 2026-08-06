@@ -30,6 +30,66 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   api10s: [],
 };
 
+// GeoJSON Polygon geometry (NOT a Feature). Canonical home — wells.ts
+// re-exports it for back-compat with existing imports.
+export interface GeoJsonPolygon {
+  type: "Polygon";
+  coordinates: number[][][];
+}
+
+// ---------------- type-well build-up provenance ----------------
+// Mirrors backend app/type_curves/reason_codes.py — keep in sync.
+
+export const REVIEW_REASON_CODES = {
+  outlier_profile: "Outlier production profile",
+  data_quality: "Data quality",
+  mechanical_downtime: "Mechanical / downtime",
+  parent_child_spacing: "Parent-child / spacing",
+  geology_landing: "Geology / landing zone",
+  other: "Other",
+} as const;
+
+export type ReasonCode = keyof typeof REVIEW_REASON_CODES;
+
+export interface ExclusionEntry {
+  code: ReasonCode;
+  note: string;
+}
+
+// The most recent lasso/box spatial select, kept so "Add staged" can
+// attribute the staged wells to the polygon that produced them.
+export interface LastDraw {
+  kind: "polygon" | "bbox";
+  // Box draws are converted to a 5-point Polygon ring at capture time,
+  // so the whole provenance pipeline speaks Polygon only.
+  polygon: GeoJsonPolygon;
+  filters: FilterSpec;
+  api10s: string[];
+  at: string; // ISO timestamp of the draw
+}
+
+// One step in the cohort-building narrative. Mirrors SelectionEventIn.
+export interface SelectionEvent {
+  kind: "polygon" | "bbox" | "click_add" | "click_remove" | "manual_remove";
+  at: string;
+  api10s: string[];
+  polygon?: GeoJsonPolygon | null;
+  filters: FilterSpec | Record<string, never>;
+}
+
+// Assembled by the Review page's Aggregate button; consumed by the
+// type-curve save so the backend can snapshot the build-up funnel.
+export interface ProvenanceDraft {
+  selection_events: SelectionEvent[];
+  partition: {
+    cutoff_months: number;
+    short: string[];
+    no_peak: string[];
+  } | null;
+  exclusions: Record<string, ExclusionEntry>;
+  filter_snapshot: FilterSpec;
+}
+
 export interface SelectionSummary {
   count: number;
   median_lateral_ft: number | null;

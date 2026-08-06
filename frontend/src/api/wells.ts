@@ -2,11 +2,16 @@ import { apiFetch } from "./auth";
 import type {
   FilterFacets,
   FilterSpec,
+  GeoJsonPolygon,
   OperatorMatch,
   SelectResponse,
   SelectionSummary,
   WellDetail,
 } from "./types";
+
+// Canonical definition moved to types.ts (the provenance types need it
+// without creating an import cycle); re-exported here for back-compat.
+export type { GeoJsonPolygon } from "./types";
 
 // FilterSpec → URL query string for the MVT tile source.
 // Only non-default keys land in the URL so the cache key is compact.
@@ -122,11 +127,6 @@ export async function fetchFacets(spec?: FilterSpec): Promise<FilterFacets> {
   const r = await apiFetch(url);
   if (!r.ok) throw new Error(`facets failed: ${r.status}`);
   return (await r.json()) as FilterFacets;
-}
-
-export interface GeoJsonPolygon {
-  type: "Polygon";
-  coordinates: number[][][];
 }
 
 export async function selectWellsSpatial(args: {
