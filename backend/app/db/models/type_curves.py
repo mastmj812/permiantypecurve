@@ -106,3 +106,24 @@ class TypeCurve(Base):
     risk_multipliers: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default=text("'{}'::jsonb")
     )
+
+    # Type-well build-up provenance — the RAW funnel inputs recorded at
+    # save time; the cull waterfall is derived read-side from these
+    # (app/type_curves/buildup.py), never stored. Shape (version 1):
+    #   {version, recorded_at,
+    #    aoi: {polygons: [{geometry: GeoJSON Polygon, kind: lasso|box,
+    #                      drawn_at, area_sq_mi}]},
+    #    formations: [...],            # from included wells' formation_blueox
+    #    filter_snapshot: {FilterSpec},# cull criteria at Aggregate time
+    #    selection_events: [...],      # narrative of how the cohort was built
+    #    universe: {computed_at, well_count, wells: [{api10, name, operator,
+    #               formation, first_prod_date, lateral_ft, status}]},
+    #    partition: {cutoff_months, short: [...], no_peak: [...]},
+    #    exclusions: {api10: {code, note, at}},
+    #    post_save_removals: [{api10, code, note, at}],
+    #    post_save_additions: [{api10, at}]}
+    # {} = provenance not recorded (pre-0026 curve); exports degrade
+    # gracefully rather than fabricating a cull history.
+    provenance: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )

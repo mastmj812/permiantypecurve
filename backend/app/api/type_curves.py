@@ -18,31 +18,45 @@ import io
 import math
 import uuid
 import zipfile
-from datetime import date, datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.logging import get_logger
-from app.db.models import AlignmentMethod, Deal, Forecast, NormalizationBasis, Stream, TypeCurve, Well
+from app.db.models import (
+    AlignmentMethod,
+    Deal,
+    Forecast,
+    NormalizationBasis,
+    Stream,
+    TypeCurve,
+    Well,
+)
 from app.db.session import get_session
 from app.type_curves.aggregate import (
-    AlignmentMethod as AggAlign,
-    NormalizationBasis as AggBasis,
     PERCENTILE_KEYS,
     aggregate,
     serialize_aggregate,
+)
+from app.type_curves.aggregate import (
+    AlignmentMethod as AggAlign,
+)
+from app.type_curves.aggregate import (
+    NormalizationBasis as AggBasis,
 )
 from app.type_curves.loader import (
     cohort_ramp_anchors,
     load_well_series,
     load_wells_with_forecast,
 )
+from app.type_curves.reason_codes import validate_code
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
+from app.type_curves.universe import compute_universe, polygon_area_sq_mi
 
 # Forecast-aggregation horizon. 50 years × 12 months. Picks up the same
 # horizon the per-well fit_p50_series + frontend FULL_FORECAST_N_MONTHS
@@ -88,6 +102,73 @@ class FitOverride(BaseModel):
     peak_index: int = Field(ge=0, le=11)
 
 
+class ExclusionEntryIn(BaseModel):
+    """One engineer-authored exclusion: reason code + optional note."""
+
+    code: str
+    note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("code")
+    @classmethod
+    def _known_code(cls, v: str) -> str:
+        return validate_code(v)
+
+
+class PartitionIn(BaseModel):
+    """Forecast-batch history partition as of the Aggregate click.
+
+    ``short`` may include wells that were cohort-transferred and kept —
+    the waterfall guards with "and not in final included", so this is a
+    verbatim echo of the last batch run, not a cull list.
+    """
+
+    cutoff_months: int = Field(ge=1, le=120)
+    short: list[str] = Field(default_factory=list)
+    no_peak: list[str] = Field(default_factory=list)
+
+
+class SelectionEventIn(BaseModel):
+    """One step in the cohort-building narrative (draw / click / remove).
+
+    Supporting narrative only — the build-up waterfall is computed from
+    the universe snapshot + filter snapshot + final membership, so sheet
+    accuracy does not depend on event completeness. Polygon-bearing
+    events additionally define the AOI (union of their polygons).
+    """
+
+    kind: Literal["polygon", "bbox", "click_add", "click_remove", "manual_remove"]
+    at: str
+    api10s: list[str] = Field(default_factory=list, max_length=600)
+    polygon: dict[str, Any] | None = None
+    filters: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("polygon")
+    @classmethod
+    def _vertex_cap(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Defensive: a lasso is ~50 vertices; reject degenerate megapolygons
+        # before they reach PostGIS.
+        if v is not None:
+            coords = v.get("coordinates") or []
+            n = sum(len(ring) for ring in coords if isinstance(ring, list))
+            if n > 2000:
+                raise ValueError(f"polygon has {n} vertices; max 2000")
+        return v
+
+
+class ProvenanceIn(BaseModel):
+    """Client-captured funnel inputs for the type-well build-up.
+
+    ``filter_snapshot`` is NOT here — it rides ``SaveRequest.filter_spec``
+    (single source; the server copies it into the stored provenance).
+    """
+
+    selection_events: list[SelectionEventIn] = Field(
+        default_factory=list, max_length=200
+    )
+    partition: PartitionIn | None = None
+    exclusions: dict[str, ExclusionEntryIn] = Field(default_factory=dict)
+
+
 class SaveRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     notes: str | None = None
@@ -108,6 +189,10 @@ class SaveRequest(BaseModel):
     # transaction — so a deal export can never see both curves at once.
     # Ignored on the plain create endpoint.
     take_over_deal: bool = False
+    # Type-well build-up inputs. None on the versions endpoint means
+    # "inherit the parent's provenance" (old-workflow version saves);
+    # None on plain create stores {} (provenance not recorded).
+    provenance: ProvenanceIn | None = None
 
 
 class TypeCurvePreviewRequest(BaseModel):
@@ -154,6 +239,9 @@ class TypeCurveRow(BaseModel):
     # display time (see risking.py for why the API never serves a
     # risked series).
     risk_multipliers: dict[str, float] = Field(default_factory=dict)
+    # Build-up provenance (raw funnel inputs; see db model docstring).
+    # {} = not recorded. Read-only for the frontend.
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
     def from_orm_row(cls, tc: TypeCurve) -> "TypeCurveRow":
@@ -171,6 +259,7 @@ class TypeCurveRow(BaseModel):
             deal_id=tc.deal_id,
             is_stale=bool(tc.is_stale),
             risk_multipliers=dict(tc.risk_multipliers or {}),
+            provenance=dict(tc.provenance or {}),
         )
 
 
@@ -270,6 +359,11 @@ class MembershipPatch(BaseModel):
 
     add: list[str] = Field(default_factory=list)
     remove: list[str] = Field(default_factory=list)
+    # Build-up reason for the removed wells (one entry covers the whole
+    # ``remove`` list — the UI removes one well at a time). Optional at
+    # the API so existing callers (deal-intake skill, scripts) keep
+    # working; absent → recorded as code "other". UI always sends one.
+    remove_reason: ExclusionEntryIn | None = None
 
 
 class PatchRequest(BaseModel):
@@ -612,12 +706,80 @@ def preview_type_curve_fit(req: TypeCurvePreviewRequest) -> TypeCurvePreviewResp
 # ============================ save ============================
 
 
+def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
+    """Assemble the stored provenance dict from the client's funnel inputs.
+
+    Server-side additions on top of the verbatim client payload:
+      * AOI polygons extracted from polygon-bearing selection events,
+        each with a geodesic area for the sheet's header block;
+      * ``formations`` = distinct formation_blueox of the FINAL included
+        wells (robust when the map formation filter was left empty; the
+        filter's own formation list is still visible in filter_snapshot);
+      * the universe snapshot (formation + AOI only, uncapped).
+
+    Returns {} when the client sent no provenance — "not recorded" is an
+    honest state, never fabricated.
+    """
+    p = req.provenance
+    if p is None:
+        return {}
+    now = datetime.now(UTC).isoformat()
+
+    aoi_polygons: list[dict[str, Any]] = []
+    for ev in p.selection_events:
+        if ev.kind in ("polygon", "bbox") and ev.polygon is not None:
+            aoi_polygons.append(
+                {
+                    "geometry": ev.polygon,
+                    "kind": "lasso" if ev.kind == "polygon" else "box",
+                    "drawn_at": ev.at,
+                    "area_sq_mi": polygon_area_sq_mi(session, ev.polygon),
+                }
+            )
+
+    formations = sorted(
+        {
+            f
+            for f in session.execute(
+                select(Well.formation_blueox)
+                .where(Well.api10.in_(req.included_api10s))
+                .distinct()
+            ).scalars()
+            if f
+        }
+    )
+
+    universe = compute_universe(
+        session, [entry["geometry"] for entry in aoi_polygons], formations
+    )
+
+    return {
+        "version": 1,
+        "recorded_at": now,
+        "aoi": {"polygons": aoi_polygons},
+        "formations": formations,
+        # Single source: SaveRequest.filter_spec (also stored on its own
+        # column) — duplicated here so provenance is self-contained.
+        "filter_snapshot": req.filter_spec,
+        "selection_events": [ev.model_dump() for ev in p.selection_events],
+        "universe": universe,
+        "partition": p.partition.model_dump() if p.partition else None,
+        "exclusions": {
+            api10: {"code": e.code, "note": e.note, "at": now}
+            for api10, e in p.exclusions.items()
+        },
+        "post_save_removals": [],
+        "post_save_additions": [],
+    }
+
+
 def _persist(
     session: Session,
     *,
     payload: dict[str, Any],
     req: SaveRequest,
     version_of: uuid.UUID | None,
+    provenance: dict[str, Any],
 ) -> TypeCurve:
     row = TypeCurve(
         id=uuid.uuid4(),
@@ -629,6 +791,7 @@ def _persist(
         alignment_method=AlignmentMethod(req.alignment_method),
         series=payload,
         version_of=version_of,
+        provenance=provenance,
     )
     session.add(row)
     session.commit()
@@ -647,12 +810,17 @@ def save_type_curve(
         n_months=req.n_months,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
-    row = _persist(session, payload=payload, req=req, version_of=None)
+    provenance = _build_provenance(session, req)
+    row = _persist(
+        session, payload=payload, req=req, version_of=None, provenance=provenance
+    )
     log.info(
         "type_curve_saved",
         id=str(row.id),
         n_wells=len(req.included_api10s),
         overridden_streams=list(req.fit_overrides.keys()) if req.fit_overrides else [],
+        provenance_recorded=bool(provenance),
+        universe_wells=(provenance.get("universe") or {}).get("well_count", 0),
     )
     return TypeCurveRow.from_orm_row(row)
 
@@ -673,7 +841,20 @@ def save_as_new_version(
         n_months=req.n_months,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
-    row = _persist(session, payload=payload, req=req, version_of=parent.id)
+    # Provenance on versions: fresh inputs win; a None (old-workflow
+    # version save) inherits the parent's record with a lineage marker
+    # rather than degrading to "not recorded".
+    if req.provenance is not None:
+        provenance = _build_provenance(session, req)
+    elif parent.provenance:
+        provenance = copy.deepcopy(parent.provenance)
+        provenance["inherited_from"] = str(parent.id)
+    else:
+        provenance = {}
+    row = _persist(
+        session, payload=payload, req=req, version_of=parent.id,
+        provenance=provenance,
+    )
     # Risking rides the lineage: a new version inherits the parent's
     # geologic MULs (the geology didn't change because the cohort did);
     # clear or adjust explicitly via PATCH if review says otherwise.
@@ -1500,6 +1681,62 @@ def delete_forecast_override(
     return WorkspaceStream(source=resolved.source, payload=resolved.payload)
 
 
+def _record_membership_provenance(
+    tc: TypeCurve,
+    *,
+    old_members: list[str],
+    new_members: list[str],
+    remove_reason: ExclusionEntryIn | None,
+) -> None:
+    """Keep the build-up current across post-save membership edits.
+
+    Removals append to ``post_save_removals`` with the caller's reason
+    (default "other" for API callers that don't send one). Additions
+    append to ``post_save_additions``. Either direction cancels its
+    opposite for the same api10 — a remove-then-re-add (or add-then-
+    remove) nets to nothing rather than showing both lines forever.
+
+    No-op when the curve has no recorded provenance: fabricating a
+    partial audit trail on a pre-0026 curve would be worse than the
+    honest "not recorded" state.
+    """
+    if not tc.provenance:
+        return
+    now = datetime.now(UTC).isoformat()
+    prov = dict(tc.provenance)
+    removals = list(prov.get("post_save_removals") or [])
+    additions = list(prov.get("post_save_additions") or [])
+
+    old_set, new_set = set(old_members), set(new_members)
+    removed = [a for a in old_members if a not in new_set]
+    added = [a for a in new_members if a not in old_set]
+
+    for api10 in removed:
+        if any(entry.get("api10") == api10 for entry in additions):
+            # Added post-save, now removed — net nothing.
+            additions = [e for e in additions if e.get("api10") != api10]
+        else:
+            removals.append(
+                {
+                    "api10": api10,
+                    "code": remove_reason.code if remove_reason else "other",
+                    "note": remove_reason.note if remove_reason else None,
+                    "at": now,
+                }
+            )
+    for api10 in added:
+        if any(entry.get("api10") == api10 for entry in removals):
+            # Re-add cancels the earlier removal.
+            removals = [e for e in removals if e.get("api10") != api10]
+        else:
+            additions.append({"api10": api10, "at": now})
+
+    prov["post_save_removals"] = removals
+    prov["post_save_additions"] = additions
+    tc.provenance = prov
+    flag_modified(tc, "provenance")
+
+
 @router.patch(
     "/{type_curve_id}/membership", response_model=TypeCurveRow
 )
@@ -1532,7 +1769,8 @@ def patch_type_curve_membership(
                 status_code=400, detail=f"unknown api10s: {unknown}"
             )
 
-    members = list(tc.included_api10s or [])
+    old_members = list(tc.included_api10s or [])
+    members = list(old_members)
     if body.add:
         for a in body.add:
             if a not in members:
@@ -1550,10 +1788,16 @@ def patch_type_curve_membership(
                 tc.forecast_overrides = overrides
                 flag_modified(tc, "forecast_overrides")
 
-    if members != (tc.included_api10s or []):
+    if members != old_members:
         tc.included_api10s = members
         tc.is_stale = True
         flag_modified(tc, "included_api10s")
+        _record_membership_provenance(
+            tc,
+            old_members=old_members,
+            new_members=members,
+            remove_reason=body.remove_reason,
+        )
 
     session.commit()
     session.refresh(tc)
