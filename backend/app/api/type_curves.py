@@ -54,6 +54,7 @@ from app.type_curves.loader import (
     load_well_series,
     load_wells_with_forecast,
 )
+from app.exports.buildup import buildup_csv
 from app.type_curves.reason_codes import validate_code
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.type_curves.universe import compute_universe, polygon_area_sq_mi
@@ -1894,6 +1895,9 @@ def export_type_curve(
                     f"{s_name}_forecast.csv", _forecast_csv(s, alignment_val)
                 )
         zf.writestr("metadata.csv", _metadata_csv(tc, series))
+        # Type-well build-up: universe → coded culls → final cohort.
+        # Degrades to an included-only roster on pre-provenance curves.
+        zf.writestr("buildup.csv", buildup_csv(tc))
 
     safe_name = "".join(c if c.isalnum() else "_" for c in tc.name)[:64] or "type_curve"
     return Response(
