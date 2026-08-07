@@ -17,9 +17,11 @@ from app.warehouse_client.base import WellHeader
 
 # Mapping from Novi's well_status vocabulary (as it appears in
 # curated.wells.well_status) to the app's existing WellStatus enum.
-# Derived empirically from the four-county horizontal vintage-2010+
-# scope (Active 11,114 / Inactive 796 / Completed 228 / P&A 224 /
-# Abandoned 48 / Spud 1 / DUC 1). Any value not in this map collapses
+# Derived empirically from the full fetch scope (horizontal, 2010+
+# completion or NULL-completion non-permit; 2026-08 census: Active
+# 57,805 / Spud 2,260 / Inactive 1,974 / P&A 1,569 / Completed 1,351 /
+# DUC 654 / Abandoned 601 — Spud/DUC are almost entirely the
+# NULL-completion wellbores). Any value not in this map collapses
 # to UNKNOWN — surfacing a new Novi status code via the audit query
 # is the trigger to add a mapping.
 _STATUS_REMAP: dict[str, str] = {

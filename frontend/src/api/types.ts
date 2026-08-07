@@ -1,7 +1,7 @@
 // Mirrors the backend pydantic models. Keep these in sync with the
 // /api/wells/* responses — when a field is added server-side, update here.
 
-export type WellStatus = "PDP" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKNOWN";
+export type WellStatus = "PDP" | "DUC" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKNOWN";
 
 // Novi WellSpacing no-neighbor sentinel: LateralCloserXY == 2800.0
 // means "no same-zone neighbor at first production" (a cap, not a

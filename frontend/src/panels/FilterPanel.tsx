@@ -12,7 +12,7 @@ import {
 } from "../map/formations";
 import { useMapStore } from "../store/mapStore";
 
-const ALL_STATUSES: WellStatus[] = ["PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN"];
+const ALL_STATUSES: WellStatus[] = ["PDP", "DUC", "PA", "SI", "TA", "INACTIVE", "UNKNOWN"];
 
 export function FilterPanel() {
   const filters = useMapStore((s) => s.filters);
