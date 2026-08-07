@@ -62,12 +62,14 @@ PyYAML==6.0.3
 rsa==4.9.1
 ruff==0.15.15
 scipy==1.17.1
+shapely==2.1.2
 six==1.17.0
 SQLAlchemy==2.0.50
 starlette==1.2.1
 structlog==25.5.0
 tenacity==9.1.4
 types-passlib==1.7.7.20260211
+types-shapely==2.1.0.20260728
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzlocal==5.3.1

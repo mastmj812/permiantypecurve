@@ -145,7 +145,7 @@ export function DealPolygonsModal({ onClose }: Props) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".zip"
+              accept=".zip,.gpkg"
               disabled={uploading}
               onChange={(e) => {
                 const f = e.target.files?.[0];
@@ -153,9 +153,9 @@ export function DealPolygonsModal({ onClose }: Props) {
               }}
             />
             <span className="muted" style={{ fontSize: 11 }}>
-              Upload a .zip containing the shapefile components (.shp + .dbf +
-              .prj). Each feature becomes one polygon, shown on the Map and
-              Review tabs. Re-uploading a .zip with the same name replaces its
+              Upload a shapefile .zip (.shp + .dbf + .prj) or a GeoPackage
+              (.gpkg). Each feature becomes one polygon, shown on the Map and
+              Review tabs. Re-uploading a file with the same name replaces its
               polygons.
             </span>
           </div>
@@ -169,7 +169,7 @@ export function DealPolygonsModal({ onClose }: Props) {
 
           {!loading && groups.length === 0 && (
             <p className="muted" style={{ textAlign: "center" }}>
-              No polygons yet — upload a shapefile to get started.
+              No polygons yet — upload a shapefile or GeoPackage to get started.
             </p>
           )}
 
