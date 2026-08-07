@@ -11,25 +11,20 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { LastDraw, SelectionEvent } from "../api/types";
-
+import type { LastDraw } from "../api/types";
 // Selection-event narrative for the type-well build-up. Supporting
 // narrative only: the build-up waterfall is computed server-side from
 // the universe snapshot + filter snapshot + final membership, so an
 // incomplete event log degrades the story, never the numbers. The
-// polygon-bearing events additionally define the AOI (their union).
-export interface CohortProvenance {
-  version: 1;
-  events: SelectionEvent[];
-  // Set when the event cap dropped older entries.
-  truncated?: boolean;
-}
+// polygon-bearing events additionally define the AOI (their union) —
+// attribution rules live in cohortProvenance.ts.
+import {
+  type CohortProvenance,
+  appendEvents,
+  buildStagedEvents,
+} from "./cohortProvenance";
 
-// localStorage guard: polygons are ~50 vertices, so 100 events is
-// comfortably a few hundred KB across all cohorts. Oldest drop first;
-// AOI fidelity degrades gracefully (the sheet says "narrative
-// truncated" rather than losing the universe, which is server-side).
-const MAX_EVENTS_PER_COHORT = 100;
+export type { CohortProvenance } from "./cohortProvenance";
 
 export interface Cohort {
   id: string;
@@ -91,57 +86,6 @@ function unionPreservingOrder(existing: string[], incoming: string[]): string[] 
   return out;
 }
 
-// Split a staged batch into provenance events: wells the last draw
-// produced ride a polygon/bbox event (carrying the AOI + the filters
-// active at draw time); anything else becomes a click_add.
-function buildSelectionEvents(
-  api10s: string[],
-  lastDraw: LastDraw | null,
-): SelectionEvent[] {
-  const now = new Date().toISOString();
-  const events: SelectionEvent[] = [];
-  let rest = api10s;
-  if (lastDraw) {
-    const fromDraw = api10s.filter((a) => lastDraw.api10s.includes(a));
-    if (fromDraw.length > 0) {
-      events.push({
-        kind: lastDraw.kind,
-        at: lastDraw.at,
-        api10s: fromDraw,
-        polygon: lastDraw.polygon,
-        filters: lastDraw.filters,
-      });
-      const drawSet = new Set(fromDraw);
-      rest = api10s.filter((a) => !drawSet.has(a));
-    }
-  }
-  if (rest.length > 0) {
-    events.push({
-      kind: "click_add",
-      at: now,
-      api10s: rest,
-      polygon: null,
-      filters: lastDraw?.filters ?? {},
-    });
-  }
-  return events;
-}
-
-// Append events under the per-cohort cap, oldest dropped first.
-function appendEvents(
-  prov: CohortProvenance,
-  events: SelectionEvent[],
-): CohortProvenance {
-  if (events.length === 0) return prov;
-  let next = [...prov.events, ...events];
-  let truncated = prov.truncated;
-  if (next.length > MAX_EVENTS_PER_COHORT) {
-    next = next.slice(next.length - MAX_EVENTS_PER_COHORT);
-    truncated = true;
-  }
-  return { version: 1, events: next, ...(truncated ? { truncated } : {}) };
-}
-
 export const useCohortStore = create<CohortState>()(
   persist(
     (set, get) => ({
@@ -164,7 +108,12 @@ export const useCohortStore = create<CohortState>()(
           created_at: new Date().toISOString(),
           provenance: appendEvents(
             { version: 1, events: [] },
-            buildSelectionEvents(seeded, lastDraw),
+            buildStagedEvents({
+              staged: seeded,
+              fresh: seeded,
+              lastDraw,
+              priorEvents: [],
+            }),
           ),
         };
         set((s) => ({
@@ -190,16 +139,22 @@ export const useCohortStore = create<CohortState>()(
         set((s) => ({
           cohorts: s.cohorts.map((c) => {
             if (c.id !== id) return c;
-            // Only NEW wells enter the narrative — re-staging a well
-            // already in the cohort is a no-op, not a second event.
             const existing = new Set(c.api10s);
             const fresh = api10s.filter((a) => !existing.has(a));
+            // Draw-sourced wells attribute the AOI even when already
+            // members (re-lassoing an existing cohort STAMPS its AOI);
+            // click_adds log fresh wells only. See cohortProvenance.ts.
             return {
               ...c,
               api10s: unionPreservingOrder(c.api10s, api10s),
               provenance: appendEvents(
                 c.provenance,
-                buildSelectionEvents(fresh, lastDraw),
+                buildStagedEvents({
+                  staged: api10s,
+                  fresh,
+                  lastDraw,
+                  priorEvents: c.provenance.events,
+                }),
               ),
             };
           }),
