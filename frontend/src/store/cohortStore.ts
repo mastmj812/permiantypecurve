@@ -11,6 +11,26 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import type { LastDraw, SelectionEvent } from "../api/types";
+
+// Selection-event narrative for the type-well build-up. Supporting
+// narrative only: the build-up waterfall is computed server-side from
+// the universe snapshot + filter snapshot + final membership, so an
+// incomplete event log degrades the story, never the numbers. The
+// polygon-bearing events additionally define the AOI (their union).
+export interface CohortProvenance {
+  version: 1;
+  events: SelectionEvent[];
+  // Set when the event cap dropped older entries.
+  truncated?: boolean;
+}
+
+// localStorage guard: polygons are ~50 vertices, so 100 events is
+// comfortably a few hundred KB across all cohorts. Oldest drop first;
+// AOI fidelity degrades gracefully (the sheet says "narrative
+// truncated" rather than losing the universe, which is server-side).
+const MAX_EVENTS_PER_COHORT = 100;
+
 export interface Cohort {
   id: string;
   name: string;
@@ -21,6 +41,7 @@ export interface Cohort {
   deal_id: string | null;
   api10s: string[];
   created_at: string; // ISO timestamp
+  provenance: CohortProvenance;
 }
 
 export interface CohortState {
@@ -34,14 +55,21 @@ export interface CohortState {
     name: string;
     deal_id?: string | null;
     initial_api10s?: string[];
+    // When seeding from the staged selection, the draw that produced
+    // it — so the seed lands in the event narrative like an addStaged.
+    lastDraw?: LastDraw | null;
   }) => string;
   setActive: (id: string | null) => void;
   rename: (id: string, name: string) => void;
   setDeal: (id: string, deal_id: string | null) => void;
   // Additive — union with existing api10s, preserves insertion order
-  // (older wells stay at the front of the list).
-  addApi10s: (id: string, api10s: string[]) => void;
-  // Subtractive — removes any matching api10s from the cohort.
+  // (older wells stay at the front of the list). Logs provenance
+  // events: staged wells that came from `lastDraw` get a polygon/bbox
+  // event carrying the AOI; the remainder (click-adds, gun-barrel
+  // adds) get a click_add event. Pass null when there was no draw.
+  addStaged: (id: string, api10s: string[], lastDraw: LastDraw | null) => void;
+  // Subtractive — removes any matching api10s from the cohort and logs
+  // a manual_remove event (build-up narrative for the culled wells).
   removeApi10s: (id: string, api10s: string[]) => void;
   // Destructive — replaces the cohort's api10s wholesale. Currently
   // unused by the cohort bar but available for future "replace cohort
@@ -63,20 +91,81 @@ function unionPreservingOrder(existing: string[], incoming: string[]): string[] 
   return out;
 }
 
+// Split a staged batch into provenance events: wells the last draw
+// produced ride a polygon/bbox event (carrying the AOI + the filters
+// active at draw time); anything else becomes a click_add.
+function buildSelectionEvents(
+  api10s: string[],
+  lastDraw: LastDraw | null,
+): SelectionEvent[] {
+  const now = new Date().toISOString();
+  const events: SelectionEvent[] = [];
+  let rest = api10s;
+  if (lastDraw) {
+    const fromDraw = api10s.filter((a) => lastDraw.api10s.includes(a));
+    if (fromDraw.length > 0) {
+      events.push({
+        kind: lastDraw.kind,
+        at: lastDraw.at,
+        api10s: fromDraw,
+        polygon: lastDraw.polygon,
+        filters: lastDraw.filters,
+      });
+      const drawSet = new Set(fromDraw);
+      rest = api10s.filter((a) => !drawSet.has(a));
+    }
+  }
+  if (rest.length > 0) {
+    events.push({
+      kind: "click_add",
+      at: now,
+      api10s: rest,
+      polygon: null,
+      filters: lastDraw?.filters ?? {},
+    });
+  }
+  return events;
+}
+
+// Append events under the per-cohort cap, oldest dropped first.
+function appendEvents(
+  prov: CohortProvenance,
+  events: SelectionEvent[],
+): CohortProvenance {
+  if (events.length === 0) return prov;
+  let next = [...prov.events, ...events];
+  let truncated = prov.truncated;
+  if (next.length > MAX_EVENTS_PER_COHORT) {
+    next = next.slice(next.length - MAX_EVENTS_PER_COHORT);
+    truncated = true;
+  }
+  return { version: 1, events: next, ...(truncated ? { truncated } : {}) };
+}
+
 export const useCohortStore = create<CohortState>()(
   persist(
     (set, get) => ({
       cohorts: [],
       activeCohortId: null,
 
-      createCohort: ({ name, deal_id = null, initial_api10s = [] }) => {
+      createCohort: ({
+        name,
+        deal_id = null,
+        initial_api10s = [],
+        lastDraw = null,
+      }) => {
         const id = crypto.randomUUID();
+        const seeded = Array.from(new Set(initial_api10s));
         const cohort: Cohort = {
           id,
           name,
           deal_id,
-          api10s: Array.from(new Set(initial_api10s)),
+          api10s: seeded,
           created_at: new Date().toISOString(),
+          provenance: appendEvents(
+            { version: 1, events: [] },
+            buildSelectionEvents(seeded, lastDraw),
+          ),
         };
         set((s) => ({
           cohorts: [...s.cohorts, cohort],
@@ -97,30 +186,64 @@ export const useCohortStore = create<CohortState>()(
           cohorts: s.cohorts.map((c) => (c.id === id ? { ...c, deal_id } : c)),
         })),
 
-      addApi10s: (id, api10s) =>
+      addStaged: (id, api10s, lastDraw) =>
         set((s) => ({
-          cohorts: s.cohorts.map((c) =>
-            c.id === id
-              ? { ...c, api10s: unionPreservingOrder(c.api10s, api10s) }
-              : c,
-          ),
+          cohorts: s.cohorts.map((c) => {
+            if (c.id !== id) return c;
+            // Only NEW wells enter the narrative — re-staging a well
+            // already in the cohort is a no-op, not a second event.
+            const existing = new Set(c.api10s);
+            const fresh = api10s.filter((a) => !existing.has(a));
+            return {
+              ...c,
+              api10s: unionPreservingOrder(c.api10s, api10s),
+              provenance: appendEvents(
+                c.provenance,
+                buildSelectionEvents(fresh, lastDraw),
+              ),
+            };
+          }),
         })),
 
       removeApi10s: (id, api10s) => {
         const drop = new Set(api10s);
+        const now = new Date().toISOString();
         set((s) => ({
-          cohorts: s.cohorts.map((c) =>
-            c.id === id
-              ? { ...c, api10s: c.api10s.filter((a) => !drop.has(a)) }
-              : c,
-          ),
+          cohorts: s.cohorts.map((c) => {
+            if (c.id !== id) return c;
+            const removed = c.api10s.filter((a) => drop.has(a));
+            return {
+              ...c,
+              api10s: c.api10s.filter((a) => !drop.has(a)),
+              provenance:
+                removed.length > 0
+                  ? appendEvents(c.provenance, [
+                      {
+                        kind: "manual_remove",
+                        at: now,
+                        api10s: removed,
+                        polygon: null,
+                        filters: {},
+                      },
+                    ])
+                  : c.provenance,
+            };
+          }),
         }));
       },
 
       replaceApi10s: (id, api10s) =>
         set((s) => ({
           cohorts: s.cohorts.map((c) =>
-            c.id === id ? { ...c, api10s: Array.from(new Set(api10s)) } : c,
+            c.id === id
+              ? {
+                  ...c,
+                  api10s: Array.from(new Set(api10s)),
+                  // Wholesale replace restarts the narrative — the old
+                  // events describe a list that no longer exists.
+                  provenance: { version: 1, events: [] },
+                }
+              : c,
           ),
         })),
 
@@ -143,10 +266,13 @@ export const useCohortStore = create<CohortState>()(
       //     old api14s array into the new api10s field without
       //     truncating, leaving early adopters with 14-char strings in
       //     a field that should be 10. v3 normalizes that.
-      // Both migrations run when needed; de-dupes after truncation in
+      // v4: add empty build-up provenance ({version: 1, events: []}) to
+      //     every cohort. Pre-v4 cohorts have no recorded narrative —
+      //     honest empty, not fabricated.
+      // All migrations run when needed; de-dupes after truncation in
       // case a cohort had two completions on the same wellbore (different
       // api14s, same api10).
-      version: 3,
+      version: 4,
       migrate: (persistedState: unknown, fromVersion: number) => {
         // Helper: truncate + de-dupe a list of api strings.
         const normalize = (raw: string[]): string[] => {
@@ -162,42 +288,55 @@ export const useCohortStore = create<CohortState>()(
           return out;
         };
 
+        let state: {
+          cohorts?: Array<Record<string, unknown>>;
+          activeCohortId?: string | null;
+        };
+
         if (fromVersion < 2) {
-          // v0/v1 → v3: rename api14s → api10s and truncate.
+          // v0/v1: rename api14s → api10s and truncate.
           const s = persistedState as {
             cohorts?: Array<Record<string, unknown> & { api14s?: string[] }>;
             activeCohortId?: string | null;
           };
-          const migratedCohorts =
-            s.cohorts?.map((c) => {
-              const { api14s, ...rest } = c;
-              return {
-                ...rest,
-                api10s: normalize(api14s ?? []),
-              };
-            }) ?? [];
-          return {
-            cohorts: migratedCohorts,
+          state = {
+            cohorts:
+              s.cohorts?.map((c) => {
+                const { api14s, ...rest } = c;
+                return {
+                  ...rest,
+                  api10s: normalize(api14s ?? []),
+                };
+              }) ?? [],
             activeCohortId: s.activeCohortId ?? null,
           };
-        }
-        if (fromVersion < 3) {
-          // v2 → v3: truncate any 14-char leftovers in api10s.
+        } else if (fromVersion < 3) {
+          // v2: truncate any 14-char leftovers in api10s.
           const s = persistedState as {
             cohorts?: Array<Record<string, unknown> & { api10s?: string[] }>;
             activeCohortId?: string | null;
           };
-          const migratedCohorts =
-            s.cohorts?.map((c) => ({
-              ...c,
-              api10s: normalize(c.api10s ?? []),
-            })) ?? [];
-          return {
-            cohorts: migratedCohorts,
+          state = {
+            cohorts:
+              s.cohorts?.map((c) => ({
+                ...c,
+                api10s: normalize(c.api10s ?? []),
+              })) ?? [],
             activeCohortId: s.activeCohortId ?? null,
           };
+        } else {
+          state = persistedState as typeof state;
         }
-        return persistedState as CohortState;
+
+        // v4 (applies to every earlier version): ensure provenance.
+        return {
+          cohorts:
+            state.cohorts?.map((c) => ({
+              ...c,
+              provenance: c.provenance ?? { version: 1, events: [] },
+            })) ?? [],
+          activeCohortId: state.activeCohortId ?? null,
+        };
       },
     },
   ),

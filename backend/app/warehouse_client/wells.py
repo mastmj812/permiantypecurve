@@ -74,7 +74,8 @@ _FETCH_ONE_SQL = text(
         completion_vintage_bucket,
         is_horizontal,
         directional_survey_is_planned,
-        eur_50yr_oil_bbl                  AS novi_oil_eur
+        eur_50yr_oil_bbl                  AS novi_oil_eur,
+        lateral_closer_xy_ft
     FROM curated.wells_enriched
     WHERE api10 = :api10
     """
@@ -115,6 +116,7 @@ def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
         is_horizontal=row["is_horizontal"],
         directional_survey_is_planned=row["directional_survey_is_planned"],
         novi_oil_eur=_to_float(row["novi_oil_eur"]),
+        lateral_closer_xy_ft=_to_float(row["lateral_closer_xy_ft"]),
     )
 
 
@@ -162,7 +164,8 @@ _HEADER_COLUMNS_SQL = """
     completion_vintage_bucket,
     is_horizontal,
     directional_survey_is_planned,
-    eur_50yr_oil_bbl                  AS novi_oil_eur
+    eur_50yr_oil_bbl                  AS novi_oil_eur,
+    lateral_closer_xy_ft
 """
 
 

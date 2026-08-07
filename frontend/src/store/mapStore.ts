@@ -11,7 +11,11 @@ import type { DealPolygonGeoJSON } from "../api/dealPolygons";
 import type { AggregatePayload } from "../api/typeCurves";
 import {
   DEFAULT_FILTER_SPEC,
+  type ExclusionEntry,
   type FilterSpec,
+  type LastDraw,
+  type ProvenanceDraft,
+  type ReasonCode,
   type SelectionSummary,
   type WellStatus,
 } from "../api/types";
@@ -97,13 +101,37 @@ export interface MapState {
   // when the user starts a new non-cohort selection.
   activeCohortName: string | null;
   activeCohortDealId: string | null;
-  setCohortHandoff: (name: string | null, deal_id: string | null) => void;
-  // Wells the engineer un-ticked on the Review page. Stays out of any
-  // type-curve aggregation (step 6) but stays in the forecasts table.
-  excludedApi10s: Set<string>;
+  // Cohort id rides the handoff too so the Review page's Aggregate
+  // button can pull the cohort's selection-event narrative for the
+  // build-up provenance without guessing which cohort was forecast.
+  activeCohortId: string | null;
+  setCohortHandoff: (
+    name: string | null,
+    deal_id: string | null,
+    cohort_id: string | null,
+  ) => void;
+  // Wells the engineer un-ticked on the Review page, each with a
+  // build-up reason code + optional note. Stays out of any type-curve
+  // aggregation (step 6) but stays in the forecasts table. Map keys
+  // work like the old Set (`exclusions.has(api10)`).
+  exclusions: Map<string, ExclusionEntry>;
+  // One-click exclude applies the last-used code; the row's inline
+  // control refines it. Sticky within the session — reviewing a pad
+  // for frac hits shouldn't require re-picking the code per well.
+  lastUsedReasonCode: ReasonCode;
   toggleExcluded: (api10: string) => void;
-  setExcluded: (api10s: string[]) => void;
+  setExclusionReason: (api10: string, code: ReasonCode, note: string) => void;
   clearExcluded: () => void;
+  // Most recent lasso/box spatial select (polygon + filters + result).
+  // "Add staged" consumes it to attribute staged wells to the drawn
+  // AOI in the cohort's provenance events. Cleared with the selection.
+  lastDraw: LastDraw | null;
+  setLastDraw: (d: LastDraw | null) => void;
+  // Build-up funnel snapshot assembled by the Review page's Aggregate
+  // button; the type-curve save sends it to the backend. Invalidated
+  // alongside typeCurveApi10s (a fresh forecast batch voids both).
+  buildupDraft: ProvenanceDraft | null;
+  setBuildupDraft: (d: ProvenanceDraft | null) => void;
 
   // ---- filters ----
   filters: FilterSpec;
@@ -112,6 +140,8 @@ export interface MapState {
   setStatuses: (statuses: WellStatus[]) => void;
   setVintageRange: (start: string | null, end: string | null) => void;
   setLateralRange: (min: number | null, max: number | null) => void;
+  setSpacingRange: (min: number | null, max: number | null) => void;
+  setSpacingIncludeUnbounded: (v: boolean) => void;
   setApi10s: (api10s: string[]) => void;
   resetFilters: () => void;
 
@@ -176,8 +206,9 @@ export const useMapStore = create<MapState>((set) => ({
   // A new forecast batch invalidates any Review-page aggregate
   // snapshot — otherwise a stale typeCurveApi10s from the previous
   // batch would silently override the fresh scope on the TC page.
+  // The buildup draft snapshots the same funnel, so it goes with it.
   setForecastApi10s: (forecastApi10s) =>
-    set({ forecastApi10s, typeCurveApi10s: null }),
+    set({ forecastApi10s, typeCurveApi10s: null, buildupDraft: null }),
   typeCurveApi10s: null,
   setTypeCurveApi10s: (typeCurveApi10s) => set({ typeCurveApi10s }),
   forecastCutoffMonths: 6,
@@ -201,19 +232,30 @@ export const useMapStore = create<MapState>((set) => ({
   setFitJobId: (fitJobId) => set({ fitJobId }),
   activeCohortName: null,
   activeCohortDealId: null,
-  setCohortHandoff: (activeCohortName, activeCohortDealId) =>
-    set({ activeCohortName, activeCohortDealId }),
+  activeCohortId: null,
+  setCohortHandoff: (activeCohortName, activeCohortDealId, activeCohortId) =>
+    set({ activeCohortName, activeCohortDealId, activeCohortId }),
 
-  excludedApi10s: new Set<string>(),
+  exclusions: new Map<string, ExclusionEntry>(),
+  lastUsedReasonCode: "outlier_profile",
   toggleExcluded: (api10) =>
     set((s) => {
-      const next = new Set(s.excludedApi10s);
+      const next = new Map(s.exclusions);
       if (next.has(api10)) next.delete(api10);
-      else next.add(api10);
-      return { excludedApi10s: next };
+      else next.set(api10, { code: s.lastUsedReasonCode, note: "" });
+      return { exclusions: next };
     }),
-  setExcluded: (api10s) => set({ excludedApi10s: new Set(api10s) }),
-  clearExcluded: () => set({ excludedApi10s: new Set<string>() }),
+  setExclusionReason: (api10, code, note) =>
+    set((s) => {
+      const next = new Map(s.exclusions);
+      next.set(api10, { code, note });
+      return { exclusions: next, lastUsedReasonCode: code };
+    }),
+  clearExcluded: () => set({ exclusions: new Map<string, ExclusionEntry>() }),
+  lastDraw: null,
+  setLastDraw: (lastDraw) => set({ lastDraw }),
+  buildupDraft: null,
+  setBuildupDraft: (buildupDraft) => set({ buildupDraft }),
 
   filters: DEFAULT_FILTER_SPEC,
   setFormations: (formations) =>
@@ -230,6 +272,14 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({
       filters: { ...s.filters, lateral_min_ft: min, lateral_max_ft: max },
     })),
+  setSpacingRange: (min, max) =>
+    set((s) => ({
+      filters: { ...s.filters, spacing_min_ft: min, spacing_max_ft: max },
+    })),
+  setSpacingIncludeUnbounded: (spacing_include_unbounded) =>
+    set((s) => ({
+      filters: { ...s.filters, spacing_include_unbounded },
+    })),
   setApi10s: (api10s) =>
     set((s) => ({ filters: { ...s.filters, api10s } })),
   resetFilters: () => set({ filters: DEFAULT_FILTER_SPEC }),
@@ -245,7 +295,8 @@ export const useMapStore = create<MapState>((set) => ({
       else next.add(api10);
       return { selectedApi10s: next };
     }),
-  clearSelection: () => set({ selectedApi10s: new Set<string>(), summary: null }),
+  clearSelection: () =>
+    set({ selectedApi10s: new Set<string>(), summary: null, lastDraw: null }),
 
   drawMode: "off",
   setDrawMode: (drawMode) => set({ drawMode }),

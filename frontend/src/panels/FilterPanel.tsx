@@ -21,6 +21,10 @@ export function FilterPanel() {
   const setStatuses = useMapStore((s) => s.setStatuses);
   const setVintageRange = useMapStore((s) => s.setVintageRange);
   const setLateralRange = useMapStore((s) => s.setLateralRange);
+  const setSpacingRange = useMapStore((s) => s.setSpacingRange);
+  const setSpacingIncludeUnbounded = useMapStore(
+    (s) => s.setSpacingIncludeUnbounded,
+  );
   const setApi10s = useMapStore((s) => s.setApi10s);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
@@ -72,6 +76,14 @@ export function FilterPanel() {
           facetsQ.data?.lateral_ft_max ?? null,
         ]}
         onChange={setLateralRange}
+      />
+
+      <SpacingSection
+        min={filters.spacing_min_ft}
+        max={filters.spacing_max_ft}
+        includeUnbounded={filters.spacing_include_unbounded}
+        onRangeChange={setSpacingRange}
+        onIncludeUnboundedChange={setSpacingIncludeUnbounded}
       />
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
@@ -428,6 +440,78 @@ function LateralSection({
           onChange={(e) => onChange(min, e.target.value ? Number(e.target.value) : null)}
         />
       </div>
+    </section>
+  );
+}
+
+// ---------------- Spacing (Novi LateralCloserXY, min/max + toggle) ----------------
+// Same-zone lateral offset at FIRST PRODUCTION (not current spacing).
+// Bounds bind only on wells with real measured spacing; wells with no
+// same-zone neighbor (absent from Novi WellSpacing, or carrying the
+// 2800-ft sentinel cap) form a separate "no-neighbor" class that the
+// checkbox re-admits — so a wide-spacing floor can't silently sweep in
+// parent wells whose 2800 is a cap, not a measurement.
+function SpacingSection({
+  min,
+  max,
+  includeUnbounded,
+  onRangeChange,
+  onIncludeUnboundedChange,
+}: {
+  min: number | null;
+  max: number | null;
+  includeUnbounded: boolean;
+  onRangeChange: (min: number | null, max: number | null) => void;
+  onIncludeUnboundedChange: (v: boolean) => void;
+}) {
+  const rangeActive = min != null || max != null;
+  return (
+    <section className="filter-section">
+      <h3 title="Novi WellSpacing LateralCloserXY — same-zone lateral offset at first production">
+        Spacing (ft, at first prod)
+      </h3>
+      <div className="row">
+        <input
+          type="number"
+          min={0}
+          max={2700}
+          step={100}
+          placeholder="0"
+          value={min ?? ""}
+          onChange={(e) =>
+            onRangeChange(e.target.value ? Number(e.target.value) : null, max)
+          }
+        />
+        <span className="row-sep">—</span>
+        <input
+          type="number"
+          min={0}
+          max={2700}
+          step={100}
+          placeholder="2700"
+          value={max ?? ""}
+          onChange={(e) =>
+            onRangeChange(min, e.target.value ? Number(e.target.value) : null)
+          }
+        />
+      </div>
+      <label
+        className="chk-inline"
+        title={
+          "Wells absent from Novi WellSpacing, or at the 2,800-ft " +
+          "no-neighbor cap, have no measured same-zone spacing. " +
+          "Check to include them alongside the range."
+        }
+        style={{ opacity: rangeActive ? 1 : 0.5 }}
+      >
+        <input
+          type="checkbox"
+          disabled={!rangeActive}
+          checked={includeUnbounded}
+          onChange={(e) => onIncludeUnboundedChange(e.target.checked)}
+        />
+        include no-neighbor / standalone wells
+      </label>
     </section>
   );
 }

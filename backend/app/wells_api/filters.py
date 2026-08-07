@@ -16,12 +16,22 @@ from datetime import date
 from typing import Annotated, Any
 
 from fastapi import Query
-from sqlalchemy import ColumnElement
+from sqlalchemy import ColumnElement, and_, or_
 
 from app.db.models import Well, WellStatus
 
 # Default vintage window for the left rail (mirrors the brief).
 DEFAULT_VINTAGE_YEARS_BACK = 10
+
+# Novi WellSpacing no-neighbor sentinel: LateralCloserXY is capped at
+# exactly 2800.0 when no same-zone neighbor existed at first production
+# (~12% of rows; also the column max). Confirmed with Novi 2026-07-14 —
+# see engineering_db sql/06_curated_derived.sql. The spacing filter
+# treats sentinel rows together with NULL (absent from WellSpacing) as
+# one "unbounded / no-neighbor" class behind an explicit include flag,
+# so a wide-spacing floor like ">= 1500 ft" can't silently sweep in
+# parent wells whose 2800 is a cap, not a measurement.
+SPACING_SENTINEL_FT = 2800.0
 
 
 def _split_csv(s: str | None) -> list[str]:
@@ -40,6 +50,15 @@ class FilterSpec:
     first_prod_end: date | None = None
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
+    # Same-zone spacing (Novi LateralCloserXY, ft, as-of-first-prod).
+    # Bounds apply ONLY to wells with REAL spacing (non-null and not the
+    # 2800 sentinel). When either bound is set, unbounded/no-neighbor
+    # wells (NULL or sentinel) drop out unless spacing_include_unbounded
+    # re-admits them. With no bounds set the flag is inert (all wells
+    # pass, today's behavior).
+    spacing_min_ft: float | None = None
+    spacing_max_ft: float | None = None
+    spacing_include_unbounded: bool = False
     # Explicit api10 allow-list. When non-empty, only wells with one of
     # these api10s pass — pasted from an external tool's well-list so
     # the engineer can recreate the same selection here and forecast.
@@ -69,6 +88,23 @@ class FilterSpec:
             clauses.append(Well.lateral_ft >= self.lateral_min_ft)
         if self.lateral_max_ft is not None:
             clauses.append(Well.lateral_ft <= self.lateral_max_ft)
+        if self.spacing_min_ft is not None or self.spacing_max_ft is not None:
+            col = Well.lateral_closer_xy_ft
+            bounded_parts: list[ColumnElement[bool]] = [
+                col.isnot(None),
+                col != SPACING_SENTINEL_FT,
+            ]
+            if self.spacing_min_ft is not None:
+                bounded_parts.append(col >= self.spacing_min_ft)
+            if self.spacing_max_ft is not None:
+                bounded_parts.append(col <= self.spacing_max_ft)
+            bounded = and_(*bounded_parts)
+            if self.spacing_include_unbounded:
+                clauses.append(
+                    or_(bounded, col.is_(None), col == SPACING_SENTINEL_FT)
+                )
+            else:
+                clauses.append(bounded)
         if self.api10s:
             clauses.append(Well.api10.in_(self.api10s))
         return clauses
@@ -107,6 +143,17 @@ def parse_filter_query(
     ] = None,
     lateral_min_ft: Annotated[float | None, Query(ge=0)] = None,
     lateral_max_ft: Annotated[float | None, Query(ge=0)] = None,
+    spacing_min_ft: Annotated[float | None, Query(ge=0)] = None,
+    spacing_max_ft: Annotated[float | None, Query(ge=0)] = None,
+    spacing_include_unbounded: Annotated[
+        bool,
+        Query(
+            description=(
+                "With a spacing bound set, also include wells with no "
+                "same-zone neighbor (NULL / 2800-sentinel LateralCloserXY)"
+            )
+        ),
+    ] = False,
     api10s: Annotated[
         str | None, Query(description="CSV of 10-digit API numbers (allow-list)")
     ] = None,
@@ -129,6 +176,9 @@ def parse_filter_query(
         first_prod_end=first_prod_end,
         lateral_min_ft=lateral_min_ft,
         lateral_max_ft=lateral_max_ft,
+        spacing_min_ft=spacing_min_ft,
+        spacing_max_ft=spacing_max_ft,
+        spacing_include_unbounded=spacing_include_unbounded,
         api10s=tuple(_split_csv(api10s)),
     )
 
@@ -145,5 +195,8 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "first_prod_end": spec.first_prod_end.isoformat() if spec.first_prod_end else None,
         "lateral_min_ft": spec.lateral_min_ft,
         "lateral_max_ft": spec.lateral_max_ft,
+        "spacing_min_ft": spec.spacing_min_ft,
+        "spacing_max_ft": spec.spacing_max_ft,
+        "spacing_include_unbounded": spec.spacing_include_unbounded,
         "api10s": list(spec.api10s),
     }

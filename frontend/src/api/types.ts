@@ -3,6 +3,11 @@
 
 export type WellStatus = "PDP" | "DUC" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKNOWN";
 
+// Novi WellSpacing no-neighbor sentinel: LateralCloserXY == 2800.0
+// means "no same-zone neighbor at first production" (a cap, not a
+// measurement). Mirrors backend wells_api/filters.py.
+export const SPACING_SENTINEL_FT = 2800;
+
 export interface FilterSpec {
   formations: string[];
   operators: string[];
@@ -12,6 +17,12 @@ export interface FilterSpec {
   first_prod_end: string | null;
   lateral_min_ft: number | null;
   lateral_max_ft: number | null;
+  // Same-zone spacing (Novi LateralCloserXY, ft, as-of-first-prod).
+  // Bounds apply only to wells with REAL spacing; NULL + the 2800
+  // sentinel form the "no-neighbor" class re-admitted by the toggle.
+  spacing_min_ft: number | null;
+  spacing_max_ft: number | null;
+  spacing_include_unbounded: boolean;
   // Explicit API10 allow-list. When non-empty, only the map's wells
   // that match one of these api10s are shown. Pasted from an external
   // tool's well-list workflow.
@@ -27,8 +38,71 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   first_prod_end: null,
   lateral_min_ft: null,
   lateral_max_ft: null,
+  spacing_min_ft: null,
+  spacing_max_ft: null,
+  spacing_include_unbounded: false,
   api10s: [],
 };
+
+// GeoJSON Polygon geometry (NOT a Feature). Canonical home — wells.ts
+// re-exports it for back-compat with existing imports.
+export interface GeoJsonPolygon {
+  type: "Polygon";
+  coordinates: number[][][];
+}
+
+// ---------------- type-well build-up provenance ----------------
+// Mirrors backend app/type_curves/reason_codes.py — keep in sync.
+
+export const REVIEW_REASON_CODES = {
+  outlier_profile: "Outlier production profile",
+  data_quality: "Data quality",
+  mechanical_downtime: "Mechanical / downtime",
+  parent_child_spacing: "Parent-child / spacing",
+  geology_landing: "Geology / landing zone",
+  other: "Other",
+} as const;
+
+export type ReasonCode = keyof typeof REVIEW_REASON_CODES;
+
+export interface ExclusionEntry {
+  code: ReasonCode;
+  note: string;
+}
+
+// The most recent lasso/box spatial select, kept so "Add staged" can
+// attribute the staged wells to the polygon that produced them.
+export interface LastDraw {
+  kind: "polygon" | "bbox";
+  // Box draws are converted to a 5-point Polygon ring at capture time,
+  // so the whole provenance pipeline speaks Polygon only.
+  polygon: GeoJsonPolygon;
+  filters: FilterSpec;
+  api10s: string[];
+  at: string; // ISO timestamp of the draw
+}
+
+// One step in the cohort-building narrative. Mirrors SelectionEventIn.
+export interface SelectionEvent {
+  kind: "polygon" | "bbox" | "click_add" | "click_remove" | "manual_remove";
+  at: string;
+  api10s: string[];
+  polygon?: GeoJsonPolygon | null;
+  filters: FilterSpec | Record<string, never>;
+}
+
+// Assembled by the Review page's Aggregate button; consumed by the
+// type-curve save so the backend can snapshot the build-up funnel.
+export interface ProvenanceDraft {
+  selection_events: SelectionEvent[];
+  partition: {
+    cutoff_months: number;
+    short: string[];
+    no_peak: string[];
+  } | null;
+  exclusions: Record<string, ExclusionEntry>;
+  filter_snapshot: FilterSpec;
+}
 
 export interface SelectionSummary {
   count: number;

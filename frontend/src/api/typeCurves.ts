@@ -1,6 +1,16 @@
 // Type curve API client. Mirrors app/api/type_curves.py.
 
 import { apiFetch } from "./auth";
+import type { ExclusionEntry, ProvenanceDraft } from "./types";
+
+// Wire shape of SaveRequest.provenance (ProvenanceIn server-side).
+// filter_snapshot is NOT here — it rides SaveRequest.filter_spec and
+// the server copies it into the stored provenance (single source).
+export interface ProvenanceBody {
+  selection_events: ProvenanceDraft["selection_events"];
+  partition: ProvenanceDraft["partition"];
+  exclusions: Record<string, ExclusionEntry>;
+}
 
 export type NormalizationBasis = "per_lateral_ft" | "per_proppant_lb" | "per_well";
 
@@ -117,6 +127,9 @@ export interface TypeCurveRow extends TypeCurveSummary {
   filter_spec: Record<string, unknown>;
   included_api10s: string[];
   series: AggregatePayload;
+  // Build-up provenance (raw funnel inputs, server-assembled). {} =
+  // not recorded (curve saved before build-up tracking). Read-only.
+  provenance: Record<string, unknown>;
 }
 
 export async function computeTypeCurve(args: {
@@ -149,6 +162,9 @@ export async function saveTypeCurve(args: {
   // Versions only: atomically move the parent's deal assignment onto
   // the new version (parent is unassigned in the same transaction).
   take_over_deal?: boolean;
+  // Build-up funnel inputs (fresh-aggregate saves). Null/omitted on a
+  // version save inherits the parent's provenance server-side.
+  provenance?: ProvenanceBody | null;
 }): Promise<TypeCurveRow> {
   const path = args.version_of
     ? `/api/type-curves/${args.version_of}/versions`
@@ -166,6 +182,7 @@ export async function saveTypeCurve(args: {
       n_months: args.n_months ?? null,
       fit_overrides: args.fit_overrides ?? null,
       take_over_deal: args.take_over_deal ?? false,
+      provenance: args.provenance ?? null,
     }),
   });
   if (!r.ok) throw new Error(`save failed: ${r.status} ${await r.text()}`);
@@ -340,7 +357,14 @@ export async function deleteForecastOverride(
 
 export async function patchTypeCurveMembership(
   id: string,
-  body: { add?: string[]; remove?: string[] },
+  body: {
+    add?: string[];
+    remove?: string[];
+    // Build-up reason for the removal (one entry covers the remove
+    // list — the UI removes one well at a time). The API tolerates
+    // absence (records "other"); the UI always sends one.
+    remove_reason?: ExclusionEntry | null;
+  },
 ): Promise<TypeCurveRow> {
   const r = await apiFetch(`/api/type-curves/${id}/membership`, {
     method: "PATCH",
@@ -348,6 +372,7 @@ export async function patchTypeCurveMembership(
     body: JSON.stringify({
       add: body.add ?? [],
       remove: body.remove ?? [],
+      remove_reason: body.remove_reason ?? null,
     }),
   });
   if (!r.ok) throw new Error(`membership patch failed: ${r.status} ${await r.text()}`);

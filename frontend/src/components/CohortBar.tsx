@@ -35,7 +35,7 @@ export function CohortBar() {
   const cohorts = useCohortStore((s) => s.cohorts);
   const active = useCohortStore(activeCohort);
   const setActive = useCohortStore((s) => s.setActive);
-  const addApi10s = useCohortStore((s) => s.addApi10s);
+  const addStaged = useCohortStore((s) => s.addStaged);
   const removeApi10s = useCohortStore((s) => s.removeApi10s);
   const renameCohort = useCohortStore((s) => s.rename);
   const setCohortDeal = useCohortStore((s) => s.setDeal);
@@ -93,7 +93,7 @@ export function CohortBar() {
   const handleForecast = () => {
     if (!active || active.api10s.length === 0) return;
     setForecastApi10s(active.api10s);
-    setCohortHandoff(active.name, active.deal_id);
+    setCohortHandoff(active.name, active.deal_id, active.id);
     // One-shot trigger — Review consumes this to fire the batch.
     // Plain tab navigation doesn't set it.
     useMapStore.getState().setForecastTriggerPending(true);
@@ -249,7 +249,13 @@ export function CohortBar() {
                 ? "Lasso some wells on the map to stage them first"
                 : `Add ${stagedCount} staged well${stagedCount === 1 ? "" : "s"} to the cohort`
             }
-            onClick={() => addApi10s(active.id, stagedArray)}
+            onClick={() =>
+              addStaged(
+                active.id,
+                stagedArray,
+                useMapStore.getState().lastDraw,
+              )
+            }
           >
             Add staged ({stagedCount})
           </button>
@@ -567,6 +573,9 @@ function NewCohortModal({
       name: nameTrimmed,
       deal_id: dealId || null,
       initial_api10s: seedFromStaged ? initialStagedApi10s : [],
+      // Attribute the seed to the draw that staged it (build-up
+      // narrative) — null when the wells were click-staged.
+      lastDraw: seedFromStaged ? useMapStore.getState().lastDraw : null,
     });
     onClose();
   }
