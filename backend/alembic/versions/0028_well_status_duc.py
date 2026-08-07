@@ -14,7 +14,7 @@ leaves the value in place (harmless — nothing writes DUC once the app
 code is rolled back).
 
 Revision ID: 0028_well_status_duc
-Revises: 0025_type_curve_risk_multipliers
+Revises: 0027_well_lateral_closer_xy
 Create Date: 2026-08-06
 """
 
@@ -25,7 +25,9 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "0028_well_status_duc"
-down_revision: str | Sequence[str] | None = "0025_type_curve_risk_multipliers"
+# Bumped from 0025 after the build-up (#38: 0026, 0027) merged first —
+# this branch predated those migrations; single-head history restored.
+down_revision: str | Sequence[str] | None = "0027_well_lateral_closer_xy"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
