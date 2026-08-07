@@ -83,17 +83,80 @@ def _deal() -> Deal:
     return d
 
 
-def test_export_has_two_sheets_per_curve() -> None:
+def test_export_has_three_sheets_per_curve() -> None:
     curves = [_curve("holdTheLine_bs1s_v2"), _curve("holdTheLine_bs2s_v2")]
     content = _build_workbook(_deal(), curves)
     wb = load_workbook(io.BytesIO(content), read_only=True)
     names = wb.sheetnames
-    assert len(names) == 4
-    # Sheet pairs are emitted in input order: meta then forecast per curve.
+    assert len(names) == 6
+    # Sheet triplets are emitted in input order: meta, forecast, buildup.
     assert "meta" in names[0] and "bs1s_v2" in names[0]
     assert "forecast" in names[1] and "bs1s_v2" in names[1]
-    assert "meta" in names[2] and "bs2s_v2" in names[2]
-    assert "forecast" in names[3] and "bs2s_v2" in names[3]
+    assert "buildup" in names[2] and "bs1s_v2" in names[2]
+    assert "meta" in names[3] and "bs2s_v2" in names[3]
+    assert "forecast" in names[4] and "bs2s_v2" in names[4]
+    assert "buildup" in names[5] and "bs2s_v2" in names[5]
+
+
+def test_buildup_sheet_degrades_without_provenance() -> None:
+    """Pre-0026 curves (no provenance) still export — the buildup sheet
+    carries the honest 'not recorded' note and an included-only roster,
+    never a fabricated cull history. Renders with session=None (pure)."""
+    tc = _curve("holdTheLine_bs1s_v2")  # _curve sets no provenance
+    content = _build_workbook(_deal(), [tc])
+    wb = load_workbook(io.BytesIO(content))
+    buildup_name = [s for s in wb.sheetnames if "buildup" in s][0]
+    ws = wb[buildup_name]
+    rows = list(ws.iter_rows(values_only=True))
+    flat = [str(c) for r in rows for c in r if c is not None]
+    assert any("provenance not recorded" in v for v in flat)
+    # Roster carries the final membership.
+    assert any("42100000000001" in v for v in flat)
+
+
+def test_buildup_sheet_renders_waterfall_with_provenance() -> None:
+    tc = _curve("holdTheLine_bs1s_v2")
+    tc.included_api10s = ["4210000001"]
+    tc.provenance = {
+        "version": 1,
+        "recorded_at": "2026-08-06T00:00:00Z",
+        "aoi": {"polygons": [{"geometry": {"type": "Polygon", "coordinates": []},
+                              "kind": "lasso", "drawn_at": "t", "area_sq_mi": 10.0}]},
+        "formations": ["WOLFCAMP A"],
+        "filter_snapshot": {"statuses": ["PDP"], "first_prod_start": "2018-01-01"},
+        "selection_events": [
+            {"kind": "polygon", "at": "t", "api10s": ["4210000001"],
+             "polygon": None, "filters": {}}
+        ],
+        "universe": {
+            "computed_at": "2026-08-06T00:00:00Z",
+            "well_count": 2,
+            "wells": [
+                {"api10": "4210000001", "name": "A", "operator": "OP",
+                 "formation": "WOLFCAMP A", "first_prod_date": "2020-01-01",
+                 "lateral_ft": 9000.0, "status": "PDP"},
+                {"api10": "4210000002", "name": "B", "operator": "OP",
+                 "formation": "WOLFCAMP A", "first_prod_date": "2015-01-01",
+                 "lateral_ft": 9000.0, "status": "PDP"},
+            ],
+        },
+        "partition": None,
+        "exclusions": {},
+        "post_save_removals": [],
+        "post_save_additions": [],
+    }
+    content = _build_workbook(_deal(), [tc])
+    wb = load_workbook(io.BytesIO(content))
+    buildup_name = [s for s in wb.sheetnames if "buildup" in s][0]
+    ws = wb[buildup_name]
+    rows = list(ws.iter_rows(values_only=True))
+    col_a = [r[0] for r in rows if r and r[0] is not None]
+    # Waterfall present, closed by the reconciled final count.
+    assert "universe" in col_a
+    assert "vintage" in col_a
+    assert "final_cohort" in col_a
+    final_row = next(r for r in rows if r and r[0] == "final_cohort")
+    assert final_row[3] == 1
 
 
 def test_forecast_sheet_has_full_50yr_horizon() -> None:

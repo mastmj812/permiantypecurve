@@ -33,7 +33,10 @@ import {
   indexFitsByWellStream,
   median,
 } from "../forecasts/reviewTableHelpers";
+import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
 import { ReviewMap } from "../components/ReviewMap";
+import type { ProvenanceDraft, SelectionEvent } from "../api/types";
+import { activeCohort as activeCohortSel, useCohortStore } from "../store/cohortStore";
 import { useMapStore } from "../store/mapStore";
 
 type SortKey =
@@ -57,9 +60,16 @@ const DEFAULT_MIN_DONOR_COUNT = 5;
 
 export function ReviewPage() {
   const api10s = useMapStore((s) => s.forecastApi10s);
-  const excluded = useMapStore((s) => s.excludedApi10s);
+  const exclusions = useMapStore((s) => s.exclusions);
   const toggleExcluded = useMapStore((s) => s.toggleExcluded);
+  const setExclusionReason = useMapStore((s) => s.setExclusionReason);
   const setCurrentPage = useMapStore((s) => s.setCurrentPage);
+  // Derived Set view — downstream consumers (outlier scope, ReviewMap,
+  // the Aggregate filter) only care about membership, not reasons.
+  const excluded = useMemo(
+    () => new Set(exclusions.keys()),
+    [exclusions],
+  );
 
   // Partition lives in the store so it survives nav back and forth
   // between Review and other tabs. The pending-transfer badges + the
@@ -638,7 +648,18 @@ export function ReviewPage() {
                         <span className="badge badge-warn">edited</span>
                       )}
                       {isExcluded && (
-                        <span className="badge badge-err">excluded</span>
+                        <>
+                          <span className="badge badge-err">excluded</span>
+                          <ExclusionReasonControl
+                            code={
+                              exclusions.get(r.api10)?.code ?? "other"
+                            }
+                            note={exclusions.get(r.api10)?.note ?? ""}
+                            onChange={(code, note) =>
+                              setExclusionReason(r.api10, code, note)
+                            }
+                          />
+                        </>
                       )}
                     </td>
                   </tr>
@@ -768,15 +789,53 @@ export function ReviewPage() {
             // TypeCurvePage aggregates this snapshot — previously it
             // used the full forecastApi10s scope, so a filtered Review
             // ("Aggregate 45") silently built the TC from all 120.
-            useMapStore.getState().setTypeCurveApi10s(
+            const st = useMapStore.getState();
+            st.setTypeCurveApi10s(
               filtered
                 .filter((r) => !excluded.has(r.api10))
                 .map((r) => r.api10),
             );
+            // Build-up funnel snapshot for the eventual save. Events
+            // come from the forecast cohort's narrative (the cohort id
+            // rode the Forecast handoff); the legacy direct-lasso flow
+            // falls back to the last draw as a single event. ALL
+            // exclusions ride along — the backend waterfall only
+            // applies them to wells that reach that stage.
+            const cohortState = useCohortStore.getState();
+            const handoffCohort = st.activeCohortId
+              ? (cohortState.cohorts.find((c) => c.id === st.activeCohortId) ??
+                null)
+              : activeCohortSel(cohortState);
+            const events: SelectionEvent[] = handoffCohort
+              ? handoffCohort.provenance.events
+              : st.lastDraw
+                ? [
+                    {
+                      kind: st.lastDraw.kind,
+                      at: st.lastDraw.at,
+                      api10s: st.lastDraw.api10s,
+                      polygon: st.lastDraw.polygon,
+                      filters: st.lastDraw.filters,
+                    },
+                  ]
+                : [];
+            const draft: ProvenanceDraft = {
+              selection_events: events,
+              partition: partition
+                ? {
+                    cutoff_months: partition.cutoffUsed,
+                    short: partition.short,
+                    no_peak: partition.noPeak,
+                  }
+                : null,
+              exclusions: Object.fromEntries(exclusions),
+              filter_snapshot: st.filters,
+            };
+            st.setBuildupDraft(draft);
             // One-shot trigger — TypeCurvePage consumes this to fire
             // the compute. Without it, tab nav back to TC would
             // re-fire the compute on every visit.
-            useMapStore.getState().setTypeCurveTriggerPending(true);
+            st.setTypeCurveTriggerPending(true);
             setCurrentPage("type_curve");
           }}
         >

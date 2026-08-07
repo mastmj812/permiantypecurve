@@ -81,6 +81,12 @@ class WellHeader:
     # Pure passthrough; the Review table surfaces it as a benchmark
     # column. None when Novi hasn't forecasted the well.
     novi_oil_eur: float | None = None
+    # Novi WellSpacing same-zone lateral offset (ft, XY plane), as-of-
+    # first-production (curated.wells_enriched.lateral_closer_xy_ft).
+    # None = absent from WellSpacing; exactly 2800.0 = Novi's
+    # no-neighbor sentinel (passed through verbatim — the app's filter
+    # layer owns the sentinel semantics).
+    lateral_closer_xy_ft: float | None = None
 
 
 @dataclass(frozen=True)

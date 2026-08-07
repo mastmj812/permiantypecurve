@@ -59,6 +59,7 @@ from app.exports.blueox import (
     build_blueox_workbook,
     monthly_volumes_from_rates,
 )
+from app.exports.buildup import write_buildup_sheet
 from app.exports.well_rows import (
     EMPTY_GEO,
     PER_WELL_COL_FORMATS,
@@ -541,6 +542,12 @@ def _build_workbook(
         _write_metadata_sheet(meta_ws, tc, session, series)
         forecast_ws = wb.create_sheet(f"{slug} — forecast")
         _write_forecast_sheet(forecast_ws, tc, series)
+        # Type-well build-up: starting universe by formation → culls
+        # with reasons → final cohort. Reads only tc.provenance /
+        # included_api10s, so the workbook stays pure with session=None;
+        # pre-provenance curves render the "not recorded" degraded form.
+        buildup_ws = wb.create_sheet(f"{slug} — buildup")
+        write_buildup_sheet(buildup_ws, tc)
 
     buf = io.BytesIO()
     wb.save(buf)

@@ -77,7 +77,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // counted. Null (other nav paths / fresh batch) falls back to the
   // full forecast scope — the legacy behavior.
   const typeCurveApi10s = useMapStore((s) => s.typeCurveApi10s);
-  const excluded = useMapStore((s) => s.excludedApi10s);
+  const excluded = useMapStore((s) => s.exclusions);
   // Cohort-handoff prefill: when the user reached this page via the
   // cohort bar's Forecast button, these are populated. The save form
   // pre-fills its name input, and onSave auto-assigns the saved curve
@@ -382,9 +382,21 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     setSaving(true);
     setSaveError(null);
     try {
+      // Build-up provenance rides fresh-aggregate saves only. A save
+      // of a LOADED curve is a version built from the parent's exact
+      // membership — the Review-page draft (if any) describes a
+      // different funnel, so the server inherits the parent's record
+      // instead. filter_spec follows the same split.
+      const draft = selectedSaved ? null : useMapStore.getState().buildupDraft;
       const saved = await saveTypeCurve({
         name: saveName.trim(),
         notes: saveNotes.trim() || null,
+        filter_spec: selectedSaved
+          ? selectedSaved.filter_spec
+          : ((draft?.filter_snapshot ?? {}) as unknown as Record<
+              string,
+              unknown
+            >),
         included_api10s: wells,
         // Version saves carry their own alignment choice (the loaded
         // curve's alignment is fixed; the new version can move to the
@@ -394,6 +406,13 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
         fit_overrides: collectOverrides(),
         take_over_deal:
           !!selectedSaved && selectedSaved.deal_id != null && takeOverDeal,
+        provenance: draft
+          ? {
+              selection_events: draft.selection_events,
+              partition: draft.partition,
+              exclusions: draft.exclusions,
+            }
+          : null,
       });
       // Auto-assign to the handoff deal if the cohort had one preset.
       // Verifies the deal still exists in case the user deleted it

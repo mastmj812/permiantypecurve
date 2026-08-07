@@ -18,7 +18,7 @@ export interface InspectModalProps {
 
 export function InspectModal({ api10s, onClose }: InspectModalProps) {
   const cohort = useCohortStore(activeCohort);
-  const addApi10s = useCohortStore((s) => s.addApi10s);
+  const addStaged = useCohortStore((s) => s.addStaged);
   const removeApi10s = useCohortStore((s) => s.removeApi10s);
 
   const [wells, setWells] = useState<WellDetailLite[] | null>(null);
@@ -171,7 +171,9 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
 
   function commit() {
     if (!cohort) return;
-    addApi10s(cohort.id, Array.from(selected));
+    // Gun-barrel adds are click-style provenance events (no polygon) —
+    // the inspect selection isn't a map draw.
+    addStaged(cohort.id, Array.from(selected), null);
     onClose();
   }
 

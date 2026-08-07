@@ -26,6 +26,8 @@ import {
   patchTypeCurveMembership,
   reaggregateTypeCurve,
 } from "../api/typeCurves";
+import type { ReasonCode } from "../api/types";
+import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { Th, type SortDir } from "../forecasts/reviewTable";
 import { fmtDi, fmtInt, fmtVol } from "../forecasts/reviewTableHelpers";
@@ -182,14 +184,29 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeCurveId]);
 
-  async function excludeWell(api10: string): Promise<void> {
+  // Post-save removal flow: the remove button opens a small reason
+  // dialog first — the removal lands in the curve's build-up
+  // provenance (post_save_removals) with the code + note, keeping the
+  // exported waterfall current. The reason is UI-required here even
+  // though the API tolerates absence (scripted callers).
+  const [removeTarget, setRemoveTarget] = useState<string | null>(null);
+  const [removeCode, setRemoveCode] = useState<ReasonCode>("outlier_profile");
+  const [removeNote, setRemoveNote] = useState("");
+
+  async function excludeWell(
+    api10: string,
+    reason: { code: ReasonCode; note: string },
+  ): Promise<void> {
     setBusy(`exclude:${api10}`);
     setErr(null);
     try {
       // If the modal is open on the well we're dropping, close it —
       // the row will vanish on refresh.
       if (openApi10 === api10) setOpenApi10(null);
-      await patchTypeCurveMembership(typeCurveId, { remove: [api10] });
+      await patchTypeCurveMembership(typeCurveId, {
+        remove: [api10],
+        remove_reason: reason,
+      });
       await refresh();
     } catch (e) {
       setErr(String(e));
@@ -620,8 +637,11 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
                       className="link-btn"
                       disabled={busy != null}
                       style={{ color: "#dc2626" }}
-                      title="Remove this well from the type curve. Bands won't update until you click Re-run aggregation."
-                      onClick={() => void excludeWell(w.api10)}
+                      title="Remove this well from the type curve (asks for a build-up reason). Bands won't update until you click Re-run aggregation."
+                      onClick={() => {
+                        setRemoveNote("");
+                        setRemoveTarget(w.api10);
+                      }}
                     >
                       {busy === `exclude:${w.api10}` ? "removing…" : "remove"}
                     </button>
@@ -639,6 +659,66 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
           </tbody>
         </table>
       </div>
+
+      {removeTarget && (
+        <div className="modal-backdrop" onClick={() => setRemoveTarget(null)}>
+          <div
+            className="modal"
+            style={{ maxWidth: 420 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="modal-header">
+              <strong>Remove {removeTarget}</strong>
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => setRemoveTarget(null)}
+              >
+                close
+              </button>
+            </header>
+            <div className="modal-body" style={{ display: "grid", gap: 12 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                The reason lands on the curve&apos;s build-up sheet
+                (post-save removal).
+              </span>
+              <ExclusionReasonControl
+                code={removeCode}
+                note={removeNote}
+                autoFocusNote
+                onChange={(code, note) => {
+                  setRemoveCode(code);
+                  setRemoveNote(note);
+                }}
+              />
+              <div className="param-actions">
+                <button
+                  type="button"
+                  className="btn-primary"
+                  disabled={busy != null}
+                  onClick={() => {
+                    const target = removeTarget;
+                    setRemoveTarget(null);
+                    void excludeWell(target, {
+                      code: removeCode,
+                      note: removeNote,
+                    });
+                  }}
+                >
+                  Remove well
+                </button>
+                <button
+                  type="button"
+                  className="tb-btn"
+                  onClick={() => setRemoveTarget(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {openWell && tc && (
         <ForecastDetailModal
