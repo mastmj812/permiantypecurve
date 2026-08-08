@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchWellDetails, type WellDetailLite } from "../api/wells";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
+import { useMapStore } from "../store/mapStore";
 import { GunBarrel } from "./GunBarrel";
 import { InspectProductionCharts } from "./InspectProductionCharts";
 
@@ -171,9 +172,17 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
 
   function commit() {
     if (!cohort) return;
-    // Gun-barrel adds are click-style provenance events (no polygon) —
-    // the inspect selection isn't a map draw.
-    addStaged(cohort.id, Array.from(selected), null);
+    // The inspected set almost always CAME from a lasso (the engineer's
+    // habit: lasso → gun-barrel QC → add the keepers). Pass the live
+    // draw so those wells attribute the AOI polygon to the build-up —
+    // the first bro_time export lost its whole starting universe
+    // because this path dropped it. Wells not in the draw still log as
+    // click_adds inside buildStagedEvents.
+    addStaged(
+      cohort.id,
+      Array.from(selected),
+      useMapStore.getState().lastDraw,
+    );
     onClose();
   }
 

@@ -1364,6 +1364,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 {saveError}
               </div>
             )}
+            <BuildupStatusLine versionOf={versionOf} />
             <button
               type="button"
               className="btn-primary"
@@ -1945,6 +1946,57 @@ interface TweakPanelProps {
   onChange: (key: keyof FitOverride, value: number) => void;
   onPreview: () => void;
   onReset: () => void;
+}
+
+// Pre-save build-up status — makes AOI capture visible BEFORE the save,
+// so a curve can't silently ship a buildup sheet with no starting
+// universe again (the first bro_time export did exactly that: the
+// engineer's lasso→inspect→add flow dropped the polygon and the gap
+// only surfaced in the delivered workbook). Amber = fixable now:
+// re-lasso AROUND the cohort area (circle it, don't strike through it),
+// "Add staged" to stamp the AOI, then re-aggregate from Review.
+function BuildupStatusLine({ versionOf }: { versionOf: string | null }) {
+  const draft = useMapStore((s) => s.buildupDraft);
+  const style = { fontSize: 11, marginTop: 8, marginBottom: 4 };
+  if (!draft) {
+    return (
+      <div className="muted" style={style}>
+        build-up:{" "}
+        {versionOf
+          ? "will inherit the parent curve's record"
+          : "no funnel data — sheet will show final membership only"}
+      </div>
+    );
+  }
+  const aoiCount = draft.selection_events.filter(
+    (e) => (e.kind === "polygon" || e.kind === "bbox") && e.polygon,
+  ).length;
+  const nExcl = Object.keys(draft.exclusions).length;
+  if (aoiCount === 0) {
+    return (
+      <div
+        style={{ ...style, color: "#b45309" }}
+        title={
+          "The starting-universe waterfall needs the drawn area. Circle " +
+          "the cohort's neighborhood with the lasso (through-strikes " +
+          "select wells but make no meaningful area), click Add staged " +
+          "(re-adding members is fine — it stamps the AOI), then " +
+          "re-aggregate from Review."
+        }
+      >
+        ⚠ build-up: no AOI recorded — starting universe will be unavailable
+      </div>
+    );
+  }
+  return (
+    <div className="muted" style={style}>
+      build-up: AOI ✓ ({aoiCount} polygon{aoiCount === 1 ? "" : "s"}
+      {nExcl > 0
+        ? `, ${nExcl} coded exclusion${nExcl === 1 ? "" : "s"}`
+        : ""}
+      )
+    </div>
+  );
 }
 
 // Geologic risking editor — per-stream scalar MULs on the selected
