@@ -29,7 +29,13 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.session import get_session
-from app.wells_api.filters import FilterSpec, filter_spec_dict, parse_filter_query
+from app.wells_api.filters import (
+    SPACING_SENTINEL_FT,
+    FilterSpec,
+    escape_like,
+    filter_spec_dict,
+    parse_filter_query,
+)
 
 router = APIRouter(prefix="/wells", tags=["wells"])
 log = get_logger("api.wells.tiles")
@@ -86,6 +92,32 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
     if spec.lateral_max_ft is not None:
         parts.append("w.lateral_ft <= :lateral_max_ft")
         params["lateral_max_ft"] = spec.lateral_max_ft
+    # Same-zone spacing — mirrors the ORM clause exactly: bounds bind
+    # only on REAL spacing (non-null, not the 2800 no-neighbor
+    # sentinel); the include flag re-admits the unbounded class.
+    if spec.spacing_min_ft is not None or spec.spacing_max_ft is not None:
+        bounded = [
+            "w.lateral_closer_xy_ft IS NOT NULL",
+            "w.lateral_closer_xy_ft != :spacing_sentinel",
+        ]
+        params["spacing_sentinel"] = SPACING_SENTINEL_FT
+        if spec.spacing_min_ft is not None:
+            bounded.append("w.lateral_closer_xy_ft >= :spacing_min_ft")
+            params["spacing_min_ft"] = spec.spacing_min_ft
+        if spec.spacing_max_ft is not None:
+            bounded.append("w.lateral_closer_xy_ft <= :spacing_max_ft")
+            params["spacing_max_ft"] = spec.spacing_max_ft
+        bounded_sql = "(" + " AND ".join(bounded) + ")"
+        if spec.spacing_include_unbounded:
+            parts.append(
+                f"({bounded_sql} OR w.lateral_closer_xy_ft IS NULL"
+                " OR w.lateral_closer_xy_ft = :spacing_sentinel)"
+            )
+        else:
+            parts.append(bounded_sql)
+    if spec.well_name_contains:
+        parts.append("w.name ILIKE :well_name_pat ESCAPE '\\'")
+        params["well_name_pat"] = f"%{escape_like(spec.well_name_contains)}%"
     if spec.api10s:
         # Explicit allow-list pasted in the FilterPanel. Mirrors the
         # selection endpoint's behavior so the same paste produces the
