@@ -25,6 +25,7 @@ export function FilterPanel() {
   const setSpacingIncludeUnbounded = useMapStore(
     (s) => s.setSpacingIncludeUnbounded,
   );
+  const setWellNameContains = useMapStore((s) => s.setWellNameContains);
   const setApi10s = useMapStore((s) => s.setApi10s);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
@@ -67,6 +68,11 @@ export function FilterPanel() {
       />
 
       <OperatorSection selected={filters.operators} onChange={setOperators} />
+
+      <WellNameSection
+        value={filters.well_name_contains}
+        onChange={setWellNameContains}
+      />
 
       <LateralSection
         min={filters.lateral_min_ft}
@@ -439,6 +445,75 @@ function LateralSection({
           value={max ?? ""}
           onChange={(e) => onChange(min, e.target.value ? Number(e.target.value) : null)}
         />
+      </div>
+    </section>
+  );
+}
+
+// ---------------- Well name (case-insensitive contains) ----------------
+// Local draft debounced into the store: every committed change re-keys
+// the tile URL (a full tile refetch), so we don't commit per keystroke.
+// 500 ms after the user stops typing the map updates live; Enter
+// commits immediately; ✕ clears.
+function WellNameSection({
+  value,
+  onChange,
+}: {
+  value: string | null;
+  onChange: (v: string | null) => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+
+  // Re-sync the draft when the store changes underneath us (reset
+  // button, rehydrated filter_spec from the add-wells flow).
+  useEffect(() => {
+    setDraft(value ?? "");
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const v = raw.trim();
+    onChange(v.length > 0 ? v : null);
+  };
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if ((value ?? "") !== draft) commit(draft);
+    }, 500);
+    return () => clearTimeout(t);
+    // commit is stable-enough (closes over onChange prop); value in
+    // deps keeps the no-op guard honest after external resets.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, value]);
+
+  return (
+    <section className="filter-section">
+      <h3>Well name</h3>
+      <div className="row">
+        <input
+          type="text"
+          placeholder="contains… e.g. UNIVERSITY"
+          title="Case-insensitive substring match on the well/lease name"
+          value={draft}
+          maxLength={120}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit(draft);
+          }}
+          style={{ flex: 1 }}
+        />
+        {draft && (
+          <button
+            type="button"
+            className="link-btn"
+            aria-label="Clear well name filter"
+            onClick={() => {
+              setDraft("");
+              onChange(null);
+            }}
+          >
+            ✕
+          </button>
+        )}
       </div>
     </section>
   );

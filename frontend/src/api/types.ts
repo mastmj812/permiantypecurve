@@ -23,6 +23,9 @@ export interface FilterSpec {
   spacing_min_ft: number | null;
   spacing_max_ft: number | null;
   spacing_include_unbounded: boolean;
+  // Case-insensitive substring match on the well/lease name. Null/empty
+  // = no filter. Metacharacters match literally (escaped server-side).
+  well_name_contains: string | null;
   // Explicit API10 allow-list. When non-empty, only the map's wells
   // that match one of these api10s are shown. Pasted from an external
   // tool's well-list workflow.
@@ -41,6 +44,7 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   spacing_min_ft: null,
   spacing_max_ft: null,
   spacing_include_unbounded: false,
+  well_name_contains: null,
   api10s: [],
 };
 
