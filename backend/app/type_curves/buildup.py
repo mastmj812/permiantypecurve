@@ -164,6 +164,9 @@ def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
     operators = fs.get("operators") or []
     if operators:
         out.append(("operator_criterion", ", ".join(str(o) for o in operators)))
+    name_sub = fs.get("well_name_contains")
+    if name_sub:
+        out.append(("well_name_criterion", f"name contains '{name_sub}'"))
     api10s = fs.get("api10s") or []
     if api10s:
         out.append(("api10_allowlist", f"{len(api10s)} explicit api10s"))
@@ -302,6 +305,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     sp_include_unbounded = bool(fs.get("spacing_include_unbounded"))
     statuses = {str(s) for s in (fs.get("statuses") or [])}
     operators = {str(o) for o in (fs.get("operators") or [])}
+    name_sub = str(fs.get("well_name_contains") or "").casefold() or None
     allowlist = {str(a) for a in (fs.get("api10s") or [])}
     # counties exists in FilterSpec but has no UI and the universe
     # snapshot carries no county attr — folded into filters_other by
@@ -329,6 +333,9 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
         if statuses and str(w.get("status")) not in statuses:
             return "filters_other", None, None
         if operators and str(w.get("operator")) not in operators:
+            return "filters_other", None, None
+        # Mirrors the ILIKE %sub% clause (case-insensitive contains).
+        if name_sub and name_sub not in str(w.get("name") or "").casefold():
             return "filters_other", None, None
         if allowlist and api10 not in allowlist:
             return "filters_other", None, None

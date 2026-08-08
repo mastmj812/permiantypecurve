@@ -40,6 +40,11 @@ def _split_csv(s: str | None) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
+def _escape_like(s: str) -> str:
+    """Escape LIKE metacharacters so user input matches literally."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @dataclass(frozen=True)
 class FilterSpec:
     formations: tuple[str, ...] = ()
@@ -59,6 +64,11 @@ class FilterSpec:
     spacing_min_ft: float | None = None
     spacing_max_ft: float | None = None
     spacing_include_unbounded: bool = False
+    # Case-insensitive substring match on the well/lease name (Novi/
+    # Enverus free-form). Substring, not exact/multiselect — names vary
+    # per wellbore ("UNIVERSITY 7-43 2H"), so "contains" is the only
+    # useful grain. User-typed % _ \ are escaped (matched literally).
+    well_name_contains: str | None = None
     # Explicit api10 allow-list. When non-empty, only wells with one of
     # these api10s pass — pasted from an external tool's well-list so
     # the engineer can recreate the same selection here and forecast.
@@ -105,6 +115,12 @@ class FilterSpec:
                 )
             else:
                 clauses.append(bounded)
+        if self.well_name_contains:
+            clauses.append(
+                Well.name.ilike(
+                    f"%{_escape_like(self.well_name_contains)}%", escape="\\"
+                )
+            )
         if self.api10s:
             clauses.append(Well.api10.in_(self.api10s))
         return clauses
@@ -154,6 +170,13 @@ def parse_filter_query(
             )
         ),
     ] = False,
+    well_name_contains: Annotated[
+        str | None,
+        Query(
+            max_length=120,
+            description="Case-insensitive substring match on well/lease name",
+        ),
+    ] = None,
     api10s: Annotated[
         str | None, Query(description="CSV of 10-digit API numbers (allow-list)")
     ] = None,
@@ -179,6 +202,7 @@ def parse_filter_query(
         spacing_min_ft=spacing_min_ft,
         spacing_max_ft=spacing_max_ft,
         spacing_include_unbounded=spacing_include_unbounded,
+        well_name_contains=(well_name_contains or "").strip() or None,
         api10s=tuple(_split_csv(api10s)),
     )
 
@@ -198,5 +222,6 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "spacing_min_ft": spec.spacing_min_ft,
         "spacing_max_ft": spec.spacing_max_ft,
         "spacing_include_unbounded": spec.spacing_include_unbounded,
+        "well_name_contains": spec.well_name_contains,
         "api10s": list(spec.api10s),
     }

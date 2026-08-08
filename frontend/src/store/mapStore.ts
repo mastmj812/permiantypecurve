@@ -142,6 +142,7 @@ export interface MapState {
   setLateralRange: (min: number | null, max: number | null) => void;
   setSpacingRange: (min: number | null, max: number | null) => void;
   setSpacingIncludeUnbounded: (v: boolean) => void;
+  setWellNameContains: (v: string | null) => void;
   setApi10s: (api10s: string[]) => void;
   resetFilters: () => void;
 
@@ -279,6 +280,10 @@ export const useMapStore = create<MapState>((set) => ({
   setSpacingIncludeUnbounded: (spacing_include_unbounded) =>
     set((s) => ({
       filters: { ...s.filters, spacing_include_unbounded },
+    })),
+  setWellNameContains: (well_name_contains) =>
+    set((s) => ({
+      filters: { ...s.filters, well_name_contains },
     })),
   setApi10s: (api10s) =>
     set((s) => ({ filters: { ...s.filters, api10s } })),
