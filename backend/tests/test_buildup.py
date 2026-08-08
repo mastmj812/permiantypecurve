@@ -306,6 +306,20 @@ def test_no_spacing_filter_means_no_spacing_stage() -> None:
     )
 
 
+def test_well_name_filter_culls_at_filters_other() -> None:
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["well_name_contains"] = "well 0"
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    # _uni_well names are "WELL <last2>" — "well 0" matches W01..W09
+    # case-insensitively; W10/W11 ("WELL 10"/"WELL 11") miss and cull.
+    assert by["W10"].disposition == "filters_other"
+    assert by["W11"].disposition == "filters_other"
+    assert by["W01"].disposition == "included"
+    labels = dict(b.header.criteria) if b.header else {}
+    assert labels["well_name_criterion"] == "name contains 'well 0'"
+
+
 def test_degraded_empty_provenance() -> None:
     tc = _tc({}, ["A", "B"])
     b = compute_buildup(tc)

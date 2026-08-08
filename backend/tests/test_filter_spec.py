@@ -123,6 +123,41 @@ def test_spacing_inert_without_bounds() -> None:
     assert len(spec.to_sqlalchemy_clauses()) == 1  # statuses only
 
 
+# ---------------- well name (contains) ----------------
+
+
+def test_well_name_contains_is_case_insensitive_substring() -> None:
+    spec = FilterSpec(well_name_contains="University")
+    sql = _compiled_clauses(spec)
+    assert "lower(wells.name) LIKE lower('%University%')" in sql
+
+
+def test_well_name_metacharacters_match_literally() -> None:
+    spec = FilterSpec(well_name_contains="7-43_2H 100%")
+    sql = _compiled_clauses(spec)
+    # % and _ in user input are escaped — no accidental wildcards.
+    assert "7-43\\_2H 100\\%" in sql
+    assert "ESCAPE" in sql
+
+
+def test_well_name_blank_is_no_filter() -> None:
+    spec = parse_filter_query(
+        None, None, None, None, None, None, None, None,
+        well_name_contains="   ",
+    )
+    assert spec.well_name_contains is None
+    assert len(spec.to_sqlalchemy_clauses()) == 1  # statuses only
+
+
+def test_well_name_parse_and_dict_roundtrip() -> None:
+    spec = parse_filter_query(
+        None, None, None, None, None, None, None, None,
+        well_name_contains="  UNIVERSITY ",
+    )
+    assert spec.well_name_contains == "UNIVERSITY"
+    assert filter_spec_dict(spec)["well_name_contains"] == "UNIVERSITY"
+
+
 def test_spacing_parse_and_dict_roundtrip() -> None:
     spec = parse_filter_query(
         None, None, None, None, None, None, None, None,

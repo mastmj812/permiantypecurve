@@ -27,6 +27,7 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.lateral_max_ft != null) params.set("lateral_max_ft", String(spec.lateral_max_ft));
   if (spec.spacing_min_ft != null) params.set("spacing_min_ft", String(spec.spacing_min_ft));
   if (spec.spacing_max_ft != null) params.set("spacing_max_ft", String(spec.spacing_max_ft));
+  if (spec.well_name_contains) params.set("well_name_contains", spec.well_name_contains);
   // Only meaningful alongside a spacing bound; omitted otherwise to
   // keep the tile-cache key compact.
   if (

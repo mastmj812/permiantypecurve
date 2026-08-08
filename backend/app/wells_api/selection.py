@@ -60,6 +60,8 @@ class FilterSpecBody(BaseModel):
     spacing_min_ft: float | None = None
     spacing_max_ft: float | None = None
     spacing_include_unbounded: bool = False
+    # Case-insensitive well/lease-name substring (see FilterSpec).
+    well_name_contains: str | None = None
     # Allow-list pasted in the FilterPanel. Must be honored here too so a
     # box/lasso select after the user has narrowed the map to a specific
     # well set doesn't reach back and pick up filtered-out wells inside
@@ -84,6 +86,7 @@ class FilterSpecBody(BaseModel):
             spacing_min_ft=self.spacing_min_ft,
             spacing_max_ft=self.spacing_max_ft,
             spacing_include_unbounded=self.spacing_include_unbounded,
+            well_name_contains=(self.well_name_contains or "").strip() or None,
             api10s=tuple(self.api10s),
         )
 
