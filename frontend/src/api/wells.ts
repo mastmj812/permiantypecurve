@@ -72,8 +72,9 @@ export async function fetchOperators(q: string): Promise<OperatorMatch[]> {
 }
 
 // Lightweight GeoJSON for the review-tab map. One LineString per well
-// (the heel-to-bottomhole wellstick), with api10/formation/operator
-// properties for client-side coloring/joining against forecasts.
+// (the lateral-path wellstick: Enverus survey-derived where available,
+// 4-point Novi fallback), with api10/formation/operator properties for
+// client-side coloring/joining against forecasts.
 export interface WellstickFeatureCollection {
   type: "FeatureCollection";
   features: Array<{

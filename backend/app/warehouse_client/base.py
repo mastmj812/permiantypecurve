@@ -28,11 +28,12 @@ class WellHeader:
     Completed, Inactive, P&A, Abandoned, Spud, DUC) to the app's enum
     (PDP, INACTIVE, PA, DUC, UNKNOWN) by ``_status_from_curated``.
 
-    ``wellstick_wkt`` is the 4-point LINESTRING from Novi SHL→LP→MP→BHL
-    (curated.wells.wellstick_geom), serialized as WKT in EPSG:4326. The
-    persistence layer parses it into a PostGIS geometry. Replaces the
-    Enverus ``lateral_line_wkt`` + surface→BH fallback used by the
-    legacy ``enverus_client`` DTO.
+    ``wellstick_wkt`` is the lateral-path LINESTRING serialized as WKT
+    in EPSG:4326: the Enverus survey-derived path from
+    curated.enverus_lateral_lines when present (~99% of horizontals;
+    traces u-turn/horseshoe geometry), else the 4-point Novi
+    SHL→LP→MP→BHL curated.wells.wellstick_geom. The persistence layer
+    parses it into a PostGIS geometry.
 
     ``directional_survey_is_planned`` is a formation-trust diagnostic:
     when TRUE, the well's formation assignment was made against the
