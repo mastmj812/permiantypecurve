@@ -13,7 +13,6 @@ from __future__ import annotations
 from datetime import date
 
 import pandas as pd
-import pytest
 
 from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import (

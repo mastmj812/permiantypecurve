@@ -17,8 +17,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
+
+from alembic import op
 
 revision: str = "0011_cohort_transfer"
 down_revision: str | Sequence[str] | None = "0010_api14_to_api10"

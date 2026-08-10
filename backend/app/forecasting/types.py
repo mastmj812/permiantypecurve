@@ -8,7 +8,7 @@ units as `production_monthly.rate_calday_*`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 

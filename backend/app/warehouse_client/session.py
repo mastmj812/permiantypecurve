@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 
-
 _NOT_CONFIGURED_MESSAGE = (
     "WAREHOUSE_DATABASE_URL is not set; cannot read from engineering_db. "
     "Set it in .env (see .env.example for the canonical Docker-Desktop "
@@ -59,7 +58,7 @@ def _engine() -> Engine:
     )
 
     @event.listens_for(engine, "connect")
-    def _warehouse_session_setup(dbapi_conn, _record):  # noqa: ANN001
+    def _warehouse_session_setup(dbapi_conn, _record):
         # Apply per-session GUCs explicitly. We can't use libpq startup
         # `options` for these because a transaction pooler (Supabase/pgbouncer)
         # strips it; and we run them in autocommit so they persist for the

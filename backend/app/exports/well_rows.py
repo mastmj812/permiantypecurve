@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Forecast, Well
 
-
 # Columns for the per-well summary block. Order matches the deal-deck
 # slide and the xlsx metadata sheet's per-well summary block.
 #   BWPF = barrels of completion fluid per foot = fluid_bbl / lateral_ft

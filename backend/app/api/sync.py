@@ -18,7 +18,6 @@ from app.db.session import get_session
 from app.sync.orchestrator import (
     DEFAULT_BASIN,
     DEFAULT_COUNTIES,
-    DEFAULT_COUNTY,
     sync_counties,
 )
 

@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-
 from datetime import date
 
 from app.core.logging import configure_logging, get_logger

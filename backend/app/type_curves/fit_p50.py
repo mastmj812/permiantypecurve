@@ -38,6 +38,7 @@ from app.core.logging import get_logger
 from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import fit_rate_cum
 from app.forecasting.peak_detection import PeakResult, detect_oil_peak
+
 # Ramp math now lives in app.forecasting.ramp_arps so per-well
 # forecasting and TC P50 fitting share one implementation. Re-exporting
 # the names here keeps the existing import path stable for any callers.
@@ -148,7 +149,7 @@ def fit_p50_series(
             stream="oil",
             config=cfg,
         )
-    except Exception as e:  # noqa: BLE001 — fit failure shouldn't 500 the page
+    except Exception as e:
         log.warning("p50_fit_failed", error=str(e)[:200])
         return None
 

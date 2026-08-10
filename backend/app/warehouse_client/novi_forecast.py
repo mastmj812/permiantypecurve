@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from app.warehouse_client.base import NoviForecastRecord
 
-
 # Column mapping curated.production_forecast -> NoviForecastRecord. The
 # per_day_* columns are Novi's calendar-day rates (same convention as
 # curated.production); cumulative_* are the running totals.

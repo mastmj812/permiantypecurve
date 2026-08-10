@@ -639,7 +639,7 @@ def fit_with_fallback(
             stream=stream,
             config=cfg,
         )
-    except Exception as e:  # noqa: BLE001 — fallback is best-effort
+    except Exception as e:
         log.info(
             "fallback_fit_failed",
             stream=stream,

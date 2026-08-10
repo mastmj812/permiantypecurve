@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.warehouse_client.base import WellHeader
 
-
 # Mapping from Novi's well_status vocabulary (as it appears in
 # curated.wells.well_status) to the app's existing WellStatus enum.
 # Derived empirically from the full fetch scope (horizontal, 2010+

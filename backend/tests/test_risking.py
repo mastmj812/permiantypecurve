@@ -18,7 +18,7 @@ from __future__ import annotations
 import copy
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -171,7 +171,7 @@ def _tc(risk: dict[str, Any] | None = None) -> TypeCurve:
     tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
     tc.alignment_method = AlignmentMethod.PEAK_RAMP
     tc.series = _series()
-    tc.created_at = datetime(2026, 7, 24, tzinfo=timezone.utc)
+    tc.created_at = datetime(2026, 7, 24, tzinfo=UTC)
     tc.version_of = None
     tc.deal_id = None
     tc.is_stale = False

@@ -10,9 +10,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from geoalchemy2.types import Geometry
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0001_initial"
 down_revision: str | Sequence[str] | None = None

@@ -38,9 +38,9 @@ Create Date: 2026-05-28
 from __future__ import annotations
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects.postgresql import ARRAY
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "0010_api14_to_api10"

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from app.wells_api.summary import (
     HARD_SELECTION_CAP,
     SOFT_SELECTION_WARNING,

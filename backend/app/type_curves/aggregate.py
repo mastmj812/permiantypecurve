@@ -205,7 +205,7 @@ def aggregate(
     if not wells:
         empty = StreamSeries(
             months=0, p10=[], p25=[], p50=[], p75=[], p90=[], mean=[],
-            well_count=[], implied_eur_per_1000ft={k: 0.0 for k in PERCENTILE_KEYS + ("mean",)},
+            well_count=[], implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
         )
         return TypeCurveAggregate(
             n_months=0, n_wells=0,
@@ -226,7 +226,7 @@ def aggregate(
     if not usable_wells:
         empty = StreamSeries(
             months=0, p10=[], p25=[], p50=[], p75=[], p90=[], mean=[],
-            well_count=[], implied_eur_per_1000ft={k: 0.0 for k in PERCENTILE_KEYS + ("mean",)},
+            well_count=[], implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
         )
         return TypeCurveAggregate(
             n_months=0, n_wells=0,

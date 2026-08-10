@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from app.warehouse_client.base import ProductionRecord
 
-
 # Direct column mapping from curated.production -> ProductionRecord
 # fields. The per_month_* columns are the monthly volumes; per_day_*
 # columns are Novi's pre-computed calendar-day rates.

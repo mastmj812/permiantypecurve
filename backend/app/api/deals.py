@@ -25,11 +25,11 @@ from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from starlette.datastructures import UploadFile as StarletteUploadFile
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from app.api.type_curves import (
     _DAYS_PER_MONTH,
@@ -60,6 +60,12 @@ from app.exports.blueox import (
     monthly_volumes_from_rates,
 )
 from app.exports.buildup import write_buildup_sheet
+from app.exports.dossier import (
+    ComparisonSlideInput,
+    CurveSlideInput,
+    ScenarioSlideInput,
+    build_deal_dossier_pptx,
+)
 from app.exports.well_rows import (
     EMPTY_GEO,
     PER_WELL_COL_FORMATS,
@@ -70,12 +76,6 @@ from app.exports.well_rows import (
 )
 from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
-from app.exports.dossier import (
-    ComparisonSlideInput,
-    CurveSlideInput,
-    ScenarioSlideInput,
-    build_deal_dossier_pptx,
-)
 from app.warehouse_client.intel_forecast import (
     REP_LATERAL_TOL,
     REP_LOW_N,
@@ -473,7 +473,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve, series: dict[str, Any]) -> Non
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name)
         rates_by_stream[s_name] = _evaluate_fitted_rates(s or {})
-        cums_by_stream[s_name] = {k: 0.0 for k in _PERCENTILE_KEYS_WITH_MEAN}
+        cums_by_stream[s_name] = dict.fromkeys(_PERCENTILE_KEYS_WITH_MEAN, 0.0)
 
     # Trapezoid rule: month K's volume = (rate at start + rate at end)
     # / 2 * dt, last month flat-extrapolated. Mirrors the frontend's

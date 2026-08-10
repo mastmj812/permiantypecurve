@@ -209,7 +209,7 @@ def _parse_shapefile_zip(
                 continue
             attrs = {
                 k: _jsonable(v)
-                for k, v in zip(field_names, list(sr.record))
+                for k, v in zip(field_names, list(sr.record), strict=False)
             }
             label = _pick_label(attrs, fid)
             features.append((label, wkt, attrs))
@@ -284,7 +284,7 @@ async def upload_shapefile(
         raise
     except ValueError as e:  # read_gpkg's not-a-gpkg / no-polygons errors
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.exception("deal_upload_parse_failed", filename=file.filename, kind=kind)
         raise HTTPException(status_code=400, detail=f"failed to parse upload: {e}") from e
 

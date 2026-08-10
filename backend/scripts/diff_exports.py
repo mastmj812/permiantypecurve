@@ -147,12 +147,12 @@ def parse_metadata_csv(content: bytes) -> dict[str, Any]:
         if section == "eur" and row[0] in ("oil", "gas", "water"):
             out["eur"][row[0]] = {
                 k: float(v) if v else None
-                for k, v in zip(eur_header, row[1:])
+                for k, v in zip(eur_header, row[1:], strict=False)
             }
             continue
         if section == "params" and row[0] in ("oil", "gas", "water"):
             out["params"][row[0]] = {
-                k: v for k, v in zip(param_header, row[1:])
+                k: v for k, v in zip(param_header, row[1:], strict=False)
             }
             continue
         if row[0] == "included_api14s":

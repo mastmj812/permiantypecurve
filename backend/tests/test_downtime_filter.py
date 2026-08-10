@@ -20,7 +20,6 @@ max happens to be tiny (late-life tails, intermittent producers).
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from app.forecasting.fit import _flag_downtime
 

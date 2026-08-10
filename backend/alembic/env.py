@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from logging.config import fileConfig
 
-from alembic import context
 from geoalchemy2 import alembic_helpers  # PostGIS-aware autogenerate
 from sqlalchemy import engine_from_config, pool
 
+from alembic import context
 from app.config import settings
-from app.db.base import Base
 from app.db import models  # noqa: F401  -- side-effect: registers mappers
+from app.db.base import Base
 
 config = context.config
 if config.config_file_name is not None:

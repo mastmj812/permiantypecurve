@@ -23,10 +23,9 @@ Usage:  python -m scripts.forecast_diagnostics <type_curve_name> [stream...]
 from __future__ import annotations
 
 import sys
-from dataclasses import replace
 
 import numpy as np
-from sqlalchemy import select, text
+from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.forecasting.fit import (
@@ -56,8 +55,8 @@ def _empirical_yr1_decline(rates: list[float], t_years: list[float]) -> float | 
     smoothed rate ~12 months later (median of months ~10-14). Returns None
     when either window lacks positive points. A log-linear slope over 2 yrs
     understates a front-loaded hyperbolic, which is why it read too low."""
-    early = [r for tt, r in zip(t_years, rates) if r and r > 0 and tt <= 0.30]
-    yr1 = [r for tt, r in zip(t_years, rates) if r and r > 0 and 0.85 <= tt <= 1.20]
+    early = [r for tt, r in zip(t_years, rates, strict=False) if r and r > 0 and tt <= 0.30]
+    yr1 = [r for tt, r in zip(t_years, rates, strict=False) if r and r > 0 and 0.85 <= tt <= 1.20]
     if not early or not yr1:
         return None
     q0 = float(np.median(early))

@@ -34,11 +34,10 @@ Two loaders:
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from datetime import date
 from typing import Any
-
-import math
 
 import numpy as np
 from sqlalchemy import select
@@ -104,7 +103,7 @@ def _stream_slice_starts(
     if alignment in ("first_prod_month", "peak_ramp"):
         # peak_ramp also fetches from first prod — the onset trim and
         # the per-well pad to the common peak index happen downstream.
-        return {s: first_prod_date for s in ("oil", "gas", "water")}
+        return dict.fromkeys(("oil", "gas", "water"), first_prod_date)
     return {
         "oil": oil_peak_date,
         "gas": gas_peak_date if gas_peak_date is not None else oil_peak_date,

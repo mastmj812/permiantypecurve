@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from openpyxl import load_workbook
@@ -68,7 +68,7 @@ def _curve(name: str) -> TypeCurve:
             "water": _stub_stream(rate=200.0),
         },
     }
-    tc.created_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    tc.created_at = datetime(2026, 5, 1, tzinfo=UTC)
     tc.version_of = None
     tc.deal_id = None
     return tc
@@ -79,7 +79,7 @@ def _deal() -> Deal:
     d.id = uuid.uuid4()
     d.name = "holdTheLine"
     d.notes = None
-    d.created_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    d.created_at = datetime(2026, 5, 1, tzinfo=UTC)
     return d
 
 
@@ -245,6 +245,7 @@ def test_deepcopy_isolation_in_patch_path() -> None:
     the contract by asserting that running the helper on a deep-copied
     payload leaves the source untouched."""
     import copy
+
     from app.api.type_curves import FitOverride, _apply_fit_overrides
 
     source: dict[str, Any] = {

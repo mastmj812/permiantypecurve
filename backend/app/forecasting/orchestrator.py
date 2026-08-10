@@ -21,7 +21,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pandas as pd
 from sqlalchemy import select
@@ -205,11 +205,11 @@ def _persist(
         "downtime_ratio": result.downtime_ratio,
         "manual_override": False,
         "locked": False,
-        "updated_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(UTC),
     }
     if existing is None:
         values["id"] = uuid.uuid4()
-        values["created_at"] = datetime.now(timezone.utc)
+        values["created_at"] = datetime.now(UTC)
 
     stmt = pg_insert(Forecast.__table__).values(**values)
     # `locked` stays excluded from the update set (locked rows never
@@ -301,7 +301,7 @@ def forecast_well(
                 stream=stream,
                 config=cfg,
             )
-        except Exception as e:  # noqa: BLE001 — fit failures are routine
+        except Exception as e:
             log.exception("fit_failed", api10=api10, stream=stream, err=str(e))
             continue
 

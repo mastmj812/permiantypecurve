@@ -27,7 +27,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 import numpy as np
@@ -58,7 +58,7 @@ from app.forecasting.cohort import (
     load_stream_donors,
     partition_by_history,
 )
-from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
+from app.forecasting.eur import DAYS_PER_YEAR
 from app.forecasting.fit import (
     STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_RATE_COLUMN,
@@ -72,7 +72,6 @@ from app.forecasting.models import (
     arps_exponential,
     arps_harmonic,
     arps_hyperbolic,
-    modified_hyperbolic,
 )
 from app.forecasting.orchestrator import (
     STREAMS,
@@ -242,7 +241,7 @@ class ForecastRow(BaseModel):
     eur_displayed: float | None = None
 
     @classmethod
-    def from_orm_row(cls, f: Forecast) -> "ForecastRow":
+    def from_orm_row(cls, f: Forecast) -> ForecastRow:
         di_eff = (
             effective_decline_first_year(f.di_initial, f.b)
             if f.di_initial is not None
@@ -355,24 +354,24 @@ def _batch_bg(api10s: list[str], cfg: ForecastConfig, job_id: uuid.UUID) -> None
         if job is None:
             return
         job.status = SyncJobStatus.RUNNING
-        job.started_at = datetime.now(timezone.utc)
+        job.started_at = datetime.now(UTC)
         session.commit()
         try:
             forecast_wells(session, api10s, config=cfg)
             job.items_seen = len(api10s)
             job.items_upserted = len(api10s)
             job.status = SyncJobStatus.SUCCEEDED
-        except Exception as e:  # noqa: BLE001 — record + raise out of bg
+        except Exception as e:
             session.rollback()
             job_row = session.get(SyncJob, job_id)
             if job_row is not None:
                 job_row.status = SyncJobStatus.FAILED
                 job_row.error = str(e)[:2000]
-                job_row.finished_at = datetime.now(timezone.utc)
+                job_row.finished_at = datetime.now(UTC)
                 session.commit()
             log.exception("batch_forecast_failed", job_id=str(job_id))
             return
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         session.commit()
 
 
@@ -726,11 +725,11 @@ def transfer_cohort_params(
                 "diagnostics": diagnostics,
                 "manual_override": False,
                 "locked": False,
-                "updated_at": datetime.now(timezone.utc),
+                "updated_at": datetime.now(UTC),
             }
             if existing is None:
                 values["id"] = uuid.uuid4()
-                values["created_at"] = datetime.now(timezone.utc)
+                values["created_at"] = datetime.now(UTC)
 
             stmt = pg_insert(Forecast.__table__).values(**values)
             # Same provenance rule as orchestrator._persist: a transfer
@@ -791,7 +790,7 @@ def _add_months(d: date, n: int) -> date:
 
 
 def _apply_method_one(
-    row: "ForecastRow",
+    row: ForecastRow,
     f: Forecast,
     well_first_prod_date: date | None,
     actual_cum: float | None,

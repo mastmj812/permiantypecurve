@@ -24,7 +24,6 @@ from app.forecasting.ramp_arps import (
     model_cum_at_t,
 )
 
-
 _BASE_PARAMS = {"qi": 800.0, "Di": 1.2, "b": 1.0, "Df": 0.08}
 
 

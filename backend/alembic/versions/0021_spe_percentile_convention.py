@@ -32,8 +32,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.core.logging import get_logger
 
 revision: str = "0021_spe_percentile_convention"

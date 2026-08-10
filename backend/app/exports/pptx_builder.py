@@ -40,7 +40,6 @@ from pptx.table import Table, _Cell
 from pptx.util import Inches, Pt
 from sqlalchemy.orm import Session
 
-
 # Default font size we fall back to when a cell's first paragraph has
 # no runs (sample template rows occasionally have trailing cells with
 # empty paragraphs, e.g. wells missing forecast data). Without this,
@@ -51,8 +50,7 @@ _DEFAULT_BODY_FONT_PT = 8
 
 from app.db.models import TypeCurve
 from app.exports.param_row import PARAM_HEADERS, format_param_row
-from app.exports.well_rows import PER_WELL_HEADERS, per_well_rows
-
+from app.exports.well_rows import per_well_rows
 
 TEMPLATE_PATH = Path(__file__).parent / "templates" / "deal_slide.pptx"
 

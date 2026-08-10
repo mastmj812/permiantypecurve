@@ -43,7 +43,7 @@ def test_recovers_known_modified_hyperbolic_params() -> None:
     # The smoothed curve should track the input within a few percent
     # in the bulk of the series (skipping the noisy first month).
     rms_err = float(np.sqrt(np.mean(
-        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"][1:], p50[1:])]
+        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"][1:], p50[1:], strict=False)]
     )))
     mean_rate = float(np.mean(p50[1:]))
     assert rms_err / mean_rate < 0.10
@@ -134,7 +134,7 @@ def test_detects_ramp_in_first_prod_aligned_series() -> None:
     )
     # Smoothed curve should track the input series within ~10% RMS.
     rms = float(np.sqrt(np.mean(
-        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"], p50)]
+        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"], p50, strict=False)]
     )))
     mean_rate = float(np.mean(p50))
     assert rms / mean_rate < 0.10

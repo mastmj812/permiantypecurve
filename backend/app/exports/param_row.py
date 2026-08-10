@@ -21,7 +21,6 @@ import math
 from app.db.models import TypeCurve
 from app.type_curves.risking import normalize_multipliers, risked_name_suffix
 
-
 # Per-10k-ft scaling for rate / EUR cells. Mo / B / Di are unit-
 # independent and pass through unscaled.
 PER_10K_FACTOR: float = 10.0

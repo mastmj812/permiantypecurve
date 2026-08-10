@@ -38,6 +38,7 @@ from app.db.models import (
     Well,
 )
 from app.db.session import get_session
+from app.exports.buildup import buildup_csv
 from app.type_curves.aggregate import (
     PERCENTILE_KEYS,
     aggregate,
@@ -54,7 +55,6 @@ from app.type_curves.loader import (
     load_well_series,
     load_wells_with_forecast,
 )
-from app.exports.buildup import buildup_csv
 from app.type_curves.reason_codes import validate_code
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.type_curves.universe import compute_universe, polygon_area_sq_mi
@@ -245,7 +245,7 @@ class TypeCurveRow(BaseModel):
     provenance: dict[str, Any] = Field(default_factory=dict)
 
     @classmethod
-    def from_orm_row(cls, tc: TypeCurve) -> "TypeCurveRow":
+    def from_orm_row(cls, tc: TypeCurve) -> TypeCurveRow:
         return cls(
             id=tc.id,
             name=tc.name,
@@ -1197,7 +1197,7 @@ def _forecast_csv(
     # on Permian fits — the older right-endpoint rectangle rule had a
     # ~0.2% systematic bias. Kept in sync with the frontend's
     # ``cumulateNumericArray``.
-    cum_by_pct: dict[str, float] = {k: 0.0 for k in _PERCENTILE_KEYS_WITH_MEAN}
+    cum_by_pct: dict[str, float] = dict.fromkeys(_PERCENTILE_KEYS_WITH_MEAN, 0.0)
     for i in range(_FORECAST_N_MONTHS):
         row: list[Any] = [i + 1]
         for key in _PERCENTILE_KEYS_WITH_MEAN:

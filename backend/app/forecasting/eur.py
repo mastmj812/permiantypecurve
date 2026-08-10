@@ -27,7 +27,6 @@ from app.forecasting.models import (
     switchover_time,
 )
 from app.forecasting.types import (
-    DEFAULT_ECONOMIC_LIMIT_BOPD,
     DEFAULT_FORECAST_HORIZON_YEARS,
 )
 

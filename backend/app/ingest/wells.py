@@ -15,7 +15,7 @@ app enum.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -98,7 +98,7 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
     pattern keeps the path open for future partial updates.
     """
     n = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for h in headers:
         values = header_to_upsert_values(h, now)
         stmt = pg_insert(Well.__table__).values(**values)
