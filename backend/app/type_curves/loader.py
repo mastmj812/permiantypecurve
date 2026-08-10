@@ -250,8 +250,17 @@ def load_well_series(
             # front by M - m_w.
             anchors = ramp_anchors or {}
 
+            # Keyword defaults bind the per-well loop variables at definition
+            # time, so the closure stays correct even if a future edit defers
+            # the call.
             def _to_anchor(
-                rates: list[float | None], off: int, peak_date: date | None, stream: str
+                rates: list[float | None],
+                off: int,
+                peak_date: date | None,
+                stream: str,
+                *,
+                prod_dates: list[date] = prod_dates,
+                anchors: dict[str, int] = anchors,
             ) -> list[float | None]:
                 m_w = max(0, _first_index_on_or_after(prod_dates, peak_date) - off)
                 pad = int(anchors.get(stream, 0)) - m_w
