@@ -12,7 +12,11 @@ NOT the filter and is expected to remain.
 
 from __future__ import annotations
 
-from app.wells_api.tiles import _lines_sql, _points_sql
+from datetime import date
+
+from app.db.models import WellStatus
+from app.wells_api.filters import FilterSpec
+from app.wells_api.tiles import _build_filter_sql, _lines_sql, _points_sql
 
 
 def _compact(sql: str) -> str:
@@ -60,3 +64,86 @@ def test_asmvtgeom_still_projects_to_tile_space() -> None:
     for sql in (_points_sql(), _lines_sql()):
         assert "ST_AsMVTGeom(" in sql
         assert "env_3857" in sql
+
+
+# ---------------------------------------------------------------------
+# Filter-mirror drift guard. The tile endpoint filters via raw SQL
+# (_build_filter_sql) while select/summary filter via
+# FilterSpec.to_sqlalchemy_clauses — two implementations of one spec.
+# Both the spacing filter and the well-name filter shipped with the ORM
+# side only, so the MAP silently ignored them while the lasso honored
+# them (caught by the user on the well-name filter, 2026-08-07). This
+# guard fails whenever a FilterSpec field produces an ORM clause but no
+# raw-SQL fragment, so the third landing spot can't be missed again.
+# ---------------------------------------------------------------------
+
+# One activating sample per FilterSpec field. A new field added without
+# a sample here fails the completeness check below — extend BOTH this
+# map and (if it filters) _build_filter_sql.
+_FIELD_SAMPLES: dict[str, object] = {
+    "formations": ("WOLFCAMP A",),
+    "operators": ("OP A",),
+    "counties": ("LOVING",),
+    "statuses": (WellStatus.SI,),
+    "first_prod_start": date(2018, 1, 1),
+    "first_prod_end": date(2025, 1, 1),
+    "lateral_min_ft": 6000.0,
+    "lateral_max_ft": 12000.0,
+    "spacing_min_ft": 400.0,
+    "spacing_max_ft": 1000.0,
+    # inert alone by design (only modifies an active spacing bound):
+    "spacing_include_unbounded": None,
+    "well_name_contains": "UNIVERSITY",
+    "api10s": ("4200000001",),
+}
+
+
+def test_field_samples_cover_every_filterspec_field() -> None:
+    import dataclasses
+
+    spec_fields = {f.name for f in dataclasses.fields(FilterSpec)}
+    assert spec_fields == set(_FIELD_SAMPLES), (
+        "FilterSpec fields changed — add a sample (or an explicit None "
+        "for inert-alone flags) AND, if the field filters, a raw-SQL "
+        "fragment in tiles._build_filter_sql"
+    )
+
+
+def test_every_orm_clause_has_a_tile_sql_mirror() -> None:
+    baseline_orm = len(FilterSpec().to_sqlalchemy_clauses())
+    baseline = _build_filter_sql(FilterSpec())
+    for field, sample in _FIELD_SAMPLES.items():
+        if sample is None:
+            continue
+        spec = FilterSpec(**{field: sample})  # type: ignore[arg-type]
+        adds_orm = len(spec.to_sqlalchemy_clauses()) > baseline_orm or (
+            field == "statuses"  # replaces the default clause, count-neutral
+        )
+        if not adds_orm:
+            continue
+        # Compare (sql, params) — statuses keeps the same SQL string and
+        # only changes the bind values.
+        assert _build_filter_sql(spec) != baseline, (
+            f"FilterSpec.{field} filters in to_sqlalchemy_clauses but "
+            "produces NO fragment in tiles._build_filter_sql — the map "
+            "would silently ignore it"
+        )
+
+
+def test_spacing_tile_sql_mirrors_orm_semantics() -> None:
+    sql, params = _build_filter_sql(FilterSpec(spacing_min_ft=1500.0))
+    assert "lateral_closer_xy_ft IS NOT NULL" in sql
+    assert "!= :spacing_sentinel" in sql
+    assert params["spacing_sentinel"] == 2800.0
+    assert " OR " not in sql  # unbounded excluded by default
+
+    sql_ub, _ = _build_filter_sql(
+        FilterSpec(spacing_min_ft=1500.0, spacing_include_unbounded=True)
+    )
+    assert "IS NULL" in sql_ub and "= :spacing_sentinel" in sql_ub
+
+
+def test_well_name_tile_sql_escapes_metacharacters() -> None:
+    sql, params = _build_filter_sql(FilterSpec(well_name_contains="A_1 100%"))
+    assert "w.name ILIKE :well_name_pat" in sql
+    assert params["well_name_pat"] == r"%A\_1 100\%%"

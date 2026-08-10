@@ -40,8 +40,11 @@ def _split_csv(s: str | None) -> list[str]:
     return [p.strip() for p in s.split(",") if p.strip()]
 
 
-def _escape_like(s: str) -> str:
-    """Escape LIKE metacharacters so user input matches literally."""
+def escape_like(s: str) -> str:
+    """Escape LIKE metacharacters so user input matches literally.
+
+    Public: the tile endpoint's raw-SQL mirror (tiles._build_filter_sql)
+    must build the identical pattern."""
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
@@ -118,7 +121,7 @@ class FilterSpec:
         if self.well_name_contains:
             clauses.append(
                 Well.name.ilike(
-                    f"%{_escape_like(self.well_name_contains)}%", escape="\\"
+                    f"%{escape_like(self.well_name_contains)}%", escape="\\"
                 )
             )
         if self.api10s:
