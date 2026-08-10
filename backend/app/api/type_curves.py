@@ -1499,7 +1499,14 @@ def get_type_curve_workspace_wells(
         well = wells_by_api10.get(api10)
         well_forecasts = forecasts_by_well.get(api10, {})
 
-        def _stream(s: Stream) -> WorkspaceStream:
+        # Keyword defaults bind the loop variables at definition time, so
+        # the closure stays correct even if a future edit defers the call.
+        def _stream(
+            s: Stream,
+            *,
+            api10: str = api10,
+            well_forecasts: dict[Stream, Forecast] = well_forecasts,
+        ) -> WorkspaceStream:
             resolved = resolve_forecast(tc, api10, s, well_forecasts.get(s))
             return WorkspaceStream(source=resolved.source, payload=resolved.payload)
 
