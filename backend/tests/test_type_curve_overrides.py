@@ -230,3 +230,50 @@ def _payload_stub(qi: float) -> dict[str, Any]:
         "eur": 100_000.0,
         "manual_override": True,
     }
+
+
+# ============ version lineage: forecast_overrides inheritance ============
+#
+# save_as_new_version computes the child's series WITH the parent's
+# overrides (tc=parent) and copies those overrides onto the child, pruned
+# to the child's membership. Before this existed, a version save silently
+# reverted every per-well engineering edit to the global fits (the
+# toucan-class silent-loss path). These tests pin the helper's contract.
+
+
+def test_inherit_overrides_prunes_to_membership() -> None:
+    from app.api.type_curves import _inherit_overrides
+
+    parent_overrides = {
+        "42100000000001": {"oil": _payload_stub(qi=777.0)},
+        "42100000000002": {"gas": _payload_stub(qi=2500.0)},
+    }
+    # Well ...02 is dropped from the version's membership — its override
+    # must not ride along (same rule as the membership-removal PATCH).
+    inherited = _inherit_overrides(parent_overrides, ["42100000000001"])
+
+    assert set(inherited) == {"42100000000001"}
+    assert inherited["42100000000001"]["oil"]["qi"] == 777.0
+
+
+def test_inherit_overrides_deep_copies() -> None:
+    """A child edit must never write through to the parent's JSONB —
+    the same shared-nested-dict trap as dict(row.series)."""
+    from app.api.type_curves import _inherit_overrides
+
+    api10 = "42100000000001"
+    parent_overrides = {api10: {"oil": _payload_stub(qi=777.0)}}
+    inherited = _inherit_overrides(parent_overrides, [api10])
+
+    inherited[api10]["oil"]["qi"] = 111.0
+    inherited[api10]["oil"]["params"]["qi"] = 111.0
+
+    assert parent_overrides[api10]["oil"]["qi"] == 777.0
+    assert parent_overrides[api10]["oil"]["params"]["qi"] == 777.0
+
+
+def test_inherit_overrides_empty_and_none() -> None:
+    from app.api.type_curves import _inherit_overrides
+
+    assert _inherit_overrides(None, ["42100000000001"]) == {}
+    assert _inherit_overrides({}, ["42100000000001"]) == {}

@@ -653,6 +653,21 @@ def _compute(
     return payload
 
 
+def _inherit_overrides(
+    parent_overrides: dict[str, Any] | None, included_api10s: list[str]
+) -> dict[str, Any]:
+    """Per-well forecast overrides a new version inherits from its parent:
+    the same records, pruned to the child's membership (the same rule the
+    membership-removal PATCH applies). Deep-copied so a later edit on the
+    child never writes through to the parent's JSONB."""
+    included = set(included_api10s)
+    return {
+        api10: copy.deepcopy(streams)
+        for api10, streams in (parent_overrides or {}).items()
+        if api10 in included
+    }
+
+
 def _empty_tc_for_resolver() -> TypeCurve:
     """Stub TC carrying empty overrides — used on the compute-preview
     and initial-save paths where no TC row exists yet. Avoids leaking
@@ -835,11 +850,15 @@ def save_as_new_version(
     parent = session.get(TypeCurve, type_curve_id)
     if parent is None:
         raise HTTPException(status_code=404, detail="parent type curve not found")
+    # tc=parent so the bands resolve override -> global exactly like
+    # re-aggregating the parent. Without it the version's series silently
+    # reverts every per-well engineering edit to the global fits.
     payload = _compute(
         session, req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
+        tc=parent,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     # Provenance on versions: fresh inputs win; a None (old-workflow
@@ -856,11 +875,20 @@ def save_as_new_version(
         session, payload=payload, req=req, version_of=parent.id,
         provenance=provenance,
     )
-    # Risking rides the lineage: a new version inherits the parent's
-    # geologic MULs (the geology didn't change because the cohort did);
-    # clear or adjust explicitly via PATCH if review says otherwise.
-    if parent.risk_multipliers:
-        row.risk_multipliers = dict(parent.risk_multipliers)
+    # Risking and per-well overrides ride the lineage: a new version
+    # inherits the parent's geologic MULs (the geology didn't change
+    # because the cohort did) and the parent's forecast_overrides pruned
+    # to the new membership — the series above was computed WITH those
+    # overrides, so the child must carry the matching record. Clear or
+    # adjust explicitly via PATCH/DELETE if review says otherwise.
+    inherited_overrides = _inherit_overrides(
+        parent.forecast_overrides, req.included_api10s
+    )
+    if parent.risk_multipliers or inherited_overrides:
+        if parent.risk_multipliers:
+            row.risk_multipliers = dict(parent.risk_multipliers)
+        if inherited_overrides:
+            row.forecast_overrides = inherited_overrides
         session.commit()
         session.refresh(row)
     took_over_deal = False
@@ -875,6 +903,7 @@ def save_as_new_version(
     log.info(
         "type_curve_versioned", id=str(row.id), parent=str(parent.id),
         n_wells=len(req.included_api10s), took_over_deal=took_over_deal,
+        overrides_inherited=len(inherited_overrides),
     )
     return TypeCurveRow.from_orm_row(row)
 
