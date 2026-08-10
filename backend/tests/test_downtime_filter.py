@@ -20,7 +20,6 @@ max happens to be tiny (late-life tails, intermittent producers).
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from app.forecasting.fit import _flag_downtime
 
@@ -43,18 +42,16 @@ def test_absolute_floor_catches_subfloor_when_local_max_tiny() -> None:
     rates = pd.Series([3.0, 0.0, 3.0, 0.0, 3.0, 0.0, 3.0], dtype=float)
     rel_only = _flag_downtime(rates, absolute_floor=0.0)
     with_floor = _flag_downtime(rates, absolute_floor=5.0)
-    assert not rel_only.iloc[0]   # 3.0 NOT flagged by relative-only
-    assert rel_only.iloc[1]       # 0.0 flagged by relative-only
-    assert with_floor.all()       # every value < 5.0 → all flagged
+    assert not rel_only.iloc[0]  # 3.0 NOT flagged by relative-only
+    assert rel_only.iloc[1]  # 0.0 flagged by relative-only
+    assert with_floor.all()  # every value < 5.0 → all flagged
 
 
 def test_absolute_floor_does_not_flag_genuine_production() -> None:
     # Normal Permian-like decline series — every value is above the
     # 5-BOPD floor, and the relative test sees a smooth slope so
     # nothing should flag.
-    rates = pd.Series(
-        [800, 720, 660, 600, 550, 500, 450, 400, 360, 320, 290], dtype=float
-    )
+    rates = pd.Series([800, 720, 660, 600, 550, 500, 450, 400, 360, 320, 290], dtype=float)
     flags = _flag_downtime(rates, absolute_floor=5.0)
     assert not flags.any()
 
@@ -74,9 +71,7 @@ def test_or_semantic_with_mixed_signals() -> None:
     # threshold high; the floor at 5.0 sweeps up everything below it.
     # No row-level reasoning about WHICH rule caught a given month —
     # both might fire on the same one. We just assert the outcome.
-    rates = pd.Series(
-        [800, 5.0, 750, 700, 3.0, 4.0, 3.0], dtype=float
-    )
+    rates = pd.Series([800, 5.0, 750, 700, 3.0, 4.0, 3.0], dtype=float)
     flags = _flag_downtime(rates, absolute_floor=5.0)
     assert flags.iloc[1]
     assert flags.iloc[4]

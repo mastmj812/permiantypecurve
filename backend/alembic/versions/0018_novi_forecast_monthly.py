@@ -16,6 +16,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "0018_novi_forecast_monthly"
@@ -35,9 +36,7 @@ def upgrade() -> None:
         sa.Column("cumulative_oil_bbl", sa.Float(), nullable=True),
         sa.Column("cumulative_gas_mcf", sa.Float(), nullable=True),
         sa.Column("cumulative_water_bbl", sa.Float(), nullable=True),
-        sa.ForeignKeyConstraint(
-            ["api10"], ["wells.api10"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["api10"], ["wells.api10"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("api10", "prod_date"),
     )
 

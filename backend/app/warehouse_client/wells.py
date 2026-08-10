@@ -14,7 +14,6 @@ from sqlalchemy.orm import Session
 
 from app.warehouse_client.base import WellHeader
 
-
 # Mapping from Novi's well_status vocabulary (as it appears in
 # curated.wells.well_status) to the app's existing WellStatus enum.
 # Derived empirically from the full fetch scope (horizontal, 2010+
@@ -84,6 +83,7 @@ _FETCH_ONE_SQL = text(
 
 def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
     """Build a WellHeader from a SQLAlchemy result mapping."""
+
     def _to_float(v: object) -> float | None:
         # curated stores some intensity columns as bigint/integer; widen
         # to float for downstream rate math.

@@ -8,7 +8,7 @@ units as `production_monthly.rate_calday_*`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -154,9 +154,7 @@ class ForecastResult:
             "b": self.b,
             "df_terminal": self.df_terminal,
             "eur": self.eur,
-            "peak_month_date": (
-                self.peak_month_date.isoformat() if self.peak_month_date else None
-            ),
+            "peak_month_date": (self.peak_month_date.isoformat() if self.peak_month_date else None),
             "peak_rate": self.peak_rate,
             "fit_method": self.fit_method,
             "fit_r2": self.fit_r2,

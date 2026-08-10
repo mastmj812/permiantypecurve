@@ -43,8 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--password",
         default=None,
-        help="Skip interactive prompt — useful for automated provisioning. "
-             "Min 8 characters.",
+        help="Skip interactive prompt — useful for automated provisioning. Min 8 characters.",
     )
     args = parser.parse_args(argv)
     configure_logging("INFO")
@@ -57,13 +56,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     with SessionLocal() as session:
-        existing = session.execute(
-            select(User).where(User.email == email)
-        ).scalar_one_or_none()
+        existing = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
         if existing is not None:
-            confirm = input(
-                f"User {email} already exists. Reset password? [y/N]: "
-            ).strip().lower()
+            confirm = input(f"User {email} already exists. Reset password? [y/N]: ").strip().lower()
             if confirm not in ("y", "yes"):
                 print("Aborted.", file=sys.stderr)
                 return 1

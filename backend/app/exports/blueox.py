@@ -63,10 +63,16 @@ LEVEL_TO_SPE_KEY: dict[str, str] = {
 # sheet-name mechanics.
 RESERVED_SHEET_NAMES: frozenset[str] = frozenset(
     {
-        "meta", "inventory", "manifest", "analog_production", "curve_params",
+        "meta",
+        "inventory",
+        "manifest",
+        "analog_production",
+        "curve_params",
         # 2026-07-27 amendments (pending Blue Ox ack): gunbarrel frame
         # sheet + the TC-vs-Novi comparison sheets.
-        "dsu_meta", "novi_comparison", "novi_comparison_meta",
+        "dsu_meta",
+        "novi_comparison",
+        "novi_comparison_meta",
     }
 )
 ZONE_NAME_MAX = 26
@@ -153,10 +159,20 @@ class InventoryRow:
 # The geometry column block appended to the inventory sheet when any
 # row carries geometry (attribute name == column header).
 _INVENTORY_GEO_COLS: tuple[str, ...] = (
-    "dsu_id", "bench", "landing_tvd_ft",
-    "gunbarrel_offset_ft", "gunbarrel_offset_b_ft", "lateral_azimuth_deg",
-    "heel_a_lon", "heel_a_lat", "toe_a_lon", "toe_a_lat",
-    "heel_b_lon", "heel_b_lat", "toe_b_lon", "toe_b_lat",
+    "dsu_id",
+    "bench",
+    "landing_tvd_ft",
+    "gunbarrel_offset_ft",
+    "gunbarrel_offset_b_ft",
+    "lateral_azimuth_deg",
+    "heel_a_lon",
+    "heel_a_lat",
+    "toe_a_lon",
+    "toe_a_lat",
+    "heel_b_lon",
+    "heel_b_lat",
+    "toe_b_lon",
+    "toe_b_lat",
 )
 
 
@@ -328,9 +344,7 @@ def _validate_zone_name(name: str) -> str | None:
 
 def _delivered_levels(data: BlueOxExportData) -> list[str]:
     """All delivered levels in ascending contract order, P50 included."""
-    return [
-        lv for lv in BLUEOX_LEVEL_ORDER if lv == "P50" or lv in data.levels
-    ]
+    return [lv for lv in BLUEOX_LEVEL_ORDER if lv == "P50" or lv in data.levels]
 
 
 def _validate(data: BlueOxExportData) -> None:
@@ -340,9 +354,7 @@ def _validate(data: BlueOxExportData) -> None:
     for stem in RESERVED_FILENAME_STEMS:
         # "curves" is the mandated stem; only flag the reserved ones.
         if stem in filename.replace("_curves_", "_"):
-            errors.append(
-                f"filename {filename!r} contains reserved stem {stem!r}"
-            )
+            errors.append(f"filename {filename!r} contains reserved stem {stem!r}")
     if not data.codename or not data.codename.strip():
         errors.append("codename is empty")
     if data.curve_months < 1:
@@ -356,8 +368,7 @@ def _validate(data: BlueOxExportData) -> None:
         errors.append("no zones supplied")
     if not re.fullmatch(r"\d{4}-\d{2}", data.production_history_through):
         errors.append(
-            "production_history_through must be YYYY-MM "
-            f"(got {data.production_history_through!r})"
+            f"production_history_through must be YYYY-MM (got {data.production_history_through!r})"
         )
 
     seen_names: set[str] = set()
@@ -405,18 +416,14 @@ def _validate(data: BlueOxExportData) -> None:
                     )
                 if any(v is None or not math.isfinite(float(v)) or float(v) < 0 for v in vec):
                     errors.append(
-                        f"{z.zone_name}: {stream} {lv} contains negative or "
-                        "non-finite values"
+                        f"{z.zone_name}: {stream} {lv} contains negative or non-finite values"
                     )
             extra = set(by_stream) - {"oil", "gas", "water"}
             if extra:
-                errors.append(
-                    f"{z.zone_name}: level {lv} has unsupported streams {sorted(extra)}"
-                )
+                errors.append(f"{z.zone_name}: level {lv} has unsupported streams {sorted(extra)}")
             if lv != "P50" and "water" in by_stream:
                 errors.append(
-                    f"{z.zone_name}: percentile water columns are not allowed "
-                    f"(water at level {lv})"
+                    f"{z.zone_name}: percentile water columns are not allowed (water at level {lv})"
                 )
         water = z.volumes.get("P50", {}).get("water")
         if water is not None and len(water) != data.curve_months:
@@ -430,8 +437,7 @@ def _validate(data: BlueOxExportData) -> None:
         if len(levels) > 1:
             for stream in ("oil", "gas"):
                 sums = [
-                    sum(float(v) for v in z.volumes.get(lv, {}).get(stream, []))
-                    for lv in levels
+                    sum(float(v) for v in z.volumes.get(lv, {}).get(stream, [])) for lv in levels
                 ]
                 if any(a >= b for a, b in itertools.pairwise(sums)):
                     errors.append(
@@ -449,8 +455,7 @@ def _validate(data: BlueOxExportData) -> None:
         for stream, lv in param_keys:
             if lv not in levels:
                 errors.append(
-                    f"{z.zone_name}: curve_params row {stream} {lv} is not a "
-                    "delivered level"
+                    f"{z.zone_name}: curve_params row {stream} {lv} is not a delivered level"
                 )
 
         # Analog sheet: exactly one header containing "api".
@@ -486,9 +491,7 @@ def _validate(data: BlueOxExportData) -> None:
     # analog_production <-> analog sheets tie-out (both directions),
     # minus the declared exceptions.
     analog_apis = {
-        str(row[_api_col_index(z.analog_headers)])
-        for z in data.zones
-        for row in z.analog_rows
+        str(row[_api_col_index(z.analog_headers)]) for z in data.zones for row in z.analog_rows
     }
     prod_headers_l = [str(h).lower() for h in data.production_headers]
     for col in ("api10", "date", "oil_bbl", "gas_mcf"):
@@ -506,8 +509,7 @@ def _validate(data: BlueOxExportData) -> None:
         orphans = prod_apis - analog_apis
         if orphans:
             errors.append(
-                f"analog_production rows for wells not on any analog sheet: "
-                f"{sorted(orphans)}"
+                f"analog_production rows for wells not on any analog sheet: {sorted(orphans)}"
             )
 
     # Unzoned PDP context rows: display-only, must actually be PDP.
@@ -522,11 +524,7 @@ def _validate(data: BlueOxExportData) -> None:
     # by an inventory row must have its projection frame on dsu_meta —
     # an offset without its frame is not reproducible downstream.
     frame_ids = {f.dsu_id for f in data.dsu_meta}
-    referenced = {
-        inv.dsu_id
-        for inv in _all_inventory_rows(data)
-        if inv.dsu_id is not None
-    }
+    referenced = {inv.dsu_id for inv in _all_inventory_rows(data) if inv.dsu_id is not None}
     missing_frames = referenced - frame_ids
     if missing_frames:
         errors.append(
@@ -535,10 +533,7 @@ def _validate(data: BlueOxExportData) -> None:
         )
     orphan_frames = frame_ids - referenced
     if orphan_frames:
-        errors.append(
-            "dsu_meta frames with no inventory rows: "
-            + ", ".join(sorted(orphan_frames))
-        )
+        errors.append("dsu_meta frames with no inventory rows: " + ", ".join(sorted(orphan_frames)))
 
     # TC-vs-Novi comparison (2026-07-27 amendment): when present it
     # must cover every zone exactly once (n=0 rows for stickless zones
@@ -563,18 +558,13 @@ def _validate(data: BlueOxExportData) -> None:
                     )
             elif lengths != {0}:
                 errors.append(
-                    f"novi_comparison {c.zone_name!r}: n_sticks=0 rows "
-                    "must carry no series"
+                    f"novi_comparison {c.zone_name!r}: n_sticks=0 rows must carry no series"
                 )
         if data.novi_intel_vintage is None:
-            errors.append(
-                "novi_comparison present but novi_intel_vintage undeclared"
-            )
+            errors.append("novi_comparison present but novi_intel_vintage undeclared")
 
     if errors:
-        raise BlueOxContractError(
-            "Blue Ox contract violations:\n- " + "\n- ".join(errors)
-        )
+        raise BlueOxContractError("Blue Ox contract violations:\n- " + "\n- ".join(errors))
 
 
 def _api_col_index(headers: Sequence[str]) -> int:
@@ -704,10 +694,15 @@ def _write_novi_comparison(ws: Any, data: BlueOxExportData) -> None:
     _bold_row(ws, 1, 5)
     for c in data.novi_comparison:
         for i in range(len(c.oil_bbl)):
-            ws.append([
-                c.zone_name, i + 1,
-                float(c.oil_bbl[i]), float(c.gas_mcf[i]), float(c.water_bbl[i]),
-            ])
+            ws.append(
+                [
+                    c.zone_name,
+                    i + 1,
+                    float(c.oil_bbl[i]),
+                    float(c.gas_mcf[i]),
+                    float(c.water_bbl[i]),
+                ]
+            )
     ws.freeze_panes = "A2"
     ws.column_dimensions["A"].width = 28
     for letter in ("C", "D", "E"):
@@ -716,9 +711,19 @@ def _write_novi_comparison(ws: Any, data: BlueOxExportData) -> None:
 
 
 _NOVI_META_COLS: tuple[str, ...] = (
-    "area", "n_sticks", "n_self", "n_neighborhood", "n_pud", "n_res",
-    "n_wells_no_set", "radius_m", "lateral_tol", "intel_vintage",
-    "low_n_flag", "stale_vintage_flag", "tc_risked",
+    "area",
+    "n_sticks",
+    "n_self",
+    "n_neighborhood",
+    "n_pud",
+    "n_res",
+    "n_wells_no_set",
+    "radius_m",
+    "lateral_tol",
+    "intel_vintage",
+    "low_n_flag",
+    "stale_vintage_flag",
+    "tc_risked",
 )
 
 
@@ -726,11 +731,23 @@ def _write_novi_comparison_meta(ws: Any, data: BlueOxExportData) -> None:
     ws.append(list(_NOVI_META_COLS))
     _bold_row(ws, 1, len(_NOVI_META_COLS))
     for c in data.novi_comparison:
-        ws.append([
-            c.zone_name, c.n_sticks, c.n_self, c.n_neighborhood,
-            c.n_pud, c.n_res, c.n_wells_no_set, c.radius_m, c.lateral_tol,
-            c.intel_vintage, c.low_n, c.stale_vintage, c.tc_risked,
-        ])
+        ws.append(
+            [
+                c.zone_name,
+                c.n_sticks,
+                c.n_self,
+                c.n_neighborhood,
+                c.n_pud,
+                c.n_res,
+                c.n_wells_no_set,
+                c.radius_m,
+                c.lateral_tol,
+                c.intel_vintage,
+                c.low_n,
+                c.stale_vintage,
+                c.tc_risked,
+            ]
+        )
     ws.column_dimensions["A"].width = 28
     for col_idx in range(2, len(_NOVI_META_COLS) + 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = 16
@@ -740,9 +757,14 @@ def _write_dsu_meta(ws: Any, data: BlueOxExportData) -> None:
     ws.append(["dsu_id", "azimuth_deg", "origin_lon", "origin_lat"])
     _bold_row(ws, 1, 4)
     for frame in data.dsu_meta:
-        ws.append([
-            frame.dsu_id, frame.azimuth_deg, frame.origin_lon, frame.origin_lat,
-        ])
+        ws.append(
+            [
+                frame.dsu_id,
+                frame.azimuth_deg,
+                frame.origin_lon,
+                frame.origin_lat,
+            ]
+        )
     ws.column_dimensions["A"].width = 34
     for letter in ("B", "C", "D"):
         ws.column_dimensions[letter].width = 14
@@ -778,8 +800,18 @@ def _write_analog_production(ws: Any, data: BlueOxExportData) -> None:
 
 
 _CURVE_PARAM_COLS: tuple[str, ...] = (
-    "area", "stream", "level", "qi", "qi_units", "qi_basis",
-    "b_factor", "di", "di_convention", "dmin", "risk_mult", "notes",
+    "area",
+    "stream",
+    "level",
+    "qi",
+    "qi_units",
+    "qi_basis",
+    "b_factor",
+    "di",
+    "di_convention",
+    "dmin",
+    "risk_mult",
+    "notes",
 )
 QI_BASIS = "fitted_qi"
 DI_CONVENTION = "nominal_annual"
@@ -795,24 +827,26 @@ def _write_curve_params(ws: Any, data: BlueOxExportData) -> None:
             key=lambda r: (str(r.get("stream")), level_order.get(str(r.get("level")), 99)),
         )
         for r in rows:
-            ws.append([
-                z.zone_name,
-                r.get("stream"),
-                r.get("level"),
-                r.get("qi"),
-                r.get("qi_units"),
-                # Per-row basis (2026-07-24 risking amendment): a risked
-                # row declares fitted_qi_risked + its multiplier; rows
-                # from callers predating the amendment fall back to the
-                # unrisked constants.
-                r.get("qi_basis", QI_BASIS),
-                r.get("b_factor"),
-                r.get("di"),
-                DI_CONVENTION,
-                r.get("dmin"),
-                r.get("risk_mult", 1.0),
-                r.get("notes"),
-            ])
+            ws.append(
+                [
+                    z.zone_name,
+                    r.get("stream"),
+                    r.get("level"),
+                    r.get("qi"),
+                    r.get("qi_units"),
+                    # Per-row basis (2026-07-24 risking amendment): a risked
+                    # row declares fitted_qi_risked + its multiplier; rows
+                    # from callers predating the amendment fall back to the
+                    # unrisked constants.
+                    r.get("qi_basis", QI_BASIS),
+                    r.get("b_factor"),
+                    r.get("di"),
+                    DI_CONVENTION,
+                    r.get("dmin"),
+                    r.get("risk_mult", 1.0),
+                    r.get("notes"),
+                ]
+            )
     ws.column_dimensions["A"].width = 28
     for letter in ("D", "G", "H", "J", "K"):
         ws.column_dimensions[letter].number_format = "0.000"
@@ -837,30 +871,38 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         ("prepared_by", data.prepared_by),
     ]
     if data.history_exceptions:
-        block_a.append((
-            "analog_history_exceptions",
-            ", ".join(data.history_exceptions) + " (no monthly history in source)",
-        ))
+        block_a.append(
+            (
+                "analog_history_exceptions",
+                ", ".join(data.history_exceptions) + " (no monthly history in source)",
+            )
+        )
     if data.inventory_exclusions:
-        block_a.append((
-            "inventory_benches_excluded",
-            "; ".join(data.inventory_exclusions),
-        ))
+        block_a.append(
+            (
+                "inventory_benches_excluded",
+                "; ".join(data.inventory_exclusions),
+            )
+        )
     # Scenario-scoped zones declare their DSU subset (2026-07-24
     # amendment, optional key — absent on unscoped zones so legacy
     # drops are byte-identical).
     for z in data.zones:
         if z.scenario_scope:
-            block_a.append((
-                f"zone_scenario_scope[{z.zone_name}]",
-                "; ".join(z.scenario_scope),
-            ))
-    block_a.append((
-        "inventory_category_basis",
-        "PDP = existing producer (context only, not counted); "
-        "PUD = pdp_count_3mi >= 3; UPSIDE = pdp_count_3mi <= 2 or unscored; "
-        "narvi user overrides win",
-    ))
+            block_a.append(
+                (
+                    f"zone_scenario_scope[{z.zone_name}]",
+                    "; ".join(z.scenario_scope),
+                )
+            )
+    block_a.append(
+        (
+            "inventory_category_basis",
+            "PDP = existing producer (context only, not counted); "
+            "PUD = pdp_count_3mi >= 3; UPSIDE = pdp_count_3mi <= 2 or unscored; "
+            "narvi user overrides win",
+        )
+    )
     # TC-vs-Novi benchmark declarations (2026-07-27 amendment) — only
     # when the comparison ships, so legacy drops stay byte-identical.
     if data.novi_comparison:
@@ -871,16 +913,16 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         # novi_comparison_meta rather than declaring one zone's value
         # for all.
         tols = {z.lateral_tol for z in data.novi_comparison}
-        tol: float | str = (
-            tols.pop() if len(tols) == 1 else "per_zone_see_novi_comparison_meta"
+        tol: float | str = tols.pop() if len(tols) == 1 else "per_zone_see_novi_comparison_meta"
+        block_a.extend(
+            [
+                ("novi_intel_vintage", data.novi_intel_vintage),
+                ("novi_selection_radius_m", radius),
+                ("novi_selection_lateral_tol", tol),
+                ("novi_alignment", NOVI_ALIGNMENT),
+                ("novi_rate_to_volume_days", NOVI_RATE_TO_VOLUME_DAYS),
+            ]
         )
-        block_a.extend([
-            ("novi_intel_vintage", data.novi_intel_vintage),
-            ("novi_selection_radius_m", radius),
-            ("novi_selection_lateral_tol", tol),
-            ("novi_alignment", NOVI_ALIGNMENT),
-            ("novi_rate_to_volume_days", NOVI_RATE_TO_VOLUME_DAYS),
-        ])
     for key, value in block_a:
         ws.append([key, value])
         ws.cell(row=ws.max_row, column=1).font = _BOLD
@@ -892,8 +934,13 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
     # inventory rows the sheets were written from (contract: "compute
     # Block B from the final sheets, not from the source system").
     header = [
-        "area", "eur_oil_bbl", "eur_gas_mcf", "eur_ngl_bbl",
-        "gross_locations", "avg_producing_lateral_ft", "avg_drilled_lateral_ft",
+        "area",
+        "eur_oil_bbl",
+        "eur_gas_mcf",
+        "eur_ngl_bbl",
+        "gross_locations",
+        "avg_producing_lateral_ft",
+        "avg_drilled_lateral_ft",
     ]
     ws.append(header)
     _bold_row(ws, ws.max_row, len(header))
@@ -902,23 +949,19 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
         # and lateral means cover PUD/UPSIDE rows exclusively.
         counted = [i for i in z.inventory if i.category != "PDP"]
         n_inv = len(counted)
-        avg_prod = (
-            sum(float(i.producing_lateral_ft) for i in counted) / n_inv
-            if n_inv else 0.0
+        avg_prod = sum(float(i.producing_lateral_ft) for i in counted) / n_inv if n_inv else 0.0
+        avg_drill = sum(float(i.drilled_lateral_ft) for i in counted) / n_inv if n_inv else 0.0
+        ws.append(
+            [
+                z.zone_name,
+                sum(float(v) for v in z.volumes["P50"]["oil"]),
+                sum(float(v) for v in z.volumes["P50"]["gas"]),
+                0.0,  # ngl_bbl delivered all-zero (amendment)
+                n_inv,
+                avg_prod,
+                avg_drill,
+            ]
         )
-        avg_drill = (
-            sum(float(i.drilled_lateral_ft) for i in counted) / n_inv
-            if n_inv else 0.0
-        )
-        ws.append([
-            z.zone_name,
-            sum(float(v) for v in z.volumes["P50"]["oil"]),
-            sum(float(v) for v in z.volumes["P50"]["gas"]),
-            0.0,  # ngl_bbl delivered all-zero (amendment)
-            n_inv,
-            avg_prod,
-            avg_drill,
-        ])
     ws.column_dimensions["A"].width = 34
     for col_idx in range(2, len(header) + 1):
         letter = get_column_letter(col_idx)
@@ -954,9 +997,7 @@ def build_blueox_workbook(data: BlueOxExportData) -> bytes:
     _write_curve_params(wb.create_sheet("curve_params"), data)
     if data.novi_comparison:
         _write_novi_comparison(wb.create_sheet("novi_comparison"), data)
-        _write_novi_comparison_meta(
-            wb.create_sheet("novi_comparison_meta"), data
-        )
+        _write_novi_comparison_meta(wb.create_sheet("novi_comparison_meta"), data)
     _write_manifest(wb.create_sheet("manifest"), data)
 
     buf = io.BytesIO()

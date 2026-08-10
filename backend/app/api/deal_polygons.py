@@ -1,30 +1,30 @@
 """Deal-acreage polygon endpoints.
 
-  POST /api/deals/polygons/upload-shapefile
-      body: multipart .zip containing .shp + .dbf (+ .prj if available),
-      OR a GeoPackage .gpkg (dispatch is on file magic, not extension —
-      the route name predates gpkg support and is kept for API stability)
-      → parse features, reproject to EPSG:4326 via PostGIS ST_Transform,
-        insert one row per feature with deal_id=NULL (user links via
-        the admin modal afterward). gpkg attributes (Type=DSU/Tract,
-        depth/WI columns) land verbatim in the attributes JSONB plus a
-        "gpkg_layer" key.
+POST /api/deals/polygons/upload-shapefile
+    body: multipart .zip containing .shp + .dbf (+ .prj if available),
+    OR a GeoPackage .gpkg (dispatch is on file magic, not extension —
+    the route name predates gpkg support and is kept for API stability)
+    → parse features, reproject to EPSG:4326 via PostGIS ST_Transform,
+      insert one row per feature with deal_id=NULL (user links via
+      the admin modal afterward). gpkg attributes (Type=DSU/Tract,
+      depth/WI columns) land verbatim in the attributes JSONB plus a
+      "gpkg_layer" key.
 
-  GET  /api/deals/polygons
-      → list all polygons with their attributes + assigned deal name.
-        Drives the admin modal.
+GET  /api/deals/polygons
+    → list all polygons with their attributes + assigned deal name.
+      Drives the admin modal.
 
-  GET  /api/deals/polygons.geojson
-      → FeatureCollection for the Map tab. Properties: id, name,
-        deal_id, deal_name, color. Raw shapefile attributes are
-        excluded to keep the payload light.
+GET  /api/deals/polygons.geojson
+    → FeatureCollection for the Map tab. Properties: id, name,
+      deal_id, deal_name, color. Raw shapefile attributes are
+      excluded to keep the payload light.
 
-  PATCH /api/deals/polygons/{id}
-      body: {deal_id: uuid | null}
-      → link or unlink a polygon to/from a deal.
+PATCH /api/deals/polygons/{id}
+    body: {deal_id: uuid | null}
+    → link or unlink a polygon to/from a deal.
 
-  DELETE /api/deals/polygons/{id}
-      → remove a polygon.
+DELETE /api/deals/polygons/{id}
+    → remove a polygon.
 """
 
 from __future__ import annotations
@@ -207,10 +207,7 @@ def _parse_shapefile_zip(
             wkt = _shape_to_wkt(sr.shape)
             if wkt is None:
                 continue
-            attrs = {
-                k: _jsonable(v)
-                for k, v in zip(field_names, list(sr.record))
-            }
+            attrs = {k: _jsonable(v) for k, v in zip(field_names, list(sr.record), strict=False)}
             label = _pick_label(attrs, fid)
             features.append((label, wkt, attrs))
     return features, source_epsg
@@ -284,7 +281,7 @@ async def upload_shapefile(
         raise
     except ValueError as e:  # read_gpkg's not-a-gpkg / no-polygons errors
         raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         log.exception("deal_upload_parse_failed", filename=file.filename, kind=kind)
         raise HTTPException(status_code=400, detail=f"failed to parse upload: {e}") from e
 
@@ -307,9 +304,7 @@ async def upload_shapefile(
     if file.filename:
         replaced = (
             session.execute(
-                delete(DealPolygon).where(
-                    DealPolygon.source_file == file.filename
-                )
+                delete(DealPolygon).where(DealPolygon.source_file == file.filename)
             ).rowcount
             or 0
         )
@@ -370,7 +365,8 @@ def list_polygons(
             DealPolygon.name,
             DealPolygon.attributes,
             DealPolygon.source_file,
-        ).outerjoin(Deal, Deal.id == DealPolygon.deal_id)
+        )
+        .outerjoin(Deal, Deal.id == DealPolygon.deal_id)
         .order_by(Deal.name.nullslast(), DealPolygon.name)
     ).all()
     return [
@@ -451,9 +447,7 @@ def patch_polygon(
             raise HTTPException(status_code=400, detail="deal not found")
     poly.deal_id = req.deal_id
     session.commit()
-    deal_name = (
-        session.get(Deal, poly.deal_id).name if poly.deal_id else None
-    )
+    deal_name = session.get(Deal, poly.deal_id).name if poly.deal_id else None
     return DealPolygonRow(
         id=poly.id,
         deal_id=poly.deal_id,
@@ -475,9 +469,7 @@ def delete_by_source_file(
     source_file). Powers the manage modal's per-group 'delete shapefile'
     action so the user can clear a whole upload in one click."""
     deleted = (
-        session.execute(
-            delete(DealPolygon).where(DealPolygon.source_file == source_file)
-        ).rowcount
+        session.execute(delete(DealPolygon).where(DealPolygon.source_file == source_file)).rowcount
         or 0
     )
     session.commit()
@@ -485,10 +477,6 @@ def delete_by_source_file(
 
 
 @router.delete("/{polygon_id}", status_code=204)
-def delete_polygon(
-    polygon_id: uuid.UUID, session: Session = Depends(get_session)
-) -> None:
-    session.execute(
-        delete(DealPolygon).where(DealPolygon.id == polygon_id)
-    )
+def delete_polygon(polygon_id: uuid.UUID, session: Session = Depends(get_session)) -> None:
+    session.execute(delete(DealPolygon).where(DealPolygon.id == polygon_id))
     session.commit()

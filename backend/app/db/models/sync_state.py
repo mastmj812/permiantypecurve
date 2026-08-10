@@ -50,9 +50,7 @@ class SyncJob(Base):
 
     __tablename__ = "sync_jobs"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     entity: Mapped[SyncEntity] = mapped_column(
         pg_enum(SyncEntity, name="sync_entity"), nullable=False
     )

@@ -17,7 +17,6 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Forecast, Well
 
-
 # Columns for the per-well summary block. Order matches the deal-deck
 # slide and the xlsx metadata sheet's per-well summary block.
 #   BWPF = barrels of completion fluid per foot = fluid_bbl / lateral_ft
@@ -45,13 +44,13 @@ PER_WELL_HEADERS: tuple[str, ...] = (
 # column)` API). The pptx export mirrors these as Python format
 # strings server-side since PowerPoint cells are text.
 PER_WELL_COL_FORMATS: dict[int, str] = {
-    6: "#,##0",   # BWPF        — 0 decimals
-    7: "#,##0",   # PPF         — 0 decimals
-    8: "#,##0",   # Oil EUR     — 0 decimals
-    9: "#,##0",   # Gas EUR     — 0 decimals
+    6: "#,##0",  # BWPF        — 0 decimals
+    7: "#,##0",  # PPF         — 0 decimals
+    8: "#,##0",  # Oil EUR     — 0 decimals
+    9: "#,##0",  # Gas EUR     — 0 decimals
     10: "#,##0",  # Oil EUR/ft  — 0 decimals
-    11: "0.0",    # GOR EUR     — 1 decimal
-    12: "0.0",    # WOR EUR     — 1 decimal
+    11: "0.0",  # GOR EUR     — 1 decimal
+    12: "0.0",  # WOR EUR     — 1 decimal
 }
 
 
@@ -68,18 +67,19 @@ PER_WELL_COL_FORMATS: dict[int, str] = {
 # order). The first §8 drops (2026-07-29 toucan/bro_time) shipped
 # lat-first; renamed same day, declared in the ledger.
 WELL_GEO_HEADERS: tuple[str, ...] = (
-    "surface_lon", "surface_lat",
-    "heel_lon", "heel_lat",
-    "toe_lon", "toe_lat",
+    "surface_lon",
+    "surface_lat",
+    "heel_lon",
+    "heel_lat",
+    "toe_lon",
+    "toe_lat",
     "wellstick_wkt",
 )
 
 EMPTY_GEO: tuple[None, ...] = (None,) * len(WELL_GEO_HEADERS)
 
 
-def well_geo_rows(
-    session: Session, api10s: list[str]
-) -> dict[str, tuple[Any, ...]]:
+def well_geo_rows(session: Session, api10s: list[str]) -> dict[str, tuple[Any, ...]]:
     """api10 -> (surface_lon, surface_lat, heel_lon, heel_lat, toe_lon,
     toe_lat, wellstick_wkt) ordered as ``WELL_GEO_HEADERS``; lon/lat in
     WGS84 degrees rounded to 6 decimals (~0.1 m), WKT a LINESTRING
@@ -97,20 +97,19 @@ def well_geo_rows(
     """
     if not api10s:
         return {}
-    heel = case(
-        (func.ST_NPoints(Well.wellstick) == 4, func.ST_PointN(Well.wellstick, 2))
-    )
+    heel = case((func.ST_NPoints(Well.wellstick) == 4, func.ST_PointN(Well.wellstick, 2)))
     stmt = select(
         Well.api10,
-        func.ST_X(Well.sh_geom), func.ST_Y(Well.sh_geom),
-        func.ST_X(heel), func.ST_Y(heel),
-        func.ST_X(Well.bh_geom), func.ST_Y(Well.bh_geom),
+        func.ST_X(Well.sh_geom),
+        func.ST_Y(Well.sh_geom),
+        func.ST_X(heel),
+        func.ST_Y(heel),
+        func.ST_X(Well.bh_geom),
+        func.ST_Y(Well.bh_geom),
         func.ST_AsText(Well.wellstick, 6),
     ).where(Well.api10.in_(api10s))
     return {
-        api10: tuple(
-            round(float(c), 6) if c is not None else None for c in coords
-        ) + (wkt,)
+        api10: tuple(round(float(c), 6) if c is not None else None for c in coords) + (wkt,)
         for api10, *coords, wkt in session.execute(stmt)
     }
 
@@ -139,9 +138,7 @@ def eur_monthly_trapezoid(params: dict[str, Any] | None) -> float | None:
         return None
 
 
-def per_well_rows(
-    session: Session, api10s: list[str]
-) -> list[tuple[Any, ...]]:
+def per_well_rows(session: Session, api10s: list[str]) -> list[tuple[Any, ...]]:
     """Materialize per-well summary rows for the api10s in order.
 
     Single query joins wells + their oil/gas/water forecasts; EUR is
@@ -155,14 +152,10 @@ def per_well_rows(
         return []
     wells = {
         w.api10: w
-        for w in session.execute(
-            select(Well).where(Well.api10.in_(api10s))
-        ).scalars().all()
+        for w in session.execute(select(Well).where(Well.api10.in_(api10s))).scalars().all()
     }
     forecasts_by_well: dict[str, dict[str, Forecast]] = {}
-    for f in session.execute(
-        select(Forecast).where(Forecast.api10.in_(api10s))
-    ).scalars().all():
+    for f in session.execute(select(Forecast).where(Forecast.api10.in_(api10s))).scalars().all():
         forecasts_by_well.setdefault(f.api10, {})[f.stream.value] = f
 
     rows: list[tuple[Any, ...]] = []
@@ -184,20 +177,24 @@ def per_well_rows(
         ppf = prop / lat if (prop is not None and lat and lat > 0) else None
         oil_per_ft = oil_eur / lat if (oil_eur is not None and lat and lat > 0) else None
         gor_eur = gas_eur / oil_eur if (gas_eur is not None and oil_eur and oil_eur > 0) else None
-        wor_eur = water_eur / oil_eur if (water_eur is not None and oil_eur and oil_eur > 0) else None
+        wor_eur = (
+            water_eur / oil_eur if (water_eur is not None and oil_eur and oil_eur > 0) else None
+        )
 
-        rows.append((
-            w.api10,
-            w.name,
-            w.operator,
-            w.formation_blueox,
-            lat,
-            bwpf,
-            ppf,
-            oil_eur,
-            gas_eur,
-            oil_per_ft,
-            gor_eur,
-            wor_eur,
-        ))
+        rows.append(
+            (
+                w.api10,
+                w.name,
+                w.operator,
+                w.formation_blueox,
+                lat,
+                bwpf,
+                ppf,
+                oil_eur,
+                gas_eur,
+                oil_per_ft,
+                gor_eur,
+                wor_eur,
+            )
+        )
     return rows

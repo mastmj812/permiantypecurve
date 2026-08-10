@@ -21,7 +21,6 @@ import math
 from app.db.models import TypeCurve
 from app.type_curves.risking import normalize_multipliers, risked_name_suffix
 
-
 # Per-10k-ft scaling for rate / EUR cells. Mo / B / Di are unit-
 # independent and pass through unscaled.
 PER_10K_FACTOR: float = 10.0
@@ -30,9 +29,22 @@ PER_10K_FACTOR: float = 10.0
 # and ``frontend/src/components/slide/SlideParamTable.tsx::HEADERS``.
 PARAM_HEADERS: tuple[str, ...] = (
     "Type Curve Name",
-    "Oil Initial", "Oil Mo", "Oil Peak", "Oil B", "Oil Di", "Oil EUR",
-    "Gas Initial", "Gas Mo", "Gas Peak", "Gas B", "Gas Di", "Gas EUR",
-    "Water Peak", "Water B", "Water Di", "Water EUR",
+    "Oil Initial",
+    "Oil Mo",
+    "Oil Peak",
+    "Oil B",
+    "Oil Di",
+    "Oil EUR",
+    "Gas Initial",
+    "Gas Mo",
+    "Gas Peak",
+    "Gas B",
+    "Gas Di",
+    "Gas EUR",
+    "Water Peak",
+    "Water B",
+    "Water Di",
+    "Water EUR",
 )
 
 

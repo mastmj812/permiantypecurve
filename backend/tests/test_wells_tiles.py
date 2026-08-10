@@ -137,9 +137,7 @@ def test_spacing_tile_sql_mirrors_orm_semantics() -> None:
     assert params["spacing_sentinel"] == 2800.0
     assert " OR " not in sql  # unbounded excluded by default
 
-    sql_ub, _ = _build_filter_sql(
-        FilterSpec(spacing_min_ft=1500.0, spacing_include_unbounded=True)
-    )
+    sql_ub, _ = _build_filter_sql(FilterSpec(spacing_min_ft=1500.0, spacing_include_unbounded=True))
     assert "IS NULL" in sql_ub and "= :spacing_sentinel" in sql_ub
 
 

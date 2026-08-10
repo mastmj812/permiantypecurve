@@ -24,15 +24,12 @@ from app.forecasting.ramp_arps import (
     model_cum_at_t,
 )
 
-
 _BASE_PARAMS = {"qi": 800.0, "Di": 1.2, "b": 1.0, "Df": 0.08}
 
 
 def test_ramp_endpoint_at_t_zero_equals_qo() -> None:
     t = np.array([0.0])
-    rate = evaluate_well_rate(
-        qo=200.0, peak_index_months=3, **_BASE_PARAMS, t_years=t
-    )
+    rate = evaluate_well_rate(qo=200.0, peak_index_months=3, **_BASE_PARAMS, t_years=t)
     assert rate[0] == pytest.approx(200.0, rel=1e-6)
 
 
@@ -111,26 +108,20 @@ def test_no_kink_just_past_seam() -> None:
 
 def test_fallback_to_pure_arps_when_qo_missing() -> None:
     t = np.linspace(0.0, 5.0, 60)
-    ramp_aware = evaluate_well_rate(
-        qo=None, peak_index_months=3, **_BASE_PARAMS, t_years=t
-    )
+    ramp_aware = evaluate_well_rate(qo=None, peak_index_months=3, **_BASE_PARAMS, t_years=t)
     # No qo → pure Arps from t=0. At t=0 we should get qi exactly.
     assert ramp_aware[0] == pytest.approx(_BASE_PARAMS["qi"], rel=1e-3)
 
 
 def test_fallback_to_pure_arps_when_peak_index_missing() -> None:
     t = np.linspace(0.0, 5.0, 60)
-    rate = evaluate_well_rate(
-        qo=200.0, peak_index_months=None, **_BASE_PARAMS, t_years=t
-    )
+    rate = evaluate_well_rate(qo=200.0, peak_index_months=None, **_BASE_PARAMS, t_years=t)
     assert rate[0] == pytest.approx(_BASE_PARAMS["qi"], rel=1e-3)
 
 
 def test_peak_index_zero_degenerates_to_arps() -> None:
     t = np.linspace(0.0, 5.0, 60)
-    rate = evaluate_well_rate(
-        qo=200.0, peak_index_months=0, **_BASE_PARAMS, t_years=t
-    )
+    rate = evaluate_well_rate(qo=200.0, peak_index_months=0, **_BASE_PARAMS, t_years=t)
     # peak_index_months <= 0 means "peak at t=0" → no ramp segment.
     assert rate[0] == pytest.approx(_BASE_PARAMS["qi"], rel=1e-3)
 
@@ -141,13 +132,22 @@ def test_build_ramp_arps_rate_monthly_grid_matches_evaluator() -> None:
     # smoothed_rate would diverge from per-well chart's rate line.
     n_months = 24
     monthly = build_ramp_arps_rate(
-        n_months=n_months, qo=200.0, qi=800.0, peak_index=3,
-        Di=1.2, b=1.0, Df=0.08,
+        n_months=n_months,
+        qo=200.0,
+        qi=800.0,
+        peak_index=3,
+        Di=1.2,
+        b=1.0,
+        Df=0.08,
     )
     t_years = np.arange(n_months, dtype=float) / 12.0
     direct = evaluate_well_rate(
-        qo=200.0, peak_index_months=3,
-        qi=800.0, Di=1.2, b=1.0, Df=0.08,
+        qo=200.0,
+        peak_index_months=3,
+        qi=800.0,
+        Di=1.2,
+        b=1.0,
+        Df=0.08,
         t_years=t_years,
     )
     np.testing.assert_allclose(monthly, direct, rtol=1e-9)
@@ -159,6 +159,7 @@ def test_compute_ramp_eur_trapezoid() -> None:
     # days/year, not 365.25 — so the test pins the actual math
     # instead of a "should be" approximation.
     from app.forecasting.eur import DAYS_PER_YEAR
+
     days_per_month = DAYS_PER_YEAR / 12.0
     expected = 500.0 * 6 * days_per_month
     actual = compute_ramp_eur(qo=100.0, qi=900.0, peak_index=6)
@@ -180,14 +181,14 @@ def test_compute_total_eur_adds_ramp_when_present() -> None:
     params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": peak_index_months}
     horizon = 50.0
     total = compute_total_eur(
-        model_type="modified_hyperbolic", params=params, horizon_years=horizon,
+        model_type="modified_hyperbolic",
+        params=params,
+        horizon_years=horizon,
     )
     arps_post_peak = compute_eur(
         "modified_hyperbolic", params, horizon_years=horizon - peak_index_months / 12.0
     )
-    ramp = compute_ramp_eur(
-        qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months
-    )
+    ramp = compute_ramp_eur(qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months)
     assert total == pytest.approx(arps_post_peak + ramp, rel=1e-9)
 
 
@@ -204,12 +205,19 @@ def test_evaluate_fit_eur_matches_compute_total_eur() -> None:
     params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": peak_index_months}
     horizon = 50.0
     expected = compute_total_eur(
-        model_type="modified_hyperbolic", params=params, horizon_years=horizon,
+        model_type="modified_hyperbolic",
+        params=params,
+        horizon_years=horizon,
     )
     fitted = evaluate_fit(
-        qi=_BASE_PARAMS["qi"], Di=_BASE_PARAMS["Di"], b=_BASE_PARAMS["b"],
-        Df=_BASE_PARAMS["Df"], qo=200.0, peak_index=peak_index_months,
-        n_months=600, horizon_years=horizon,
+        qi=_BASE_PARAMS["qi"],
+        Di=_BASE_PARAMS["Di"],
+        b=_BASE_PARAMS["b"],
+        Df=_BASE_PARAMS["Df"],
+        qo=200.0,
+        peak_index=peak_index_months,
+        n_months=600,
+        horizon_years=horizon,
     )
     assert fitted["eur_per_unit"] == pytest.approx(expected, rel=1e-9)
     # The two reported pieces must sum to the reported total.
@@ -221,9 +229,7 @@ def test_evaluate_fit_eur_matches_compute_total_eur() -> None:
 def test_compute_total_eur_falls_back_to_arps_when_missing() -> None:
     # No qo / peak_index_months → compute_total_eur should equal
     # compute_eur. Preserves the EUR semantic for pre-ramp rows.
-    total = compute_total_eur(
-        model_type="modified_hyperbolic", params=_BASE_PARAMS
-    )
+    total = compute_total_eur(model_type="modified_hyperbolic", params=_BASE_PARAMS)
     arps = compute_eur("modified_hyperbolic", _BASE_PARAMS)
     assert total == pytest.approx(arps, rel=1e-9)
 
@@ -233,8 +239,10 @@ def test_compute_total_eur_falls_back_to_arps_when_missing() -> None:
 
 def test_model_cum_at_t_zero() -> None:
     cum = model_cum_at_t(
-        qo=200.0, peak_index_months=3,
-        **_BASE_PARAMS, t_years=0.0,
+        qo=200.0,
+        peak_index_months=3,
+        **_BASE_PARAMS,
+        t_years=0.0,
     )
     assert cum == 0.0
 
@@ -243,12 +251,12 @@ def test_model_cum_at_t_at_peak_equals_ramp_eur() -> None:
     peak_index_months = 3
     peak_t = peak_index_months / 12.0
     cum = model_cum_at_t(
-        qo=200.0, peak_index_months=peak_index_months,
-        **_BASE_PARAMS, t_years=peak_t,
+        qo=200.0,
+        peak_index_months=peak_index_months,
+        **_BASE_PARAMS,
+        t_years=peak_t,
     )
-    ramp = compute_ramp_eur(
-        qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months
-    )
+    ramp = compute_ramp_eur(qo=200.0, qi=_BASE_PARAMS["qi"], peak_index=peak_index_months)
     assert cum == pytest.approx(ramp, rel=1e-9)
 
 
@@ -263,8 +271,13 @@ def test_model_cum_at_t_partial_ramp_trapezoid() -> None:
     rate_mid = qo + (qi - qo) * 0.5
     expected = ((qo + rate_mid) / 2.0) * (peak_t / 2.0) * 365.0
     cum = model_cum_at_t(
-        qo=qo, peak_index_months=peak_index_months,
-        qi=qi, Di=1.2, b=1.0, Df=0.08, t_years=peak_t / 2.0,
+        qo=qo,
+        peak_index_months=peak_index_months,
+        qi=qi,
+        Di=1.2,
+        b=1.0,
+        Df=0.08,
+        t_years=peak_t / 2.0,
     )
     assert cum == pytest.approx(expected, rel=1e-9)
 
@@ -275,11 +288,15 @@ def test_model_cum_at_t_at_horizon_equals_total_eur() -> None:
     # (= total - model_cum_at_endofhistory) would be biased.
     params = {**_BASE_PARAMS, "qo": 200.0, "peak_index_months": 3}
     cum = model_cum_at_t(
-        qo=200.0, peak_index_months=3,
-        **_BASE_PARAMS, t_years=50.0,
+        qo=200.0,
+        peak_index_months=3,
+        **_BASE_PARAMS,
+        t_years=50.0,
     )
     total = compute_total_eur(
-        model_type="modified_hyperbolic", params=params, horizon_years=50.0,
+        model_type="modified_hyperbolic",
+        params=params,
+        horizon_years=50.0,
     )
     assert cum == pytest.approx(total, rel=1e-9)
 
@@ -289,8 +306,10 @@ def test_model_cum_at_t_pure_arps_when_ramp_missing() -> None:
     # at the same horizon.
     t = 2.0
     cum = model_cum_at_t(
-        qo=None, peak_index_months=None,
-        **_BASE_PARAMS, t_years=t,
+        qo=None,
+        peak_index_months=None,
+        **_BASE_PARAMS,
+        t_years=t,
     )
     expected = compute_eur("modified_hyperbolic", _BASE_PARAMS, horizon_years=t)
     assert cum == pytest.approx(expected, rel=1e-9)

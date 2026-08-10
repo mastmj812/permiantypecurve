@@ -45,9 +45,7 @@ def _geom_from_geojson(polygon: dict[str, Any], key: str) -> Any:
     )
 
 
-def universe_stmt(
-    polygons: list[dict[str, Any]], formations: list[str]
-) -> Select[Any]:
+def universe_stmt(polygons: list[dict[str, Any]], formations: list[str]) -> Select[Any]:
     """Uncapped select of formation wells intersecting ANY of the polygons.
 
     Pure statement builder — kept separate from execution so tests can
@@ -114,17 +112,13 @@ def compute_universe(
             "name": r.name,
             "operator": r.operator,
             "formation": r.formation_blueox,
-            "first_prod_date": (
-                r.first_prod_date.isoformat() if r.first_prod_date else None
-            ),
+            "first_prod_date": (r.first_prod_date.isoformat() if r.first_prod_date else None),
             "lateral_ft": float(r.lateral_ft) if r.lateral_ft is not None else None,
             "status": r.status.value if r.status is not None else None,
             # Verbatim incl. the 2800 no-neighbor sentinel — the
             # waterfall owns the sentinel semantics at read time.
             "lateral_closer_xy_ft": (
-                float(r.lateral_closer_xy_ft)
-                if r.lateral_closer_xy_ft is not None
-                else None
+                float(r.lateral_closer_xy_ft) if r.lateral_closer_xy_ft is not None else None
             ),
         }
         for r in rows
@@ -144,9 +138,7 @@ def polygon_area_sq_mi(session: Session, polygon: dict[str, Any]) -> float | Non
     try:
         area_m2 = session.execute(
             select(
-                func.ST_Area(
-                    text("ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326)::geography")
-                )
+                func.ST_Area(text("ST_SetSRID(ST_GeomFromGeoJSON(:aoi), 4326)::geography"))
             ).params(aoi=json.dumps(polygon))
         ).scalar_one()
     except Exception:  # malformed ring — area is cosmetic, don't fail the save

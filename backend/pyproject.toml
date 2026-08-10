@@ -68,7 +68,29 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "N", "RUF", "SIM", "C4"]
-ignore = ["E501"]  # line length handled by formatter
+# The multiplication sign is load-bearing: risked_name_suffix emits "×0.8"
+# under a byte-identical py<->ts contract (type_curves/risking.py). The
+# minus sign appears in diagnostic output. Neither may be "fixed" to ASCII.
+allowed-confusables = ["×", "−"]
+ignore = [
+    "E501",   # line length handled by formatter
+    "N803",   # Arps notation (qi, Di, b, Df) is the domain convention of
+    "N806",   #   record — naming rules don't apply to decline-curve symbols
+    "RUF002", # em/en dashes and prime marks are deliberate in docstrings
+    "RUF003", #   and comments (prose-heavy codebase); RUF001 still guards code
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends/Query/etc. in argument defaults is the framework idiom,
+# not the mutable-default bug B008 exists to catch.
+extend-immutable-calls = [
+    "fastapi.Depends",
+    "fastapi.Query",
+    "fastapi.Header",
+    "fastapi.Body",
+    "fastapi.File",
+    "fastapi.Form",
+]
 
 [tool.ruff.format]
 quote-style = "double"

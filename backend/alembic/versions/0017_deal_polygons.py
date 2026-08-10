@@ -14,9 +14,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from geoalchemy2 import Geometry
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0017_deal_polygons"
 down_revision: str | Sequence[str] | None = "0016_sync_ramp_eur_v2"
@@ -59,9 +60,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "ix_deal_polygons_deal_id", "deal_polygons", ["deal_id"]
-    )
+    op.create_index("ix_deal_polygons_deal_id", "deal_polygons", ["deal_id"])
     op.create_index(
         "ix_deal_polygons_geom_gist",
         "deal_polygons",

@@ -10,9 +10,10 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from geoalchemy2.types import Geometry
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision: str = "0001_initial"
 down_revision: str | Sequence[str] | None = None
@@ -21,12 +22,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 # Postgres ENUM types — created once, reused across columns.
-WELL_STATUS = sa.Enum(
-    "PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN", name="well_status"
-)
-WELLSTICK_SOURCE = sa.Enum(
-    "heel_to_bh", "surface_to_bh", "none", name="wellstick_source"
-)
+WELL_STATUS = sa.Enum("PDP", "PA", "SI", "TA", "INACTIVE", "UNKNOWN", name="well_status")
+WELLSTICK_SOURCE = sa.Enum("heel_to_bh", "surface_to_bh", "none", name="wellstick_source")
 STREAM = sa.Enum("oil", "gas", "water", name="stream")
 FIT_METHOD = sa.Enum("rate_cum", "rate_time", name="fit_method")
 MODEL_TYPE = sa.Enum(
@@ -41,9 +38,7 @@ NORMALIZATION_BASIS = sa.Enum(
     "per_lateral_ft", "per_proppant_lb", "per_well", name="normalization_basis"
 )
 ALIGNMENT_METHOD = sa.Enum("peak_month", name="alignment_method")
-SYNC_ENTITY = sa.Enum(
-    "well_headers", "production", "surveys", name="sync_entity"
-)
+SYNC_ENTITY = sa.Enum("well_headers", "production", "surveys", name="sync_entity")
 SYNC_JOB_STATUS = sa.Enum(
     "pending", "running", "succeeded", "failed", "cancelled", name="sync_job_status"
 )
@@ -120,15 +115,9 @@ def upgrade() -> None:
     op.create_index("ix_wells_county", "wells", ["county"])
     op.create_index("ix_wells_basin", "wells", ["basin"])
     op.create_index("ix_wells_status", "wells", ["status"])
-    op.create_index(
-        "ix_wells_sh_geom_gist", "wells", ["sh_geom"], postgresql_using="gist"
-    )
-    op.create_index(
-        "ix_wells_bh_geom_gist", "wells", ["bh_geom"], postgresql_using="gist"
-    )
-    op.create_index(
-        "ix_wells_wellstick_gist", "wells", ["wellstick"], postgresql_using="gist"
-    )
+    op.create_index("ix_wells_sh_geom_gist", "wells", ["sh_geom"], postgresql_using="gist")
+    op.create_index("ix_wells_bh_geom_gist", "wells", ["bh_geom"], postgresql_using="gist")
+    op.create_index("ix_wells_wellstick_gist", "wells", ["wellstick"], postgresql_using="gist")
 
     # ---------------- directional_surveys ----------------
     op.create_table(
@@ -190,9 +179,7 @@ def upgrade() -> None:
             sa.ForeignKey("wells.api14", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column(
-            "stream", postgresql.ENUM(name="stream", create_type=False), nullable=False
-        ),
+        sa.Column("stream", postgresql.ENUM(name="stream", create_type=False), nullable=False),
         sa.Column(
             "model_type",
             postgresql.ENUM(name="model_type", create_type=False),

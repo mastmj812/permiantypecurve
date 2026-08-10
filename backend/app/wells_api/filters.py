@@ -113,16 +113,12 @@ class FilterSpec:
                 bounded_parts.append(col <= self.spacing_max_ft)
             bounded = and_(*bounded_parts)
             if self.spacing_include_unbounded:
-                clauses.append(
-                    or_(bounded, col.is_(None), col == SPACING_SENTINEL_FT)
-                )
+                clauses.append(or_(bounded, col.is_(None), col == SPACING_SENTINEL_FT))
             else:
                 clauses.append(bounded)
         if self.well_name_contains:
             clauses.append(
-                Well.name.ilike(
-                    f"%{escape_like(self.well_name_contains)}%", escape="\\"
-                )
+                Well.name.ilike(f"%{escape_like(self.well_name_contains)}%", escape="\\")
             )
         if self.api10s:
             clauses.append(Well.api10.in_(self.api10s))
@@ -144,22 +140,12 @@ def _parse_statuses(raw: str | None) -> tuple[WellStatus, ...]:
 
 
 def parse_filter_query(
-    formations: Annotated[
-        str | None, Query(description="CSV of formation names")
-    ] = None,
-    operators: Annotated[
-        str | None, Query(description="CSV of operator names")
-    ] = None,
+    formations: Annotated[str | None, Query(description="CSV of formation names")] = None,
+    operators: Annotated[str | None, Query(description="CSV of operator names")] = None,
     counties: Annotated[str | None, Query()] = None,
-    statuses: Annotated[
-        str | None, Query(description="CSV of WellStatus codes")
-    ] = None,
-    first_prod_start: Annotated[
-        date | None, Query(alias="first_prod_start")
-    ] = None,
-    first_prod_end: Annotated[
-        date | None, Query(alias="first_prod_end")
-    ] = None,
+    statuses: Annotated[str | None, Query(description="CSV of WellStatus codes")] = None,
+    first_prod_start: Annotated[date | None, Query(alias="first_prod_start")] = None,
+    first_prod_end: Annotated[date | None, Query(alias="first_prod_end")] = None,
     lateral_min_ft: Annotated[float | None, Query(ge=0)] = None,
     lateral_max_ft: Annotated[float | None, Query(ge=0)] = None,
     spacing_min_ft: Annotated[float | None, Query(ge=0)] = None,

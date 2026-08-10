@@ -40,9 +40,7 @@ class TypeCurve(Base):
 
     __tablename__ = "type_curves"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -51,9 +49,7 @@ class TypeCurve(Base):
     # Saved type curves built pre-cutover were truncated rather than
     # backfilled — the user opted for a clean slate over migration-time
     # api14 -> api10 transform complexity.
-    included_api10s: Mapped[list[str]] = mapped_column(
-        ARRAY(String(10)), nullable=False
-    )
+    included_api10s: Mapped[list[str]] = mapped_column(ARRAY(String(10)), nullable=False)
 
     normalization_basis: Mapped[NormalizationBasis] = mapped_column(
         pg_enum(NormalizationBasis, name="normalization_basis"), nullable=False
@@ -82,9 +78,7 @@ class TypeCurve(Base):
     # Stale flag flipped by Phase 2 when overrides / globals / membership
     # change after the last aggregation, signalling that ``series`` no
     # longer reflects current inputs. Phase 1 reads only.
-    is_stale: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=false()
-    )
+    is_stale: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
     # Per-TC forecast overrides keyed by ``{api10: {stream: payload}}``.
     # (Pre-cutover this was api14-keyed; migration 0010 truncated and

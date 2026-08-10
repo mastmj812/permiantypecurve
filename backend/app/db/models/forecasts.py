@@ -57,17 +57,13 @@ class Forecast(Base):
 
     __tablename__ = "forecasts"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # api10 (Novi wellbore identifier) is the FK as of the cutover —
     # see migration 0010. Replaces the api14 reference used pre-cutover.
     api10: Mapped[str] = mapped_column(
         String(10), ForeignKey("wells.api10", ondelete="CASCADE"), nullable=False
     )
-    stream: Mapped[Stream] = mapped_column(
-        pg_enum(Stream, name="stream"), nullable=False
-    )
+    stream: Mapped[Stream] = mapped_column(pg_enum(Stream, name="stream"), nullable=False)
 
     model_type: Mapped[ModelType] = mapped_column(
         pg_enum(ModelType, name="model_type"), nullable=False

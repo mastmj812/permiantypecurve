@@ -36,9 +36,7 @@ def test_csv_splitting() -> None:
 
 
 def test_status_parsing_drops_unknown_codes() -> None:
-    spec = parse_filter_query(
-        None, None, None, "PDP,SI,NONSENSE,PA", None, None, None, None
-    )
+    spec = parse_filter_query(None, None, None, "PDP,SI,NONSENSE,PA", None, None, None, None)
     assert spec.statuses == (WellStatus.PDP, WellStatus.SI, WellStatus.PA)
 
 
@@ -51,10 +49,14 @@ def test_empty_statuses_falls_back_to_pdp() -> None:
 
 def test_date_and_lateral_bounds_passthrough() -> None:
     spec = parse_filter_query(
-        None, None, None, None,
+        None,
+        None,
+        None,
+        None,
         first_prod_start=date(2018, 1, 1),
         first_prod_end=date(2025, 12, 31),
-        lateral_min_ft=5000.0, lateral_max_ft=12000.0,
+        lateral_min_ft=5000.0,
+        lateral_max_ft=12000.0,
     )
     assert spec.first_prod_start == date(2018, 1, 1)
     assert spec.lateral_min_ft == 5000.0
@@ -90,11 +92,7 @@ def test_to_sqlalchemy_clauses_is_empty_for_no_op_spec() -> None:
 def _compiled_clauses(spec: FilterSpec) -> str:
     from sqlalchemy import and_
 
-    return str(
-        and_(*spec.to_sqlalchemy_clauses()).compile(
-            compile_kwargs={"literal_binds": True}
-        )
-    )
+    return str(and_(*spec.to_sqlalchemy_clauses()).compile(compile_kwargs={"literal_binds": True}))
 
 
 def test_spacing_bounds_exclude_null_and_sentinel() -> None:
@@ -142,7 +140,14 @@ def test_well_name_metacharacters_match_literally() -> None:
 
 def test_well_name_blank_is_no_filter() -> None:
     spec = parse_filter_query(
-        None, None, None, None, None, None, None, None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         well_name_contains="   ",
     )
     assert spec.well_name_contains is None
@@ -151,7 +156,14 @@ def test_well_name_blank_is_no_filter() -> None:
 
 def test_well_name_parse_and_dict_roundtrip() -> None:
     spec = parse_filter_query(
-        None, None, None, None, None, None, None, None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
         well_name_contains="  UNIVERSITY ",
     )
     assert spec.well_name_contains == "UNIVERSITY"
@@ -160,8 +172,16 @@ def test_well_name_parse_and_dict_roundtrip() -> None:
 
 def test_spacing_parse_and_dict_roundtrip() -> None:
     spec = parse_filter_query(
-        None, None, None, None, None, None, None, None,
-        spacing_min_ft=600.0, spacing_max_ft=1200.0,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        spacing_min_ft=600.0,
+        spacing_max_ft=1200.0,
         spacing_include_unbounded=True,
     )
     assert spec.spacing_min_ft == 600.0

@@ -15,7 +15,7 @@ mirror the contract the Phase 1 prompt called out:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from typing import Any
 
 from app.db.models import (
@@ -40,7 +40,7 @@ def _curve(forecast_overrides: dict[str, Any] | None = None) -> TypeCurve:
     tc.normalization_basis = NormalizationBasis.PER_LATERAL_FT
     tc.alignment_method = AlignmentMethod.FIRST_PROD_MONTH
     tc.series = {}
-    tc.created_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    tc.created_at = datetime(2026, 5, 1, tzinfo=UTC)
     tc.version_of = None
     tc.deal_id = None
     tc.is_stale = False

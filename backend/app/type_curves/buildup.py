@@ -216,9 +216,16 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             waterfall=[],
             rows=[
                 BuildupRow(
-                    api10=a, name=None, operator=None, formation=None,
-                    first_prod_date=None, lateral_ft=None, status=None,
-                    disposition="included", reason_code=None, note=None,
+                    api10=a,
+                    name=None,
+                    operator=None,
+                    formation=None,
+                    first_prod_date=None,
+                    lateral_ft=None,
+                    status=None,
+                    disposition="included",
+                    reason_code=None,
+                    note=None,
                 )
                 for a in included_list
             ],
@@ -237,15 +244,11 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     exclusions: dict[str, Any] = prov.get("exclusions") or {}
     removals: list[dict[str, Any]] = prov.get("post_save_removals") or []
     events: list[dict[str, Any]] = prov.get("selection_events") or []
-    aoi_polygons: list[dict[str, Any]] = (prov.get("aoi") or {}).get(
-        "polygons"
-    ) or []
+    aoi_polygons: list[dict[str, Any]] = (prov.get("aoi") or {}).get("polygons") or []
 
     short = set(partition.get("short") or [])
     no_peak = set(partition.get("no_peak") or [])
-    removed_by: dict[str, dict[str, Any]] = {
-        str(r.get("api10")): r for r in removals
-    }
+    removed_by: dict[str, dict[str, Any]] = {str(r.get("api10")): r for r in removals}
 
     # Funnel membership: the replayed narrative plus everything we KNOW
     # entered it (forecast partition, exclusions, the final cohort).
@@ -257,17 +260,13 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     header = BuildupHeader(
         formations=[str(f) for f in (prov.get("formations") or [])],
         aoi_polygon_count=len(aoi_polygons),
-        aoi_total_area_sq_mi=(
-            round(sum(known_areas), 1) if known_areas else None
-        ),
+        aoi_total_area_sq_mi=(round(sum(known_areas), 1) if known_areas else None),
         universe_computed_at=universe.get("computed_at"),
         universe_count=int(universe.get("well_count") or 0),
         universe_truncated=bool(universe.get("truncated")),
         criteria=_criteria_lines(fs),
         cutoff_months=partition.get("cutoff_months"),
-        narrative_truncated=any(
-            bool(ev.get("truncated")) for ev in events
-        ),
+        narrative_truncated=any(bool(ev.get("truncated")) for ev in events),
     )
 
     notes: list[str] = []
@@ -281,9 +280,16 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
         )
         fallback_rows = [
             BuildupRow(
-                api10=a, name=None, operator=None, formation=None,
-                first_prod_date=None, lateral_ft=None, status=None,
-                disposition="included", reason_code=None, note=None,
+                api10=a,
+                name=None,
+                operator=None,
+                formation=None,
+                first_prod_date=None,
+                lateral_ft=None,
+                status=None,
+                disposition="included",
+                reason_code=None,
+                note=None,
             )
             for a in included_list
         ]
@@ -363,11 +369,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
         api10 = str(w.get("api10"))
         universe_api10s.add(api10)
         stage, code, note = disposition_for(w)
-        annotation = (
-            TRANSFERRED_ANNOTATION
-            if stage == "included" and api10 in short
-            else None
-        )
+        annotation = TRANSFERRED_ANNOTATION if stage == "included" and api10 in short else None
         rows.append(
             BuildupRow(
                 api10=api10,

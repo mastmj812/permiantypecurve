@@ -23,9 +23,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "deals", sa.Column("blueox_config", JSONB(), nullable=True)
-    )
+    op.add_column("deals", sa.Column("blueox_config", JSONB(), nullable=True))
 
 
 def downgrade() -> None:

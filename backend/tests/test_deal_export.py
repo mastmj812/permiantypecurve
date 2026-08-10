@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import io
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from openpyxl import load_workbook
@@ -37,15 +37,28 @@ def _stub_stream(rate: float = 100.0, n: int = 24) -> dict[str, Any]:
         "eur_per_unit": rate * 365.0 * 50.0,
     }
     return {
-        "p10": arr, "p25": arr, "p50": arr, "p75": arr, "p90": arr,
-        "mean": arr, "well_count": [1] * n,
+        "p10": arr,
+        "p25": arr,
+        "p50": arr,
+        "p75": arr,
+        "p90": arr,
+        "mean": arr,
+        "well_count": [1] * n,
         "implied_eur_per_1000ft": {
-            "p10": 100.0, "p25": 100.0, "p50": 100.0,
-            "p75": 100.0, "p90": 100.0, "mean": 100.0,
+            "p10": 100.0,
+            "p25": 100.0,
+            "p50": 100.0,
+            "p75": 100.0,
+            "p90": 100.0,
+            "mean": 100.0,
         },
         "fitted_per_percentile": {
-            "p10": fit, "p25": fit, "p50": fit,
-            "p75": fit, "p90": fit, "mean": fit,
+            "p10": fit,
+            "p25": fit,
+            "p50": fit,
+            "p75": fit,
+            "p90": fit,
+            "mean": fit,
         },
     }
 
@@ -68,7 +81,7 @@ def _curve(name: str) -> TypeCurve:
             "water": _stub_stream(rate=200.0),
         },
     }
-    tc.created_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    tc.created_at = datetime(2026, 5, 1, tzinfo=UTC)
     tc.version_of = None
     tc.deal_id = None
     return tc
@@ -79,7 +92,7 @@ def _deal() -> Deal:
     d.id = uuid.uuid4()
     d.name = "holdTheLine"
     d.notes = None
-    d.created_at = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    d.created_at = datetime(2026, 5, 1, tzinfo=UTC)
     return d
 
 
@@ -120,24 +133,43 @@ def test_buildup_sheet_renders_waterfall_with_provenance() -> None:
     tc.provenance = {
         "version": 1,
         "recorded_at": "2026-08-06T00:00:00Z",
-        "aoi": {"polygons": [{"geometry": {"type": "Polygon", "coordinates": []},
-                              "kind": "lasso", "drawn_at": "t", "area_sq_mi": 10.0}]},
+        "aoi": {
+            "polygons": [
+                {
+                    "geometry": {"type": "Polygon", "coordinates": []},
+                    "kind": "lasso",
+                    "drawn_at": "t",
+                    "area_sq_mi": 10.0,
+                }
+            ]
+        },
         "formations": ["WOLFCAMP A"],
         "filter_snapshot": {"statuses": ["PDP"], "first_prod_start": "2018-01-01"},
         "selection_events": [
-            {"kind": "polygon", "at": "t", "api10s": ["4210000001"],
-             "polygon": None, "filters": {}}
+            {"kind": "polygon", "at": "t", "api10s": ["4210000001"], "polygon": None, "filters": {}}
         ],
         "universe": {
             "computed_at": "2026-08-06T00:00:00Z",
             "well_count": 2,
             "wells": [
-                {"api10": "4210000001", "name": "A", "operator": "OP",
-                 "formation": "WOLFCAMP A", "first_prod_date": "2020-01-01",
-                 "lateral_ft": 9000.0, "status": "PDP"},
-                {"api10": "4210000002", "name": "B", "operator": "OP",
-                 "formation": "WOLFCAMP A", "first_prod_date": "2015-01-01",
-                 "lateral_ft": 9000.0, "status": "PDP"},
+                {
+                    "api10": "4210000001",
+                    "name": "A",
+                    "operator": "OP",
+                    "formation": "WOLFCAMP A",
+                    "first_prod_date": "2020-01-01",
+                    "lateral_ft": 9000.0,
+                    "status": "PDP",
+                },
+                {
+                    "api10": "4210000002",
+                    "name": "B",
+                    "operator": "OP",
+                    "formation": "WOLFCAMP A",
+                    "first_prod_date": "2015-01-01",
+                    "lateral_ft": 9000.0,
+                    "status": "PDP",
+                },
             ],
         },
         "partition": None,
@@ -214,17 +246,11 @@ def test_metadata_sheet_includes_fitted_50yr_eur() -> None:
     # Find the fitted-EUR header row and confirm the legacy implied-EUR
     # header is no longer emitted.
     header_labels = [r[0] for r in rows if r and r[0]]
-    assert any(
-        "fitted_eur_per_1000ft" in str(label) for label in header_labels
-    )
-    assert not any(
-        "implied_eur_per_1000ft" in str(label) for label in header_labels
-    )
+    assert any("fitted_eur_per_1000ft" in str(label) for label in header_labels)
+    assert not any("implied_eur_per_1000ft" in str(label) for label in header_labels)
 
     # The row immediately following ["stream", "p10", ..., "mean"] is oil.
-    header_idx = next(
-        i for i, r in enumerate(rows) if r and r[0] == "stream"
-    )
+    header_idx = next(i for i, r in enumerate(rows) if r and r[0] == "stream")
     oil_row = rows[header_idx + 1]
     assert oil_row[0] == "oil"
     # Constant-rate stub: 100 BOPD/1000 ft × (365/12) days × 600 months
@@ -245,6 +271,7 @@ def test_deepcopy_isolation_in_patch_path() -> None:
     the contract by asserting that running the helper on a deep-copied
     payload leaves the source untouched."""
     import copy
+
     from app.api.type_curves import FitOverride, _apply_fit_overrides
 
     source: dict[str, Any] = {
@@ -297,11 +324,7 @@ def test_metadata_sheet_includes_p50_params_block() -> None:
 
     # Locate the params block by its header label.
     header_idx = next(
-        (
-            i
-            for i, r in enumerate(rows)
-            if r and r[0] and "fitted_p50_params" in str(r[0])
-        ),
+        (i for i, r in enumerate(rows) if r and r[0] and "fitted_p50_params" in str(r[0])),
         None,
     )
     assert header_idx is not None, "fitted_p50_params header missing"
@@ -372,5 +395,3 @@ def test_sheet_slug_collision_disambiguates() -> None:
     b = _sheet_slug("holdTheLine_bs1s_v2_beta", used)
     assert a != b
     assert a in used and b in used
-
-

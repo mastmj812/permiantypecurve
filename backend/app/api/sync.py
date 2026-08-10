@@ -1,5 +1,5 @@
 """POST /api/sync/run — kicks off a background county sync.
-   GET  /api/sync/status — returns most recent jobs + watermarks.
+GET  /api/sync/status — returns most recent jobs + watermarks.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from app.db.session import get_session
 from app.sync.orchestrator import (
     DEFAULT_BASIN,
     DEFAULT_COUNTIES,
-    DEFAULT_COUNTY,
     sync_counties,
 )
 
@@ -89,15 +88,11 @@ def _run_sync_bg(req: RunSyncRequest, counties: tuple[str, ...]) -> None:
             pull_production=req.pull_production,
         )
     except Exception:
-        log.exception(
-            "background_sync_failed", basin=req.basin, counties=list(counties)
-        )
+        log.exception("background_sync_failed", basin=req.basin, counties=list(counties))
 
 
 @router.post("/run", response_model=RunSyncResponse, status_code=202)
-async def run_sync(
-    req: RunSyncRequest, background: BackgroundTasks
-) -> RunSyncResponse:
+async def run_sync(req: RunSyncRequest, background: BackgroundTasks) -> RunSyncResponse:
     counties = _resolve_counties(req)
     background.add_task(_run_sync_bg, req, counties)
     return RunSyncResponse(
@@ -109,9 +104,7 @@ async def run_sync(
 
 
 @router.get("/jobs/{job_id}", response_model=JobInfo)
-async def get_sync_job(
-    job_id: uuid.UUID, session: Session = Depends(get_session)
-) -> JobInfo:
+async def get_sync_job(job_id: uuid.UUID, session: Session = Depends(get_session)) -> JobInfo:
     """Fetch a single sync job by id.
 
     The polling path on the frontend uses this rather than scanning
@@ -138,9 +131,11 @@ async def get_sync_job(
 
 @router.get("/status", response_model=SyncStatusResponse)
 async def sync_status(session: Session = Depends(get_session)) -> SyncStatusResponse:
-    jobs = session.execute(
-        select(SyncJob).order_by(SyncJob.created_at.desc()).limit(20)
-    ).scalars().all()
+    jobs = (
+        session.execute(select(SyncJob).order_by(SyncJob.created_at.desc()).limit(20))
+        .scalars()
+        .all()
+    )
     wms = session.execute(select(SyncWatermark)).scalars().all()
     return SyncStatusResponse(
         recent_jobs=[
@@ -159,9 +154,7 @@ async def sync_status(session: Session = Depends(get_session)) -> SyncStatusResp
             for j in jobs
         ],
         watermarks=[
-            WatermarkInfo(
-                entity=w.entity, scope_key=w.scope_key, last_synced_at=w.last_synced_at
-            )
+            WatermarkInfo(entity=w.entity, scope_key=w.scope_key, last_synced_at=w.last_synced_at)
             for w in wms
         ],
     )

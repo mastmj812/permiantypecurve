@@ -32,8 +32,8 @@ from collections.abc import Sequence
 from typing import Any
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.core.logging import get_logger
 
 revision: str = "0021_spe_percentile_convention"
@@ -89,10 +89,7 @@ def upgrade() -> None:
             continue
         _flip_series(series)
         conn.execute(
-            sa.text(
-                "UPDATE type_curves SET series = CAST(:series AS jsonb) "
-                "WHERE id = :id"
-            ),
+            sa.text("UPDATE type_curves SET series = CAST(:series AS jsonb) WHERE id = :id"),
             {"series": json.dumps(series), "id": str(row.id)},
         )
         flipped += 1
@@ -112,9 +109,6 @@ def downgrade() -> None:
             continue
         _flip_series(series)
         conn.execute(
-            sa.text(
-                "UPDATE type_curves SET series = CAST(:series AS jsonb) "
-                "WHERE id = :id"
-            ),
+            sa.text("UPDATE type_curves SET series = CAST(:series AS jsonb) WHERE id = :id"),
             {"series": json.dumps(series), "id": str(row.id)},
         )

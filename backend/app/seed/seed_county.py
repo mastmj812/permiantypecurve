@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import argparse
 import sys
-
 from datetime import date
 
 from app.core.logging import configure_logging, get_logger
@@ -40,10 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--counties",
         default=None,
-        help=(
-            "Comma-separated county names. Defaults to "
-            f"{','.join(DEFAULT_COUNTIES)}."
-        ),
+        help=(f"Comma-separated county names. Defaults to {','.join(DEFAULT_COUNTIES)}."),
     )
     parser.add_argument(
         "--county",
@@ -51,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             f"Legacy singular form. Use --counties for the multi-county scope. "
             f"Passing an empty string {DEFAULT_COUNTY!r} legacy fallback no longer "
-            "supported — use --counties \"\" if you really want the whole basin."
+            'supported — use --counties "" if you really want the whole basin.'
         ),
     )
     parser.add_argument(
@@ -111,8 +107,7 @@ def main(argv: list[str] | None = None) -> int:
             first_prod_after = date.fromisoformat(args.first_prod_after)
         except ValueError:
             parser.error(
-                f"--first-prod-after must be ISO date (YYYY-MM-DD); got "
-                f"{args.first_prod_after!r}"
+                f"--first-prod-after must be ISO date (YYYY-MM-DD); got {args.first_prod_after!r}"
             )
 
     log.info(

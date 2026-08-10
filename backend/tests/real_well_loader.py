@@ -50,9 +50,7 @@ def load_real_well_csv(path: Path) -> RealWellFixture:
     # ``utf-8-sig`` strips the BOM if present without choking on plain UTF-8.
     raw = pd.read_csv(path, encoding="utf-8-sig")
     raw["prod_date"] = pd.to_datetime(raw["prod_date"], format="mixed").dt.date
-    raw["first_prod_date"] = pd.to_datetime(
-        raw["first_prod_date"], format="mixed"
-    ).dt.date
+    raw["first_prod_date"] = pd.to_datetime(raw["first_prod_date"], format="mixed").dt.date
 
     # Static fields are repeated on every row — take from the first.
     first = raw.iloc[0]
@@ -69,9 +67,7 @@ def load_real_well_csv(path: Path) -> RealWellFixture:
         oil_bbl = float(r["oil_bbl"]) if pd.notna(r["oil_bbl"]) else None
         gas_mcf = float(r["gas_mcf"]) if pd.notna(r["gas_mcf"]) else None
         water_bbl = float(r["water_bbl"]) if pd.notna(r["water_bbl"]) else None
-        producing_days = (
-            int(r["producing_days"]) if pd.notna(r["producing_days"]) else None
-        )
+        producing_days = int(r["producing_days"]) if pd.notna(r["producing_days"]) else None
         cal_days = _calendar_days_in(prod_date)
 
         out_rows.append(

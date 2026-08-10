@@ -154,10 +154,7 @@ def _bench_code(formation: str) -> str:
 
 
 def _legs_ewkt(quads: tuple[tuple[float, float, float, float], ...]) -> str:
-    parts = [
-        f"({h_lon} {h_lat}, {t_lon} {t_lat})"
-        for h_lon, h_lat, t_lon, t_lat in quads
-    ]
+    parts = [f"({h_lon} {h_lat}, {t_lon} {t_lat})" for h_lon, h_lat, t_lon, t_lat in quads]
     return "SRID=4326;MULTILINESTRING(" + ", ".join(parts) + ")"
 
 
@@ -206,9 +203,7 @@ def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
         log.info("novi_rep_fallback_ungeoreferenced", well=well.well_name)
         return None
     legs = _legs_ewkt(well.legs_lonlat)
-    basin = wh.execute(
-        _REP_BASIN_SQL, {"legs": legs, "radius": REP_BASIN_LOOKUP_M}
-    ).scalar()
+    basin = wh.execute(_REP_BASIN_SQL, {"legs": legs, "radius": REP_BASIN_LOOKUP_M}).scalar()
     tol = REP_LATERAL_TOL_BY_BASIN.get(str(basin), REP_LATERAL_TOL)
     rows = wh.execute(
         _REP_STICKS_SQL,
@@ -271,9 +266,7 @@ def _tail_rates(segs: list[dict[str, Any]], days: list[float]) -> list[float]:
     return out
 
 
-def fetch_intel_median_series(
-    wh: Session, stick_ids: tuple[int, ...]
-) -> IntelMedianSeries | None:
+def fetch_intel_median_series(wh: Session, stick_ids: tuple[int, ...]) -> IntelMedianSeries | None:
     """Median per-1,000-ft forecast across ``stick_ids``, or None when
     no stick yields a usable normalized series."""
     if not stick_ids:
@@ -328,9 +321,7 @@ def fetch_intel_median_series(
     segs_by: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for arow in arps_rows:
         if arow["production_stream"] in _STREAMS:
-            segs_by[(arow["novi_wellname"], arow["production_stream"])].append(
-                dict(arow)
-            )
+            segs_by[(arow["novi_wellname"], arow["production_stream"])].append(dict(arow))
     for name in names:
         start = last_mop[name]  # tail begins after the last forecast period
         tail_mops = list(range(start + 1, N_MONTHS + 1))
@@ -348,9 +339,7 @@ def fetch_intel_median_series(
 
     # Sticks with neither forecast nor Arps rows would median in as
     # all-zero and silently drag the benchmark down — drop them loudly.
-    usable = [n for n in names if n in got_forecast or any(
-        (n, s) in segs_by for s in _STREAMS
-    )]
+    usable = [n for n in names if n in got_forecast or any((n, s) in segs_by for s in _STREAMS)]
     for name in names:
         if name not in usable:
             dropped.append(by_name[name][0])
@@ -363,9 +352,7 @@ def fetch_intel_median_series(
     def _median_volumes(stream: str) -> tuple[float, ...]:
         out = []
         for i in range(N_MONTHS):
-            vals = [
-                rates[n][stream][i] / (by_name[n][2] / 1000.0) for n in usable
-            ]
+            vals = [rates[n][stream][i] / (by_name[n][2] / 1000.0) for n in usable]
             out.append(median(vals) * STEP_DAYS)
         return tuple(out)
 

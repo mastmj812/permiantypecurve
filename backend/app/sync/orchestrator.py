@@ -30,7 +30,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from itertools import islice
 from typing import TypeVar
 
@@ -101,7 +101,7 @@ def _job(
         entity=entity,
         scope_key=scope_key,
         status=SyncJobStatus.RUNNING,
-        started_at=datetime.now(timezone.utc),
+        started_at=datetime.now(UTC),
         metadata_=metadata or None,
     )
     session.add(job)
@@ -109,7 +109,7 @@ def _job(
     job_id = job.id
     try:
         yield job
-    except Exception as e:  # noqa: BLE001
+    except Exception as e:
         try:
             session.rollback()
         except Exception:  # pragma: no cover
@@ -118,19 +118,17 @@ def _job(
         if job_row is not None:
             job_row.status = SyncJobStatus.FAILED
             job_row.error = str(e)[:2000]
-            job_row.finished_at = datetime.now(timezone.utc)
+            job_row.finished_at = datetime.now(UTC)
             session.commit()
         log.exception("sync_job_failed", entity=entity.value, scope=scope_key)
         raise
     else:
         job.status = SyncJobStatus.SUCCEEDED
-        job.finished_at = datetime.now(timezone.utc)
+        job.finished_at = datetime.now(UTC)
         session.commit()
 
 
-def _watermark_set(
-    session: Session, entity: SyncEntity, scope_key: str, ts: datetime
-) -> None:
+def _watermark_set(session: Session, entity: SyncEntity, scope_key: str, ts: datetime) -> None:
     row = session.get(SyncWatermark, (entity, scope_key))
     if row is None:
         row = SyncWatermark(entity=entity, scope_key=scope_key, last_synced_at=ts)
@@ -174,41 +172,37 @@ def sync_permian(
     wh_engine = _warehouse_engine()
 
     # ---- 1. Well headers ----
-    with SessionLocal() as session:
-        with _job(session, SyncEntity.WELL_HEADERS, SCOPE_KEY) as job:
-            with Session(wh_engine) as wh:
-                header_iter = fetch_well_headers(
-                    wh,
-                    first_completion_after=first_completion_after,
-                    horizontal_only=horizontal_only,
-                )
-                total = 0
-                # 200/batch keeps Postgres' bind-parameter count well
-                # below the 65 535 limit even with the ON CONFLICT SET
-                # clause expanding the column list. The ingest layer
-                # commits per batch, so progress is durable.
-                for batch in _batched(header_iter, 200):
-                    total += upsert_well_headers(session, batch)
-                    job.items_upserted = total
-                    job.items_seen = total
-                    session.commit()
-                counts["headers"] = total
-            _watermark_set(
-                session,
-                SyncEntity.WELL_HEADERS,
-                SCOPE_KEY,
-                datetime.now(timezone.utc),
+    with SessionLocal() as session, _job(session, SyncEntity.WELL_HEADERS, SCOPE_KEY) as job:
+        with Session(wh_engine) as wh:
+            header_iter = fetch_well_headers(
+                wh,
+                first_completion_after=first_completion_after,
+                horizontal_only=horizontal_only,
             )
+            total = 0
+            # 200/batch keeps Postgres' bind-parameter count well
+            # below the 65 535 limit even with the ON CONFLICT SET
+            # clause expanding the column list. The ingest layer
+            # commits per batch, so progress is durable.
+            for batch in _batched(header_iter, 200):
+                total += upsert_well_headers(session, batch)
+                job.items_upserted = total
+                job.items_seen = total
+                session.commit()
+            counts["headers"] = total
+        _watermark_set(
+            session,
+            SyncEntity.WELL_HEADERS,
+            SCOPE_KEY,
+            datetime.now(UTC),
+        )
 
     # ---- 2. Production ----
     if pull_production:
         with SessionLocal() as session:
             # Read the api10 list AFTER headers committed so we cover
             # every well just loaded.
-            api10s = [
-                r[0]
-                for r in session.execute(select(Well.api10)).all()
-            ]
+            api10s = [r[0] for r in session.execute(select(Well.api10)).all()]
             with _job(session, SyncEntity.PRODUCTION, SCOPE_KEY) as job:
                 with Session(wh_engine) as wh:
                     prod_iter = fetch_production_for_api10s(wh, api10s)
@@ -226,7 +220,7 @@ def sync_permian(
                     session,
                     SyncEntity.PRODUCTION,
                     SCOPE_KEY,
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                 )
 
             # ---- 3. Novi forecast (PDP) ----
@@ -263,7 +257,7 @@ def sync_permian(
                     session,
                     SyncEntity.PRODUCTION,
                     NOVI_FORECAST_SCOPE_KEY,
-                    datetime.now(timezone.utc),
+                    datetime.now(UTC),
                 )
 
     log.info("sync_permian_done", **counts)

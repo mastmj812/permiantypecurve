@@ -1,8 +1,8 @@
 """Auth endpoints + the get_current_user dependency.
 
-  POST /api/auth/login    body: {email, password} → {access_token, user}
-  POST /api/auth/logout   no-op server side (client clears the token)
-  GET  /api/auth/me       returns the authenticated user
+POST /api/auth/login    body: {email, password} → {access_token, user}
+POST /api/auth/logout   no-op server side (client clears the token)
+GET  /api/auth/me       returns the authenticated user
 """
 
 from __future__ import annotations
@@ -51,9 +51,7 @@ class LoginResponse(BaseModel):
 
 @router.post("/login", response_model=LoginResponse)
 def login(req: LoginRequest, session: Session = Depends(get_session)) -> LoginResponse:
-    user = session.execute(
-        select(User).where(User.email == req.email.lower())
-    ).scalar_one_or_none()
+    user = session.execute(select(User).where(User.email == req.email.lower())).scalar_one_or_none()
     # Constant-ish-time: always run verify_password even on missing user so a
     # response timing doesn't leak which emails exist. Single-user dev tool
     # so this is mostly belt-and-suspenders.
@@ -72,7 +70,8 @@ def login(req: LoginRequest, session: Session = Depends(get_session)) -> LoginRe
     return LoginResponse(
         access_token=token,
         user=UserOut(
-            id=user.id, email=user.email,
+            id=user.id,
+            email=user.email,
             display_name=user.display_name,
             last_login_at=user.last_login_at,
         ),
@@ -118,7 +117,8 @@ def get_current_user(
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)) -> UserOut:
     return UserOut(
-        id=user.id, email=user.email,
+        id=user.id,
+        email=user.email,
         display_name=user.display_name,
         last_login_at=user.last_login_at,
     )

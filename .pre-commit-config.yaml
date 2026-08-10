@@ -10,7 +10,7 @@ repos:
       - id: check-merge-conflict
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.15.15  # keep in lockstep with the ruff the backend container resolves
     hooks:
       - id: ruff
         args: [--fix]
@@ -19,7 +19,7 @@ repos:
         files: ^backend/
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2
+    rev: v2.1.0  # keep in lockstep with the mypy the backend container resolves
     hooks:
       - id: mypy
         files: ^backend/app/

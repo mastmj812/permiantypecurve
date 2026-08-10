@@ -27,8 +27,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.core.logging import get_logger
 from app.forecasting.ramp_arps import compute_total_eur
 
@@ -71,10 +71,8 @@ def upgrade() -> None:
                 model_type=row.model_type,
                 params=params,
             )
-        except Exception as e:  # noqa: BLE001
-            log.warning(
-                "eur_recompute_failed", id=str(row.id), error=str(e)[:200]
-            )
+        except Exception as e:
+            log.warning("eur_recompute_failed", id=str(row.id), error=str(e)[:200])
             skipped += 1
             continue
         conn.execute(

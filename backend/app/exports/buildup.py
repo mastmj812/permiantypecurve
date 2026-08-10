@@ -51,15 +51,11 @@ _DISPOSITION_ORDER = ["included"] + [k for k, _ in STAGE_DESCRIPTIONS]
 
 def _sorted_roster(b: Buildup) -> list[BuildupRow]:
     rank = {k: i for i, k in enumerate(_DISPOSITION_ORDER)}
-    return sorted(
-        b.rows, key=lambda r: (rank.get(r.disposition, 99), r.api10)
-    )
+    return sorted(b.rows, key=lambda r: (rank.get(r.disposition, 99), r.api10))
 
 
 def _roster_values(r: BuildupRow) -> list[Any]:
-    disposition = (
-        r.annotation if r.annotation else r.disposition
-    )
+    disposition = r.annotation if r.annotation else r.disposition
     # Sentinel disclosure: 2800.0 is Novi's no-neighbor cap, not a
     # measured distance — print the class, not the misleading number.
     spacing: Any = r.lateral_closer_xy_ft
@@ -122,18 +118,24 @@ def _header_block(tc: TypeCurve, b: Buildup) -> list[tuple[str, Any]]:
 
 def _waterfall_rows(b: Buildup) -> list[list[Any]]:
     rows: list[list[Any]] = [
-        ["universe", "Formation wells inside AOI", None,
-         b.header.universe_count if b.header else 0],
+        [
+            "universe",
+            "Formation wells inside AOI",
+            None,
+            b.header.universe_count if b.header else 0,
+        ],
     ]
     for w in b.waterfall:
         rows.append([w.stage, w.description, w.culled, w.remaining])
     rows.append(
-        ["added_outside_aoi", "Add-wells / pasted list (outside universe)",
-         None, f"+{len(b.out_of_universe_included)}"]
+        [
+            "added_outside_aoi",
+            "Add-wells / pasted list (outside universe)",
+            None,
+            f"+{len(b.out_of_universe_included)}",
+        ]
     )
-    rows.append(
-        ["final_cohort", "Final type-curve cohort", None, b.included_count]
-    )
+    rows.append(["final_cohort", "Final type-curve cohort", None, b.included_count])
     return rows
 
 
@@ -169,8 +171,19 @@ def write_buildup_sheet(ws: Any, tc: TypeCurve) -> None:
     if b.out_of_universe_included:
         for api10 in b.out_of_universe_included:
             ws.append(
-                [api10, None, None, None, None, None, None,
-                 "added outside AOI/universe", None, None, None]
+                [
+                    api10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "added outside AOI/universe",
+                    None,
+                    None,
+                    None,
+                ]
             )
 
     ws.column_dimensions["A"].width = 20
@@ -200,7 +213,18 @@ def buildup_csv(tc: TypeCurve) -> str:
         w.writerow(_roster_values(r))
     for api10 in b.out_of_universe_included:
         w.writerow(
-            [api10, None, None, None, None, None, None,
-             "added outside AOI/universe", None, None, None]
+            [
+                api10,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                "added outside AOI/universe",
+                None,
+                None,
+                None,
+            ]
         )
     return buf.getvalue()

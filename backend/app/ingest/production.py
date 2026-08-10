@@ -45,9 +45,7 @@ def _record_to_row(r: ProductionRecord) -> dict[str, Any]:
     }
 
 
-def upsert_production_records(
-    session: Session, records: Iterable[ProductionRecord]
-) -> int:
+def upsert_production_records(session: Session, records: Iterable[ProductionRecord]) -> int:
     """Upsert a batch. Returns the count of rows written."""
     rows = [_record_to_row(r) for r in records]
     if not rows:
@@ -59,9 +57,7 @@ def upsert_production_records(
         for c in ProductionMonthly.__table__.columns
         if c.name not in {"api10", "prod_date"}
     }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["api10", "prod_date"], set_=update_cols
-    )
+    stmt = stmt.on_conflict_do_update(index_elements=["api10", "prod_date"], set_=update_cols)
     session.execute(stmt)
     session.commit()
     log.info("upsert_production", count=len(rows))

@@ -11,7 +11,7 @@ Algorithm choices:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from jose import JWTError, jwt
@@ -37,7 +37,7 @@ def verify_password(plaintext: str, hashed: str) -> bool:
 
 
 def create_access_token(subject: str, *, extra: dict[str, Any] | None = None) -> str:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     payload: dict[str, Any] = {
         "sub": subject,
         "iat": int(now.timestamp()),

@@ -124,9 +124,7 @@ def test_real_well_fit_matches_baseline(csv_path: Path, stream: str) -> None:
     fixture = load_real_well_csv(csv_path)
     result = _fit_stream(fixture, stream)
     if result is None:
-        pytest.skip(
-            f"{stream}: no real peak for {fixture.api14} — no forecast, no golden"
-        )
+        pytest.skip(f"{stream}: no real peak for {fixture.api14} — no forecast, no golden")
 
     current = _snapshot(result)
     baselines = _load_baselines()

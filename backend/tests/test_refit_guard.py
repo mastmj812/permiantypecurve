@@ -47,10 +47,10 @@ def _fc(
 
 def test_at_risk_flags_only_unlocked_overrides() -> None:
     rows = [
-        _fc(manual_override=True, locked=False),   # at risk — unlocked edit
-        _fc(manual_override=True, locked=True),    # locked keeper — safe
+        _fc(manual_override=True, locked=False),  # at risk — unlocked edit
+        _fc(manual_override=True, locked=True),  # locked keeper — safe
         _fc(manual_override=False, locked=False),  # machine fit — safe
-        _fc(manual_override=False, locked=True),   # locked machine fit — safe
+        _fc(manual_override=False, locked=True),  # locked machine fit — safe
     ]
 
     at_risk = at_risk_forecasts(rows)

@@ -39,7 +39,5 @@ def test_cli_diagnostic_defaults_to_peak_ramp() -> None:
 
 
 def test_cli_diagnostic_explicit_alignment_honored() -> None:
-    args = build_parser().parse_args(
-        ["--api10s", "4212345678", "--alignment", "first_prod_month"]
-    )
+    args = build_parser().parse_args(["--api10s", "4212345678", "--alignment", "first_prod_month"])
     assert args.alignment == "first_prod_month"

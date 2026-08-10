@@ -29,9 +29,7 @@ def _monthly(months: int, start: date = date(2024, 1, 1)) -> pd.DataFrame:
     1. We just vary the total month count to land in different
     history buckets.
     """
-    rates = [300.0, 800.0] + [
-        max(50.0, 800.0 * 0.85 ** i) for i in range(1, months - 1)
-    ]
+    rates = [300.0, 800.0] + [max(50.0, 800.0 * 0.85**i) for i in range(1, months - 1)]
     dates: list[date] = []
     y, m = start.year, start.month
     for _ in range(months):
@@ -93,8 +91,8 @@ def test_compute_donor_medians_skips_partial_donors() -> None:
     # rather than imputing the missing value from the other field.
     donors = [
         _fake_forecast("A", 0.8, 1.0),
-        _fake_forecast("B", None, 1.1),     # dropped
-        _fake_forecast("C", 1.0, None),     # dropped
+        _fake_forecast("B", None, 1.1),  # dropped
+        _fake_forecast("C", 1.0, None),  # dropped
         _fake_forecast("D", 1.2, 1.0),
     ]
     med = compute_donor_medians(donors)  # type: ignore[arg-type]

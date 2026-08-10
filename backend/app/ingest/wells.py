@@ -15,7 +15,7 @@ app enum.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -98,14 +98,12 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
     pattern keeps the path open for future partial updates.
     """
     n = 0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     for h in headers:
         values = header_to_upsert_values(h, now)
         stmt = pg_insert(Well.__table__).values(**values)
         update_cols = {c: stmt.excluded[c] for c in values if c != "api10"}
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["api10"], set_=update_cols
-        )
+        stmt = stmt.on_conflict_do_update(index_elements=["api10"], set_=update_cols)
         session.execute(stmt)
         n += 1
     session.commit()
@@ -114,6 +112,4 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
 
 
 def well_exists(session: Session, api10: str) -> bool:
-    return (
-        session.scalar(select(Well.api10).where(Well.api10 == api10)) is not None
-    )
+    return session.scalar(select(Well.api10).where(Well.api10 == api10)) is not None

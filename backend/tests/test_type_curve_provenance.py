@@ -80,7 +80,9 @@ def test_selection_event_vertex_cap() -> None:
 
 def test_selection_event_accepts_normal_lasso() -> None:
     ev = SelectionEventIn(
-        kind="polygon", at="2026-08-06T00:00:00Z", polygon=SQUARE,
+        kind="polygon",
+        at="2026-08-06T00:00:00Z",
+        polygon=SQUARE,
         api10s=["4200000001"],
     )
     assert ev.polygon is not None
@@ -102,8 +104,7 @@ def test_universe_stmt_filters_formation_only() -> None:
     assert "formation_blueox IN" in where
     # The whole point: the universe is pre-filter. None of the cull
     # criteria may appear as predicates.
-    for absent in ("first_prod_date", "lateral_ft", "status", "operator",
-                   "county"):
+    for absent in ("first_prod_date", "lateral_ft", "status", "operator", "county"):
         assert absent not in where
 
 
@@ -153,9 +154,7 @@ def _universe_row(api10: str) -> MagicMock:
 
 
 def test_build_provenance_none_returns_empty() -> None:
-    req = SaveRequest(
-        name="tc", included_api10s=["4200000001"], provenance=None
-    )
+    req = SaveRequest(name="tc", included_api10s=["4200000001"], provenance=None)
     assert _build_provenance(MagicMock(), req) == {}
 
 
@@ -167,22 +166,22 @@ def test_build_provenance_assembles_v1_shape() -> None:
         provenance=ProvenanceIn(
             selection_events=[
                 SelectionEventIn(
-                    kind="polygon", at="2026-08-06T00:00:00Z", polygon=SQUARE,
+                    kind="polygon",
+                    at="2026-08-06T00:00:00Z",
+                    polygon=SQUARE,
                     api10s=["4200000001", "4200000002"],
                 ),
                 SelectionEventIn(
-                    kind="click_add", at="2026-08-06T00:01:00Z",
+                    kind="click_add",
+                    at="2026-08-06T00:01:00Z",
                     api10s=["4200000002"],
                 ),
             ],
-            exclusions={
-                "4200000009": ExclusionEntryIn(code="outlier_profile", note="hi GOR")
-            },
+            exclusions={"4200000009": ExclusionEntryIn(code="outlier_profile", note="hi GOR")},
         ),
     )
     session = _mock_session_for_build(
-        [_universe_row("4200000001"), _universe_row("4200000002"),
-         _universe_row("4200000003")]
+        [_universe_row("4200000001"), _universe_row("4200000002"), _universe_row("4200000003")]
     )
     prov = _build_provenance(session, req)
 
@@ -196,7 +195,9 @@ def test_build_provenance_assembles_v1_shape() -> None:
     # Universe snapshot includes the not-selected 03 well.
     assert prov["universe"]["well_count"] == 3
     assert {w["api10"] for w in prov["universe"]["wells"]} == {
-        "4200000001", "4200000002", "4200000003"
+        "4200000001",
+        "4200000002",
+        "4200000003",
     }
     assert prov["universe"]["wells"][0]["status"] == "PDP"
     # Filter snapshot rides along verbatim; events verbatim; exclusions stamped.
@@ -238,9 +239,7 @@ def test_membership_remove_appends_coded_entry() -> None:
 
 def test_membership_remove_defaults_to_other_for_api_callers() -> None:
     tc = _tc_with_provenance()
-    _record_membership_provenance(
-        tc, old_members=["A", "B"], new_members=["A"], remove_reason=None
-    )
+    _record_membership_provenance(tc, old_members=["A", "B"], new_members=["A"], remove_reason=None)
     assert tc.provenance["post_save_removals"][0]["code"] == "other"
 
 
@@ -248,30 +247,22 @@ def test_membership_readd_cancels_removal() -> None:
     tc = _tc_with_provenance(
         post_save_removals=[{"api10": "B", "code": "other", "note": None, "at": "t0"}]
     )
-    _record_membership_provenance(
-        tc, old_members=["A"], new_members=["A", "B"], remove_reason=None
-    )
+    _record_membership_provenance(tc, old_members=["A"], new_members=["A", "B"], remove_reason=None)
     assert tc.provenance["post_save_removals"] == []
     # Cancelled, not double-entered as an addition.
     assert tc.provenance["post_save_additions"] == []
 
 
 def test_membership_remove_cancels_prior_addition() -> None:
-    tc = _tc_with_provenance(
-        post_save_additions=[{"api10": "C", "at": "t0"}]
-    )
-    _record_membership_provenance(
-        tc, old_members=["A", "C"], new_members=["A"], remove_reason=None
-    )
+    tc = _tc_with_provenance(post_save_additions=[{"api10": "C", "at": "t0"}])
+    _record_membership_provenance(tc, old_members=["A", "C"], new_members=["A"], remove_reason=None)
     assert tc.provenance["post_save_additions"] == []
     assert tc.provenance["post_save_removals"] == []
 
 
 def test_membership_addition_appends_entry() -> None:
     tc = _tc_with_provenance()
-    _record_membership_provenance(
-        tc, old_members=["A"], new_members=["A", "D"], remove_reason=None
-    )
+    _record_membership_provenance(tc, old_members=["A"], new_members=["A", "D"], remove_reason=None)
     (entry,) = tc.provenance["post_save_additions"]
     assert entry["api10"] == "D" and entry["at"]
 
@@ -279,8 +270,6 @@ def test_membership_addition_appends_entry() -> None:
 def test_membership_noop_on_unrecorded_provenance() -> None:
     tc = TypeCurve()
     tc.provenance = {}
-    _record_membership_provenance(
-        tc, old_members=["A", "B"], new_members=["A"], remove_reason=None
-    )
+    _record_membership_provenance(tc, old_members=["A", "B"], new_members=["A"], remove_reason=None)
     # Pre-0026 curve: stays honestly empty, no fabricated partial trail.
     assert tc.provenance == {}

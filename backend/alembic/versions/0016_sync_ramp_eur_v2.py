@@ -22,8 +22,8 @@ import json
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 
+from alembic import op
 from app.core.logging import get_logger
 from app.forecasting.ramp_arps import compute_total_eur
 
@@ -61,10 +61,8 @@ def upgrade() -> None:
                 model_type=row.model_type,
                 params=params,
             )
-        except Exception as e:  # noqa: BLE001
-            log.warning(
-                "eur_recompute_failed", id=str(row.id), error=str(e)[:200]
-            )
+        except Exception as e:
+            log.warning("eur_recompute_failed", id=str(row.id), error=str(e)[:200])
             skipped += 1
             continue
         # Cast a JSON-serialized string into jsonb directly. Doesn't
@@ -72,8 +70,7 @@ def upgrade() -> None:
         # which was the suspected failure mode in 0015.
         conn.execute(
             sa.text(
-                "UPDATE forecasts SET eur = :eur, params = CAST(:params AS jsonb) "
-                "WHERE id = :id"
+                "UPDATE forecasts SET eur = :eur, params = CAST(:params AS jsonb) WHERE id = :id"
             ),
             {
                 "eur": float(new_eur),

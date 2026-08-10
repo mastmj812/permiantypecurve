@@ -20,9 +20,7 @@ _B_EXP_THRESHOLD: float = 1e-6
 _B_HARMONIC_THRESHOLD: float = 1e-4  # |b - 1|
 
 
-def cum_exponential(
-    t: NDArray[np.float64], qi: float, Di: float
-) -> NDArray[np.float64]:
+def cum_exponential(t: NDArray[np.float64], qi: float, Di: float) -> NDArray[np.float64]:
     """Q(t) = qi / Di * (1 - exp(-Di*t)) * DAYS_PER_YEAR"""
     t_arr = np.asarray(t, dtype=float)
     if Di <= 0:
@@ -30,9 +28,7 @@ def cum_exponential(
     return qi / Di * (1.0 - np.exp(-Di * t_arr)) * DAYS_PER_YEAR
 
 
-def cum_harmonic(
-    t: NDArray[np.float64], qi: float, Di: float
-) -> NDArray[np.float64]:
+def cum_harmonic(t: NDArray[np.float64], qi: float, Di: float) -> NDArray[np.float64]:
     """Q(t) = qi / Di * ln(1 + Di*t) * DAYS_PER_YEAR  (b=1 case)"""
     t_arr = np.asarray(t, dtype=float)
     if Di <= 0:
@@ -40,9 +36,7 @@ def cum_harmonic(
     return qi / Di * np.log1p(Di * t_arr) * DAYS_PER_YEAR
 
 
-def cum_hyperbolic(
-    t: NDArray[np.float64], qi: float, Di: float, b: float
-) -> NDArray[np.float64]:
+def cum_hyperbolic(t: NDArray[np.float64], qi: float, Di: float, b: float) -> NDArray[np.float64]:
     """Q(t) = qi / (Di*(1-b)) * (1 - (1+b*Di*t)**(1-1/b)) * DAYS_PER_YEAR
 
     Diverges as t→∞ for b ≥ 1; finite for any finite t. The fitter calls

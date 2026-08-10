@@ -135,7 +135,11 @@ def _stream_panel(
     month, we percentile across all wells that have a non-null normalized
     value there.
     """
-    p10, p25, p50, p75, p90 = [], [], [], [], []  # type: ignore[var-annotated]
+    p10: list[float | None] = []
+    p25: list[float | None] = []
+    p50: list[float | None] = []
+    p75: list[float | None] = []
+    p90: list[float | None] = []
     means: list[float | None] = []
     well_counts: list[int] = []
 
@@ -151,20 +155,32 @@ def _stream_panel(
         usable = col[~np.isnan(col)]
         well_counts.append(int(usable.size))
         if usable.size == 0:
-            p10.append(None); p25.append(None); p50.append(None)
-            p75.append(None); p90.append(None); means.append(None)
+            p10.append(None)
+            p25.append(None)
+            p50.append(None)
+            p75.append(None)
+            p90.append(None)
+            means.append(None)
             continue
         # `linear` interpolation for percentiles is the standard.
         # SPE orientation: the "p10" series takes the 90th statistical
         # percentile (high case), "p90" the 10th (low case) — see the
         # PERCENTILES comment at the top of the module.
         qs = np.percentile(usable, _SPE_NUMPY_PERCENTILES, method="linear")
-        p10.append(float(qs[0])); p25.append(float(qs[1]))
-        p50.append(float(qs[2])); p75.append(float(qs[3])); p90.append(float(qs[4]))
+        p10.append(float(qs[0]))
+        p25.append(float(qs[1]))
+        p50.append(float(qs[2]))
+        p75.append(float(qs[3]))
+        p90.append(float(qs[4]))
         means.append(float(np.mean(usable)))
 
     series = {
-        "p10": p10, "p25": p25, "p50": p50, "p75": p75, "p90": p90, "mean": means,
+        "p10": p10,
+        "p25": p25,
+        "p50": p50,
+        "p75": p75,
+        "p90": p90,
+        "mean": means,
     }
 
     # Implied EUR per 1000 ft (or per other normalization unit) per
@@ -181,7 +197,11 @@ def _stream_panel(
 
     return StreamSeries(
         months=n_months,
-        p10=p10, p25=p25, p50=p50, p75=p75, p90=p90,
+        p10=p10,
+        p25=p25,
+        p50=p50,
+        p75=p75,
+        p90=p90,
         mean=means,
         well_count=well_counts,
         implied_eur_per_1000ft=implied_eur,
@@ -204,11 +224,19 @@ def aggregate(
     """
     if not wells:
         empty = StreamSeries(
-            months=0, p10=[], p25=[], p50=[], p75=[], p90=[], mean=[],
-            well_count=[], implied_eur_per_1000ft={k: 0.0 for k in PERCENTILE_KEYS + ("mean",)},
+            months=0,
+            p10=[],
+            p25=[],
+            p50=[],
+            p75=[],
+            p90=[],
+            mean=[],
+            well_count=[],
+            implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
         )
         return TypeCurveAggregate(
-            n_months=0, n_wells=0,
+            n_months=0,
+            n_wells=0,
             normalization_basis=normalization_basis,
             alignment_method=alignment_method,
             streams={"oil": empty, "gas": empty, "water": empty},
@@ -225,11 +253,19 @@ def aggregate(
 
     if not usable_wells:
         empty = StreamSeries(
-            months=0, p10=[], p25=[], p50=[], p75=[], p90=[], mean=[],
-            well_count=[], implied_eur_per_1000ft={k: 0.0 for k in PERCENTILE_KEYS + ("mean",)},
+            months=0,
+            p10=[],
+            p25=[],
+            p50=[],
+            p75=[],
+            p90=[],
+            mean=[],
+            well_count=[],
+            implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
         )
         return TypeCurveAggregate(
-            n_months=0, n_wells=0,
+            n_months=0,
+            n_wells=0,
             normalization_basis=normalization_basis,
             alignment_method=alignment_method,
             streams={"oil": empty, "gas": empty, "water": empty},
@@ -243,8 +279,7 @@ def aggregate(
         # peak and runs longer than oil — capping at oil's length would
         # truncate the water tail.
         n_months = max(
-            max(len(w.oil_rates), len(w.gas_rates), len(w.water_rates))
-            for w in usable_wells
+            max(len(w.oil_rates), len(w.gas_rates), len(w.water_rates)) for w in usable_wells
         )
 
     streams = {
@@ -270,8 +305,11 @@ def serialize_aggregate(agg: TypeCurveAggregate) -> dict:
         "alignment_method": agg.alignment_method,
         "streams": {
             s: {
-                "p10": v.p10, "p25": v.p25, "p50": v.p50,
-                "p75": v.p75, "p90": v.p90,
+                "p10": v.p10,
+                "p25": v.p25,
+                "p50": v.p50,
+                "p75": v.p75,
+                "p90": v.p90,
                 "mean": v.mean,
                 "well_count": v.well_count,
                 "implied_eur_per_1000ft": v.implied_eur_per_1000ft,

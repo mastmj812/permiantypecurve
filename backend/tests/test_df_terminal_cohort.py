@@ -51,10 +51,7 @@ def test_case_and_whitespace_insensitive() -> None:
 
 
 def test_all_delaware_uses_default() -> None:
-    assert (
-        df_terminal_for_cohort(["Delaware", "Delaware"], _CFG)
-        == _CFG.df_terminal_per_year
-    )
+    assert df_terminal_for_cohort(["Delaware", "Delaware"], _CFG) == _CFG.df_terminal_per_year
 
 
 def test_empty_cohort_uses_default() -> None:

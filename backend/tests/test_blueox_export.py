@@ -35,7 +35,11 @@ from app.exports.blueox import (
 
 _MONTHS = 24
 _ANALOG_HEADERS = (
-    "api10", "Wellname", "Operator", "Formation", "Lateral Length",
+    "api10",
+    "Wellname",
+    "Operator",
+    "Formation",
+    "Lateral Length",
 )
 
 # Ascending Blue Ox convention: p10 < base < p90.
@@ -61,16 +65,18 @@ def _params(levels: tuple[str, ...]) -> list[dict[str, Any]]:
     rows = []
     for stream in ("oil", "gas"):
         for lv in ("P50", *levels):
-            rows.append({
-                "stream": stream,
-                "level": lv,
-                "qi": 250.0 * _LEVEL_SCALE[lv],
-                "qi_units": "bbl/d per 1,000 ft" if stream == "oil" else "Mcf/d per 1,000 ft",
-                "b_factor": 1.1,
-                "di": 2.5,
-                "dmin": 0.08,
-                "notes": "peak_ramp alignment; qi at peak month 4",
-            })
+            rows.append(
+                {
+                    "stream": stream,
+                    "level": lv,
+                    "qi": 250.0 * _LEVEL_SCALE[lv],
+                    "qi_units": "bbl/d per 1,000 ft" if stream == "oil" else "Mcf/d per 1,000 ft",
+                    "b_factor": 1.1,
+                    "di": 2.5,
+                    "dmin": 0.08,
+                    "notes": "peak_ramp alignment; qi at peak month 4",
+                }
+            )
     return rows
 
 
@@ -123,8 +129,7 @@ def _data(
             _zone("THIRD BONE SPRING", ("4200000003",), levels),
         ]
     apis = tuple(
-        str(r[0]) for z in zones for r in z.analog_rows
-        if str(r[0]) not in history_exceptions
+        str(r[0]) for z in zones for r in z.analog_rows if str(r[0]) not in history_exceptions
     )
     return BlueOxExportData(
         codename=codename,
@@ -168,9 +173,16 @@ def test_zone_sheet_shape_and_ngl_zero() -> None:
     # No month column; exact lowercase headers; water after the base
     # triplet; percentile triplets complete (ngl rides along all-zero).
     assert header == [
-        "oil_bbl", "gas_mcf", "ngl_bbl", "water_bbl",
-        "oil_bbl_p10", "gas_mcf_p10", "ngl_bbl_p10",
-        "oil_bbl_p90", "gas_mcf_p90", "ngl_bbl_p90",
+        "oil_bbl",
+        "gas_mcf",
+        "ngl_bbl",
+        "water_bbl",
+        "oil_bbl_p10",
+        "gas_mcf_p10",
+        "ngl_bbl_p10",
+        "oil_bbl_p90",
+        "gas_mcf_p90",
+        "ngl_bbl_p90",
     ]
     assert ws.max_row == _MONTHS + 1
     ngl_cols = [i + 1 for i, h in enumerate(header) if "ngl" in str(h)]
@@ -225,18 +237,13 @@ def test_manifest_block_b_ties_to_delivered_sheets() -> None:
     header_idx = next(i for i, r in enumerate(rows) if r and r[0] == "area")
     header = rows[header_idx]
     by_zone = {
-        r[0]: dict(zip(header, r, strict=False))
-        for r in rows[header_idx + 1:]
-        if r and r[0]
+        r[0]: dict(zip(header, r, strict=False)) for r in rows[header_idx + 1 :] if r and r[0]
     }
 
     ws = wb["WOLFCAMP A"]
     zone_header = [c.value for c in ws[1]]
     oil_col = zone_header.index("oil_bbl") + 1
-    oil_sum = sum(
-        float(ws.cell(row=r, column=oil_col).value)
-        for r in range(2, ws.max_row + 1)
-    )
+    oil_sum = sum(float(ws.cell(row=r, column=oil_col).value) for r in range(2, ws.max_row + 1))
     block_b = by_zone["WOLFCAMP A"]
     # ±0.1% is the acceptance gate; delivered-sheet arithmetic should
     # tie essentially exactly.
@@ -244,11 +251,7 @@ def test_manifest_block_b_ties_to_delivered_sheets() -> None:
     assert block_b["eur_ngl_bbl"] == 0.0
     assert block_b["gross_locations"] == 3
     inv_ws = wb["inventory"]
-    drilled = [
-        float(r[3].value)
-        for r in inv_ws.iter_rows(min_row=2)
-        if r[0].value == "WOLFCAMP A"
-    ]
+    drilled = [float(r[3].value) for r in inv_ws.iter_rows(min_row=2) if r[0].value == "WOLFCAMP A"]
     assert len(drilled) == 3
     assert abs(float(block_b["avg_drilled_lateral_ft"]) - sum(drilled) / 3) < 1e-9
 
@@ -284,17 +287,17 @@ def test_zone_name_rules() -> None:
         (" WOLFCAMP A", "leading/trailing"),
     ):
         with pytest.raises(BlueOxContractError, match=fragment):
-            build_blueox_workbook(
-                _data(zones=[_zone(name, ("4200000001",))])
-            )
+            build_blueox_workbook(_data(zones=[_zone(name, ("4200000001",))]))
 
 
 def test_lateral_bounds() -> None:
     z = _zone("WOLFCAMP A", ("4200000001",))
-    bad = ZoneData(**{
-        **z.__dict__,
-        "inventory": [InventoryRow(producing_lateral_ft=2_500.0, drilled_lateral_ft=12_000.0)],
-    })
+    bad = ZoneData(
+        **{
+            **z.__dict__,
+            "inventory": [InventoryRow(producing_lateral_ft=2_500.0, drilled_lateral_ft=12_000.0)],
+        }
+    )
     with pytest.raises(BlueOxContractError, match="outside 3000-25000 ft"):
         build_blueox_workbook(_data(zones=[bad]))
 
@@ -302,26 +305,36 @@ def test_lateral_bounds() -> None:
 def test_history_tieout_both_ways() -> None:
     # A listed analog with no history rows must be declared or fail.
     with pytest.raises(BlueOxContractError, match="no production history"):
-        build_blueox_workbook(_data(history_exceptions=(), production_rows=_production_rows(("4200000001", "4200000002"))))
+        build_blueox_workbook(
+            _data(
+                history_exceptions=(),
+                production_rows=_production_rows(("4200000001", "4200000002")),
+            )
+        )
     # Declared exception passes.
-    build_blueox_workbook(_data(
-        history_exceptions=("4200000003",),
-        production_rows=_production_rows(("4200000001", "4200000002")),
-    ))
+    build_blueox_workbook(
+        _data(
+            history_exceptions=("4200000003",),
+            production_rows=_production_rows(("4200000001", "4200000002")),
+        )
+    )
     # And the exception is surfaced in the manifest, never silent.
-    wb = load_workbook(io.BytesIO(build_blueox_workbook(_data(
-        history_exceptions=("4200000003",),
-        production_rows=_production_rows(("4200000001", "4200000002")),
-    ))))
+    wb = load_workbook(
+        io.BytesIO(
+            build_blueox_workbook(
+                _data(
+                    history_exceptions=("4200000003",),
+                    production_rows=_production_rows(("4200000001", "4200000002")),
+                )
+            )
+        )
+    )
     kv = _manifest_kv(wb)
     assert "4200000003" in str(kv["analog_history_exceptions"])
 
 
 def test_filename_and_reserved_stems() -> None:
-    assert (
-        blueox_filename("holdtheline", date(2026, 7, 20))
-        == "holdtheline_curves_2026-07-20.xlsx"
-    )
+    assert blueox_filename("holdtheline", date(2026, 7, 20)) == "holdtheline_curves_2026-07-20.xlsx"
     with pytest.raises(BlueOxContractError, match="reserved stem"):
         build_blueox_workbook(_data(codename="pinned_ranch"))
     # The mandated "_curves_" stem itself must not trip "type_curves"
@@ -337,7 +350,11 @@ def test_level_to_spe_flip() -> None:
     # is our P90 fit. If this mapping ever changes, a whole deal is
     # silently inverted — pin it.
     assert LEVEL_TO_SPE_KEY == {
-        "P10": "p90", "P25": "p75", "P50": "p50", "P75": "p25", "P90": "p10",
+        "P10": "p90",
+        "P25": "p75",
+        "P50": "p50",
+        "P75": "p25",
+        "P90": "p10",
     }
 
 
@@ -361,12 +378,16 @@ def test_inventory_category_column_pdp_display_only() -> None:
         # Existing producer: short lateral would fail planned-well
         # bounds — PDP rows are exempt.
         InventoryRow(
-            producing_lateral_ft=2_000.0, drilled_lateral_ft=2_000.0,
-            well_name="4249533594", category="PDP",
+            producing_lateral_ft=2_000.0,
+            drilled_lateral_ft=2_000.0,
+            well_name="4249533594",
+            category="PDP",
         ),
         InventoryRow(
-            producing_lateral_ft=10_000.0, drilled_lateral_ft=11_000.0,
-            well_name="UPSIDE 1", category="UPSIDE",
+            producing_lateral_ft=10_000.0,
+            drilled_lateral_ft=11_000.0,
+            well_name="UPSIDE 1",
+            category="UPSIDE",
         ),
     ]
     zz = ZoneData(**{**z.__dict__, "inventory": inv})
@@ -375,7 +396,11 @@ def test_inventory_category_column_pdp_display_only() -> None:
     inv_ws = wb["inventory"]
     header = [c.value for c in inv_ws[1]]
     assert header == [
-        "area", "category", "producing_lateral_ft", "drilled_lateral_ft", "well_name",
+        "area",
+        "category",
+        "producing_lateral_ft",
+        "drilled_lateral_ft",
+        "well_name",
     ]
     cats = [r[1] for r in inv_ws.iter_rows(min_row=2, values_only=True)]
     assert cats == ["PUD", "PUD", "PUD", "PDP", "UPSIDE"]
@@ -397,8 +422,13 @@ def test_handoff_category_rule() -> None:
 
     def w(**kw: Any) -> NarviInventoryWell:
         base: dict[str, Any] = {
-            "deal_id": "d", "scenario_id": "s", "well_name": "w", "formation": "F",
-            "completed_lateral_ft": 1.0, "drilled_lateral_ft": 1.0, "well_type": "single",
+            "deal_id": "d",
+            "scenario_id": "s",
+            "well_name": "w",
+            "formation": "F",
+            "completed_lateral_ft": 1.0,
+            "drilled_lateral_ft": 1.0,
+            "well_type": "single",
         }
         return NarviInventoryWell(**{**base, **kw})
 
@@ -430,18 +460,25 @@ def test_zone_spec_coerces_legacy_res() -> None:
     # normalizes them so saved configs keep loading and exporting.
     from app.api.deals import BlueOxZoneSpec
 
-    spec = BlueOxZoneSpec.model_validate({
-        "type_curve_id": str(uuid.uuid4()), "zone_name": "WCA",
-        "reserve_category": "RES", "benches": [],
-    })
+    spec = BlueOxZoneSpec.model_validate(
+        {
+            "type_curve_id": str(uuid.uuid4()),
+            "zone_name": "WCA",
+            "reserve_category": "RES",
+            "benches": [],
+        }
+    )
     assert spec.reserve_category == "UPSIDE"
 
 
 def test_manifest_declares_inventory_exclusions() -> None:
     data = _data()
-    data = BlueOxExportData(**{
-        **data.__dict__, "inventory_exclusions": ("WDFD (4 wells)", "WCB_1 (1 wells)"),
-    })
+    data = BlueOxExportData(
+        **{
+            **data.__dict__,
+            "inventory_exclusions": ("WDFD (4 wells)", "WCB_1 (1 wells)"),
+        }
+    )
     wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
     kv = _manifest_kv(wb)
     assert "WDFD (4 wells)" in str(kv["inventory_benches_excluded"])
@@ -462,13 +499,22 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
     from app.warehouse_client.narvi import NarviInventoryWell
 
     def _w(
-        scenario: str, name: str, bench: str, comp: float, drill: float,
+        scenario: str,
+        name: str,
+        bench: str,
+        comp: float,
+        drill: float,
         category: str = "generated",
     ) -> NarviInventoryWell:
         return NarviInventoryWell(
-            deal_id="thecan_south_bs", scenario_id=scenario, well_name=name,
-            formation=bench, completed_lateral_ft=comp, drilled_lateral_ft=drill,
-            well_type="single", category=category,
+            deal_id="thecan_south_bs",
+            scenario_id=scenario,
+            well_name=name,
+            formation=bench,
+            completed_lateral_ft=comp,
+            drilled_lateral_ft=drill,
+            well_type="single",
+            category=category,
         )
 
     wells = [
@@ -481,11 +527,16 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
         _w("plan_a", "4249533594", "WCA_1", 4_326.0, 4_326.0, category="pdp"),
     ]
     req = BlueOxExportRequest(
-        codename="x", prepared_by="m",
-        zones=[BlueOxZoneSpec(
-            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
-            benches=["WCA_1", "WCA_2"],
-        )],
+        codename="x",
+        prepared_by="m",
+        zones=[
+            BlueOxZoneSpec(
+                type_curve_id=uuid.uuid4(),
+                zone_name="WCA",
+                reserve_category="PUD",
+                benches=["WCA_1", "WCA_2"],
+            )
+        ],
         narvi_selections=[
             NarviSelection(deal_id="thecan_south_bs", scenario_id="plan_a"),
             NarviSelection(deal_id="thecan_south_bs", scenario_id="plan_missing"),
@@ -504,7 +555,7 @@ def test_narvi_distribution_exclusions_and_unmapped() -> None:
     # InventoryRow stage), never as an error.
     assert [w.well_name for w in by_zone["WCA"]] == ["WCA 1H", "WCA 2H", "4249533594"]
     assert exclusions == ("WDFD (1 wells)",)
-    assert unzoned_pdp == []          # this producer's bench IS mapped
+    assert unzoned_pdp == []  # this producer's bench IS mapped
     assert any("BS9 (1 wells)" in e for e in errors)  # unmapped planned -> error
     assert any("plan_missing matched no inventory wells" in e for e in errors)
     assert all("4249533594" not in e for e in errors)
@@ -526,23 +577,33 @@ def test_narvi_pdp_dedupe_and_duplicate_guard() -> None:
 
     def _w(scenario: str, name: str, category: str) -> NarviInventoryWell:
         return NarviInventoryWell(
-            deal_id="d", scenario_id=scenario, well_name=name, formation="WCA_1",
-            completed_lateral_ft=10_000.0, drilled_lateral_ft=10_000.0,
-            well_type="single", category=category,
+            deal_id="d",
+            scenario_id=scenario,
+            well_name=name,
+            formation="WCA_1",
+            completed_lateral_ft=10_000.0,
+            drilled_lateral_ft=10_000.0,
+            well_type="single",
+            category=category,
         )
 
     wells = [
         _w("plan_all_pdp", "4249533594", "pdp"),
-        _w("plan_b", "4249533594", "pdp"),      # pdp dupe across scenarios: fine
+        _w("plan_b", "4249533594", "pdp"),  # pdp dupe across scenarios: fine
         _w("plan_b", "WCA_1-01", "generated"),
         _w("plan_c", "WCA_1-01", "generated"),  # planned dupe: error
     ]
     req = BlueOxExportRequest(
-        codename="x", prepared_by="m",
-        zones=[BlueOxZoneSpec(
-            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
-            benches=["WCA_1"],
-        )],
+        codename="x",
+        prepared_by="m",
+        zones=[
+            BlueOxZoneSpec(
+                type_curve_id=uuid.uuid4(),
+                zone_name="WCA",
+                reserve_category="PUD",
+                benches=["WCA_1"],
+            )
+        ],
         narvi_selections=[
             NarviSelection(deal_id="d", scenario_id="plan_all_pdp"),
             NarviSelection(deal_id="d", scenario_id="plan_b"),
@@ -556,9 +617,7 @@ def test_narvi_pdp_dedupe_and_duplicate_guard() -> None:
     ):
         by_zone, _, _ = _fetch_narvi_by_zone(req, errors)
 
-    assert any(
-        "'WCA_1-01'" in e and "plan_b" in e and "plan_c" in e for e in errors
-    )
+    assert any("'WCA_1-01'" in e and "plan_b" in e and "plan_c" in e for e in errors)
     assert all("4249533594" not in e for e in errors)
     # 2 generated rows (dupe flagged as an error) + the producer ONCE.
     names = [w.well_name for w in by_zone["WCA"]]
@@ -582,23 +641,33 @@ def test_narvi_unzoned_pdp_never_dropped() -> None:
 
     def _w(name: str, bench: str, category: str) -> NarviInventoryWell:
         return NarviInventoryWell(
-            deal_id="d", scenario_id="plan_a", well_name=name, formation=bench,
-            completed_lateral_ft=4_231.0, drilled_lateral_ft=4_231.0,
-            well_type="single", category=category,
+            deal_id="d",
+            scenario_id="plan_a",
+            well_name=name,
+            formation=bench,
+            completed_lateral_ft=4_231.0,
+            drilled_lateral_ft=4_231.0,
+            well_type="single",
+            category=category,
         )
 
     wells = [
         _w("WCA_1-01", "WCA_1", "generated"),
-        _w("4249533990", "WCB_1", "pdp"),   # bench has no zone -> unzoned
-        _w("4249533991", "WDFD", "pdp"),    # excluded bench -> unzoned too
+        _w("4249533990", "WCB_1", "pdp"),  # bench has no zone -> unzoned
+        _w("4249533991", "WDFD", "pdp"),  # excluded bench -> unzoned too
         _w("WDFD-01", "WDFD", "generated"),
     ]
     req = BlueOxExportRequest(
-        codename="x", prepared_by="m",
-        zones=[BlueOxZoneSpec(
-            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
-            benches=["WCA_1"],
-        )],
+        codename="x",
+        prepared_by="m",
+        zones=[
+            BlueOxZoneSpec(
+                type_curve_id=uuid.uuid4(),
+                zone_name="WCA",
+                reserve_category="PUD",
+                benches=["WCA_1"],
+            )
+        ],
         narvi_selections=[NarviSelection(deal_id="d", scenario_id="plan_a")],
         exclude_benches=["WDFD"],
     )
@@ -611,7 +680,7 @@ def test_narvi_unzoned_pdp_never_dropped() -> None:
 
     assert errors == []
     assert [w.well_name for w in by_zone["WCA"]] == ["WCA_1-01"]
-    assert exclusions == ("WDFD (1 wells)",)      # the PLANNED WDFD well
+    assert exclusions == ("WDFD (1 wells)",)  # the PLANNED WDFD well
     assert sorted(w.well_name for w in unzoned_pdp) == ["4249533990", "4249533991"]
 
 
@@ -619,33 +688,49 @@ def test_builder_writes_unzoned_pdp_rows_with_bench_area() -> None:
     """Unzoned PDP rows land on the inventory sheet with the bench code
     as area, invisible to Block B, exempt from lateral bounds."""
     data = _data()
-    data = BlueOxExportData(**{
-        **data.__dict__,
-        "pdp_context_rows": (
-            ("WCB_1", InventoryRow(producing_lateral_ft=4_231.0,
-                                   drilled_lateral_ft=4_231.0,
-                                   well_name="4249533990", category="PDP")),
-        ),
-    })
+    data = BlueOxExportData(
+        **{
+            **data.__dict__,
+            "pdp_context_rows": (
+                (
+                    "WCB_1",
+                    InventoryRow(
+                        producing_lateral_ft=4_231.0,
+                        drilled_lateral_ft=4_231.0,
+                        well_name="4249533990",
+                        category="PDP",
+                    ),
+                ),
+            ),
+        }
+    )
     wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
     inv = list(wb["inventory"].iter_rows(min_row=2, values_only=True))
     pdp_row = next(r for r in inv if r[1] == "PDP")
-    assert pdp_row[0] == "WCB_1"            # bench code, not a zone name
+    assert pdp_row[0] == "WCB_1"  # bench code, not a zone name
     assert pdp_row[4] == "4249533990"
     # Block B untouched: gross_locations still count only zone rows.
     rows = list(wb["manifest"].iter_rows(values_only=True))
     hi = next(i for i, r in enumerate(rows) if r and r[0] == "area")
-    bb = {r[0]: r[4] for r in rows[hi + 1:] if r and r[0]}
+    bb = {r[0]: r[4] for r in rows[hi + 1 :] if r and r[0]}
     assert bb["WOLFCAMP A"] == 3
     # non-PDP category in the context rows is a hard error
-    bad = BlueOxExportData(**{
-        **data.__dict__,
-        "pdp_context_rows": (
-            ("WCB_1", InventoryRow(producing_lateral_ft=10_000.0,
-                                   drilled_lateral_ft=10_000.0,
-                                   well_name="X", category="PUD")),
-        ),
-    })
+    bad = BlueOxExportData(
+        **{
+            **data.__dict__,
+            "pdp_context_rows": (
+                (
+                    "WCB_1",
+                    InventoryRow(
+                        producing_lateral_ft=10_000.0,
+                        drilled_lateral_ft=10_000.0,
+                        well_name="X",
+                        category="PUD",
+                    ),
+                ),
+            ),
+        }
+    )
     with pytest.raises(BlueOxContractError, match="must be category PDP"):
         build_blueox_workbook(bad)
 
@@ -676,23 +761,36 @@ def test_narvi_wells_become_inventory_rows_uturn_laterals() -> None:
         },
     }
     spec = BlueOxZoneSpec(
-        type_curve_id=tc.id, zone_name="WCA", reserve_category="PUD",
+        type_curve_id=tc.id,
+        zone_name="WCA",
+        reserve_category="PUD",
     )
     narvi_wells = [
         NarviInventoryWell(
-            deal_id="thecan_44_44", scenario_id="plan_thecan_44",
-            well_name="THECAN 44 U1", formation="WCA_1",
-            completed_lateral_ft=8_926.0, drilled_lateral_ft=10_811.0,
+            deal_id="thecan_44_44",
+            scenario_id="plan_thecan_44",
+            well_name="THECAN 44 U1",
+            formation="WCA_1",
+            completed_lateral_ft=8_926.0,
+            drilled_lateral_ft=10_811.0,
             well_type="uturn",
         ),
     ]
     errors: list[str] = []
-    with patch(
-        "app.api.deals.per_well_rows",
-        return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
-    ), patch("app.api.deals.well_geo_rows", return_value={}):
+    with (
+        patch(
+            "app.api.deals.per_well_rows",
+            return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
+        ),
+        patch("app.api.deals.well_geo_rows", return_value={}),
+    ):
         zone = _collect_blueox_zone(
-            None, tc, spec, ["P50"], 12, errors,  # type: ignore[arg-type]
+            None,
+            tc,
+            spec,
+            ["P50"],
+            12,
+            errors,  # type: ignore[arg-type]
             narvi_wells=narvi_wells,
         )
     assert errors == []
@@ -734,26 +832,40 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
         },
     }
     spec = BlueOxZoneSpec(
-        type_curve_id=tc.id, zone_name="WCA", reserve_category="PUD",
+        type_curve_id=tc.id,
+        zone_name="WCA",
+        reserve_category="PUD",
         inventory=[BlueOxInventoryRowIn(drilled_lateral_ft=10_000.0)],
     )
     geo = {
         "4200000001": (
-            -103.5501, 31.9012, -103.5502, 31.9101, -103.5503, 31.9375,
-            "LINESTRING(-103.5501 31.9012,-103.5502 31.9101,"
-            "-103.55025 31.9238,-103.5503 31.9375)",
+            -103.5501,
+            31.9012,
+            -103.5502,
+            31.9101,
+            -103.5503,
+            31.9375,
+            "LINESTRING(-103.5501 31.9012,-103.5502 31.9101,-103.55025 31.9238,-103.5503 31.9375)",
         ),
     }
     errors: list[str] = []
-    with patch(
-        "app.api.deals.per_well_rows",
-        return_value=[
-            ("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0),
-            ("4200000002", "W 2H", "OP", "WOLFCAMP A", 10_000.0),
-        ],
-    ), patch("app.api.deals.well_geo_rows", return_value=geo):
+    with (
+        patch(
+            "app.api.deals.per_well_rows",
+            return_value=[
+                ("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0),
+                ("4200000002", "W 2H", "OP", "WOLFCAMP A", 10_000.0),
+            ],
+        ),
+        patch("app.api.deals.well_geo_rows", return_value=geo),
+    ):
         zone = _collect_blueox_zone(
-            None, tc, spec, ["P50"], 12, errors,  # type: ignore[arg-type]
+            None,
+            tc,
+            spec,
+            ["P50"],
+            12,
+            errors,  # type: ignore[arg-type]
         )
     assert errors == []
     assert zone is not None
@@ -766,8 +878,12 @@ def test_analog_sheet_appends_well_geo_columns() -> None:
     # lon-first pairs — the drop-wide standard (inventory heel_a_lon
     # precedent + WKT's inherent lon-lat order).
     assert zone.analog_headers[-7:-1] == (
-        "surface_lon", "surface_lat", "heel_lon", "heel_lat",
-        "toe_lon", "toe_lat",
+        "surface_lon",
+        "surface_lat",
+        "heel_lon",
+        "heel_lat",
+        "toe_lon",
+        "toe_lat",
     )
 
 
@@ -788,9 +904,11 @@ def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
         return {
             "fitted_per_percentile": {
                 # SPE orientation as persisted: p10 = HIGH case.
-                "p10": _fit(q_high), "p25": _fit(q_high * 0.9),
+                "p10": _fit(q_high),
+                "p25": _fit(q_high * 0.9),
                 "p50": _fit(q_mid),
-                "p75": _fit(q_low * 1.1), "p90": _fit(q_low),
+                "p75": _fit(q_low * 1.1),
+                "p90": _fit(q_low),
                 "mean": _fit(q_mid),
             },
         }
@@ -815,12 +933,20 @@ def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
         inventory=[BlueOxInventoryRowIn(drilled_lateral_ft=10_000.0)],
     )
     errors: list[str] = []
-    with patch(
-        "app.api.deals.per_well_rows",
-        return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
-    ), patch("app.api.deals.well_geo_rows", return_value={}):
+    with (
+        patch(
+            "app.api.deals.per_well_rows",
+            return_value=[("4200000001", "W 1H", "OP", "WOLFCAMP A", 10_000.0)],
+        ),
+        patch("app.api.deals.well_geo_rows", return_value={}),
+    ):
         zone = _collect_blueox_zone(
-            None, tc, spec, ["P10", "P50", "P90"], 12, errors,  # type: ignore[arg-type]
+            None,
+            tc,
+            spec,
+            ["P10", "P50", "P90"],
+            12,
+            errors,  # type: ignore[arg-type]
         )
     assert errors == []
     assert zone is not None
@@ -831,9 +957,7 @@ def test_assembly_flip_feeds_p10_columns_from_spe_p90_fit() -> None:
     assert zone.volumes["P50"]["oil"][0] == pytest.approx(100.0 * d)
     assert zone.volumes["P90"]["oil"][0] == pytest.approx(200.0 * d)
     # curve_params quotes the SAME flipped fit (level P10 row = qi 50).
-    p10_oil = next(
-        r for r in zone.curve_params if r["stream"] == "oil" and r["level"] == "P10"
-    )
+    p10_oil = next(r for r in zone.curve_params if r["stream"] == "oil" and r["level"] == "P10")
     assert p10_oil["qi"] == 50.0
     assert p10_oil["qi_units"] == "bbl/d per 1,000 ft"
     # producing_lateral_ft defaulted to the cohort mean.
@@ -854,15 +978,23 @@ def test_blueox_config_roundtrip_and_staleness() -> None:
     )
 
     cfg = BlueOxExportRequest(
-        codename="thecan", prepared_by="m",
-        zones=[BlueOxZoneSpec(
-            type_curve_id=uuid.uuid4(), zone_name="WCA", reserve_category="PUD",
-            benches=["WCA_1", "WCA_2"],
-        )],
-        narvi_selections=[NarviSelection(
-            deal_id="thecan_south_bs", scenario_id="plan_a",
-            pinned_updated_at="2026-07-22T15:00:00+00:00",
-        )],
+        codename="thecan",
+        prepared_by="m",
+        zones=[
+            BlueOxZoneSpec(
+                type_curve_id=uuid.uuid4(),
+                zone_name="WCA",
+                reserve_category="PUD",
+                benches=["WCA_1", "WCA_2"],
+            )
+        ],
+        narvi_selections=[
+            NarviSelection(
+                deal_id="thecan_south_bs",
+                scenario_id="plan_a",
+                pinned_updated_at="2026-07-22T15:00:00+00:00",
+            )
+        ],
     )
     assert BlueOxExportRequest.model_validate(cfg.model_dump(mode="json")) == cfg
 
@@ -874,9 +1006,9 @@ def test_blueox_config_roundtrip_and_staleness() -> None:
         ):
             return _scenario_status(cfg.narvi_selections)
 
-    assert probe("2026-07-22T16:00:00+00:00")[0]["stale"] is True   # re-saved since pin
+    assert probe("2026-07-22T16:00:00+00:00")[0]["stale"] is True  # re-saved since pin
     assert probe("2026-07-22T15:00:00+00:00")[0]["stale"] is False  # unchanged
-    assert probe(None)[0]["stale"] is False                          # unreachable -> usable
+    assert probe(None)[0]["stale"] is False  # unreachable -> usable
 
 
 # ==================== scenario-scoped zones ====================
@@ -886,24 +1018,23 @@ def _scoped_req(zones: list[Any], selections: list[str]) -> Any:
     from app.api.deals import BlueOxExportRequest, NarviSelection
 
     return BlueOxExportRequest(
-        codename="alchemist", prepared_by="m", zones=zones,
-        narvi_selections=[
-            NarviSelection(deal_id="alch", scenario_id=s) for s in selections
-        ],
+        codename="alchemist",
+        prepared_by="m",
+        zones=zones,
+        narvi_selections=[NarviSelection(deal_id="alch", scenario_id=s) for s in selections],
     )
 
 
-def _scoped_zone(
-    name: str, benches: list[str], scope: list[str] | None
-) -> Any:
+def _scoped_zone(name: str, benches: list[str], scope: list[str] | None) -> Any:
     from app.api.deals import BlueOxZoneSpec, ScenarioRef
 
     return BlueOxZoneSpec(
-        type_curve_id=uuid.uuid4(), zone_name=name, reserve_category="PUD",
+        type_curve_id=uuid.uuid4(),
+        zone_name=name,
+        reserve_category="PUD",
         benches=benches,
         scenario_scope=(
-            None if scope is None
-            else [ScenarioRef(deal_id="alch", scenario_id=s) for s in scope]
+            None if scope is None else [ScenarioRef(deal_id="alch", scenario_id=s) for s in scope]
         ),
     )
 
@@ -912,9 +1043,14 @@ def _alch_well(scenario: str, name: str, bench: str) -> Any:
     from app.warehouse_client.narvi import NarviInventoryWell
 
     return NarviInventoryWell(
-        deal_id="alch", scenario_id=scenario, well_name=name, formation=bench,
-        completed_lateral_ft=10_000.0, drilled_lateral_ft=10_000.0,
-        well_type="single", category="generated",
+        deal_id="alch",
+        scenario_id=scenario,
+        well_name=name,
+        formation=bench,
+        completed_lateral_ft=10_000.0,
+        drilled_lateral_ft=10_000.0,
+        well_type="single",
+        category="generated",
     )
 
 
@@ -950,7 +1086,8 @@ def test_scenario_scope_routes_same_bench_to_two_zones() -> None:
 
     assert errors == []
     assert [w.well_name for w in by_zone["bs1_s west"]] == [
-        "W A BS1_S-01", "W B BS1_S-01",
+        "W A BS1_S-01",
+        "W B BS1_S-01",
     ]
     assert [w.well_name for w in by_zone["bs1_s east"]] == ["E BS1_S-01"]
     assert [w.well_name for w in by_zone["wca"]] == ["E WCA_1-01"]
@@ -998,8 +1135,7 @@ def test_scenario_scope_overlap_and_coverage_errors() -> None:
     ):
         by_zone, _, _ = _fetch_narvi_by_zone(req, errors)
     assert any(
-        "scenario_scope covers" in e and "BS1_S in alch/plan_east (1 wells)" in e
-        for e in errors
+        "scenario_scope covers" in e and "BS1_S in alch/plan_east (1 wells)" in e for e in errors
     )
     assert [w.well_name for w in by_zone["bs1_s west"]] == ["W BS1_S-01"]
 
@@ -1023,12 +1159,18 @@ def test_scenario_scope_legacy_config_and_roundtrip() -> None:
     from app.api.deals import BlueOxExportRequest
 
     legacy = {
-        "codename": "thecan", "prepared_by": "m",
-        "zones": [{
-            "type_curve_id": str(uuid.uuid4()), "zone_name": "WCA",
-            "reserve_category": "PUD", "benches": ["WCA_1"],
-        }],
-        "narvi_selections": [], "exclude_benches": [],
+        "codename": "thecan",
+        "prepared_by": "m",
+        "zones": [
+            {
+                "type_curve_id": str(uuid.uuid4()),
+                "zone_name": "WCA",
+                "reserve_category": "PUD",
+                "benches": ["WCA_1"],
+            }
+        ],
+        "narvi_selections": [],
+        "exclude_benches": [],
     }
     cfg = BlueOxExportRequest.model_validate(legacy)
     assert cfg.zones[0].scenario_scope is None
@@ -1045,11 +1187,13 @@ def test_manifest_declares_scoped_zones_only() -> None:
     """Scoped zones declare their DSU subset in Block A; unscoped zones
     add nothing (legacy drops byte-identical)."""
     zone = _zone("WOLFCAMP A", ("4200000001",))
-    scoped_zone = type(zone)(**{
-        **zone.__dict__,
-        "zone_name": "BS1S WEST",
-        "scenario_scope": ("alch/plan_west_a", "alch/plan_west_b"),
-    })
+    scoped_zone = type(zone)(
+        **{
+            **zone.__dict__,
+            "zone_name": "BS1S WEST",
+            "scenario_scope": ("alch/plan_west_a", "alch/plan_west_b"),
+        }
+    )
     data = _data(zones=[zone, scoped_zone])
     wb = load_workbook(io.BytesIO(build_blueox_workbook(data)))
     kv = {
@@ -1064,8 +1208,13 @@ def test_manifest_declares_scoped_zones_only() -> None:
 # ================= inventory gunbarrel geometry (2026-07-27) =================
 
 
-def _geo_inv(name: str, category: str = "PUD", dsu: str = "1_4_9/plan_a",
-             xs: tuple[float, ...] = (-660.0,), legs: int = 1) -> InventoryRow:
+def _geo_inv(
+    name: str,
+    category: str = "PUD",
+    dsu: str = "1_4_9/plan_a",
+    xs: tuple[float, ...] = (-660.0,),
+    legs: int = 1,
+) -> InventoryRow:
     return InventoryRow(
         producing_lateral_ft=10_000.0,
         drilled_lateral_ft=12_000.0,
@@ -1077,8 +1226,10 @@ def _geo_inv(name: str, category: str = "PUD", dsu: str = "1_4_9/plan_a",
         gunbarrel_offset_ft=xs[0],
         gunbarrel_offset_b_ft=xs[1] if len(xs) > 1 else None,
         lateral_azimuth_deg=105.3,
-        heel_a_lon=-103.81, heel_a_lat=31.92,
-        toe_a_lon=-103.78, toe_a_lat=31.92,
+        heel_a_lon=-103.81,
+        heel_a_lat=31.92,
+        toe_a_lon=-103.78,
+        toe_a_lat=31.92,
         heel_b_lon=-103.81 if legs > 1 else None,
         heel_b_lat=31.921 if legs > 1 else None,
         toe_b_lon=-103.78 if legs > 1 else None,
@@ -1088,7 +1239,10 @@ def _geo_inv(name: str, category: str = "PUD", dsu: str = "1_4_9/plan_a",
 
 def _dsu_frame(dsu: str = "1_4_9/plan_a") -> DsuMetaRow:
     return DsuMetaRow(
-        dsu_id=dsu, azimuth_deg=105.3, origin_lon=-103.795, origin_lat=31.9205,
+        dsu_id=dsu,
+        azimuth_deg=105.3,
+        origin_lon=-103.795,
+        origin_lat=31.9205,
     )
 
 
@@ -1109,12 +1263,25 @@ def test_inventory_geometry_columns_and_dsu_meta() -> None:
     ws = wb["inventory"]
     header = [c.value for c in ws[1]]
     assert header == [
-        "area", "category", "producing_lateral_ft", "drilled_lateral_ft",
+        "area",
+        "category",
+        "producing_lateral_ft",
+        "drilled_lateral_ft",
         "well_name",
-        "dsu_id", "bench", "landing_tvd_ft",
-        "gunbarrel_offset_ft", "gunbarrel_offset_b_ft", "lateral_azimuth_deg",
-        "heel_a_lon", "heel_a_lat", "toe_a_lon", "toe_a_lat",
-        "heel_b_lon", "heel_b_lat", "toe_b_lon", "toe_b_lat",
+        "dsu_id",
+        "bench",
+        "landing_tvd_ft",
+        "gunbarrel_offset_ft",
+        "gunbarrel_offset_b_ft",
+        "lateral_azimuth_deg",
+        "heel_a_lon",
+        "heel_a_lat",
+        "toe_a_lon",
+        "toe_a_lat",
+        "heel_b_lon",
+        "heel_b_lat",
+        "toe_b_lon",
+        "toe_b_lat",
     ]
     rows = {r[4]: r for r in ws.iter_rows(min_row=2, values_only=True)}
     single = rows["PLANNED 1"]
@@ -1142,7 +1309,10 @@ def test_inventory_without_geometry_is_byte_stable_shape() -> None:
     wb = load_workbook(io.BytesIO(build_blueox_workbook(_data())))
     header = [c.value for c in wb["inventory"][1]]
     assert header == [
-        "area", "category", "producing_lateral_ft", "drilled_lateral_ft",
+        "area",
+        "category",
+        "producing_lateral_ft",
+        "drilled_lateral_ft",
         "well_name",
     ]
     assert "dsu_meta" not in wb.sheetnames
@@ -1189,13 +1359,14 @@ def _novi_zone(name: str, n_sticks: int = 4, months: int = 12) -> NoviComparison
     )
 
 
-def _with_novi(data: BlueOxExportData,
-               comps: tuple[NoviComparisonZone, ...]) -> BlueOxExportData:
-    return BlueOxExportData(**{
-        **data.__dict__,
-        "novi_comparison": comps,
-        "novi_intel_vintage": "2025-09-30",
-    })
+def _with_novi(data: BlueOxExportData, comps: tuple[NoviComparisonZone, ...]) -> BlueOxExportData:
+    return BlueOxExportData(
+        **{
+            **data.__dict__,
+            "novi_comparison": comps,
+            "novi_intel_vintage": "2025-09-30",
+        }
+    )
 
 
 def test_novi_comparison_sheets_and_manifest_keys() -> None:
@@ -1218,9 +1389,19 @@ def test_novi_comparison_sheets_and_manifest_keys() -> None:
 
     meta_rows = list(wb["novi_comparison_meta"].iter_rows(values_only=True))
     assert meta_rows[0] == (
-        "area", "n_sticks", "n_self", "n_neighborhood", "n_pud", "n_res",
-        "n_wells_no_set", "radius_m", "lateral_tol", "intel_vintage",
-        "low_n_flag", "stale_vintage_flag", "tc_risked",
+        "area",
+        "n_sticks",
+        "n_self",
+        "n_neighborhood",
+        "n_pud",
+        "n_res",
+        "n_wells_no_set",
+        "radius_m",
+        "lateral_tol",
+        "intel_vintage",
+        "low_n_flag",
+        "stale_vintage_flag",
+        "tc_risked",
     )
     by_zone = {r[0]: r for r in meta_rows[1:]}
     assert by_zone["WOLFCAMP A"][1] == 4
@@ -1240,9 +1421,12 @@ def test_novi_comparison_mixed_basin_tol_defers_to_meta() -> None:
     the one value in the manifest; a mixed-basin deal must not declare
     one zone's tolerance for all — it defers to the per-zone meta column."""
     data = _data()
-    midland = NoviComparisonZone(**{
-        **_novi_zone("WOLFCAMP A").__dict__, "lateral_tol": 0.40,
-    })
+    midland = NoviComparisonZone(
+        **{
+            **_novi_zone("WOLFCAMP A").__dict__,
+            "lateral_tol": 0.40,
+        }
+    )
     comps = (midland, _novi_zone("THIRD BONE SPRING", n_sticks=0))
     wb = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, comps))))
     kv = _manifest_kv(wb)
@@ -1252,8 +1436,7 @@ def test_novi_comparison_mixed_basin_tol_defers_to_meta() -> None:
     assert by_zone["THIRD BONE SPRING"][8] == 0.25
 
     # uniform wide tolerance declares the number, as before
-    uniform = tuple(NoviComparisonZone(**{**z.__dict__, "lateral_tol": 0.40})
-                    for z in comps)
+    uniform = tuple(NoviComparisonZone(**{**z.__dict__, "lateral_tol": 0.40}) for z in comps)
     wb2 = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, uniform))))
     assert _manifest_kv(wb2)["novi_selection_lateral_tol"] == 0.40
 
@@ -1275,18 +1458,26 @@ def test_novi_comparison_must_cover_every_zone() -> None:
 
 def test_novi_comparison_vector_rules() -> None:
     data = _data()
-    ragged = NoviComparisonZone(**{
-        **_novi_zone("WOLFCAMP A").__dict__,
-        "gas_mcf": (1.0, 2.0),
-    })
+    ragged = NoviComparisonZone(
+        **{
+            **_novi_zone("WOLFCAMP A").__dict__,
+            "gas_mcf": (1.0, 2.0),
+        }
+    )
     with pytest.raises(BlueOxContractError, match="equal-length"):
-        build_blueox_workbook(_with_novi(
-            data, (ragged, _novi_zone("THIRD BONE SPRING", n_sticks=0))))
+        build_blueox_workbook(
+            _with_novi(data, (ragged, _novi_zone("THIRD BONE SPRING", n_sticks=0)))
+        )
 
-    sneaky = NoviComparisonZone(**{
-        **_novi_zone("WOLFCAMP A", n_sticks=0).__dict__,
-        "oil_bbl": (1.0,), "gas_mcf": (1.0,), "water_bbl": (1.0,),
-    })
+    sneaky = NoviComparisonZone(
+        **{
+            **_novi_zone("WOLFCAMP A", n_sticks=0).__dict__,
+            "oil_bbl": (1.0,),
+            "gas_mcf": (1.0,),
+            "water_bbl": (1.0,),
+        }
+    )
     with pytest.raises(BlueOxContractError, match="must carry no series"):
-        build_blueox_workbook(_with_novi(
-            data, (sneaky, _novi_zone("THIRD BONE SPRING", n_sticks=0))))
+        build_blueox_workbook(
+            _with_novi(data, (sneaky, _novi_zone("THIRD BONE SPRING", n_sticks=0)))
+        )

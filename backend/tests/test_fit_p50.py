@@ -42,9 +42,11 @@ def test_recovers_known_modified_hyperbolic_params() -> None:
     assert r["smoothed_rate"][0] > r["smoothed_rate"][-1]
     # The smoothed curve should track the input within a few percent
     # in the bulk of the series (skipping the noisy first month).
-    rms_err = float(np.sqrt(np.mean(
-        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"][1:], p50[1:])]
-    )))
+    rms_err = float(
+        np.sqrt(
+            np.mean([(s - p) ** 2 for s, p in zip(r["smoothed_rate"][1:], p50[1:], strict=False)])
+        )
+    )
     mean_rate = float(np.mean(p50[1:]))
     assert rms_err / mean_rate < 0.10
 
@@ -116,8 +118,12 @@ def test_detects_ramp_in_first_prod_aligned_series() -> None:
     # Realistic Permian-shaped synthetic: low first-prod, peak at month 3,
     # then Arps decline. The fitter must NOT treat month 0 as peak.
     truth = {
-        "qo": 80.0, "qi": 200.0, "peak_index": 3,
-        "Di": 0.85, "b": 1.2, "Df": 0.08,
+        "qo": 80.0,
+        "qi": 200.0,
+        "peak_index": 3,
+        "Di": 0.85,
+        "b": 1.2,
+        "Df": 0.08,
     }
     p50 = _synthesize_ramp_arps(**truth, n_months=36)
     r = fit_p50_series(p50)
@@ -129,13 +135,11 @@ def test_detects_ramp_in_first_prod_aligned_series() -> None:
     assert r["qi"] == pytest.approx(truth["qi"], rel=0.15)
     # eur_per_unit includes the ramp prefix; ramp_eur should be > 0.
     assert r["ramp_eur"] > 0
-    assert r["eur_per_unit"] == pytest.approx(
-        r["ramp_eur"] + r["arps_eur"], rel=1e-9
-    )
+    assert r["eur_per_unit"] == pytest.approx(r["ramp_eur"] + r["arps_eur"], rel=1e-9)
     # Smoothed curve should track the input series within ~10% RMS.
-    rms = float(np.sqrt(np.mean(
-        [(s - p) ** 2 for s, p in zip(r["smoothed_rate"], p50)]
-    )))
+    rms = float(
+        np.sqrt(np.mean([(s - p) ** 2 for s, p in zip(r["smoothed_rate"], p50, strict=False)]))
+    )
     mean_rate = float(np.mean(p50))
     assert rms / mean_rate < 0.10
 

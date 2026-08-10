@@ -20,7 +20,6 @@ from sqlalchemy.orm import Session
 
 from app.warehouse_client.base import ProductionRecord
 
-
 # Direct column mapping from curated.production -> ProductionRecord
 # fields. The per_month_* columns are the monthly volumes; per_day_*
 # columns are Novi's pre-computed calendar-day rates.
@@ -66,9 +65,7 @@ def fetch_production_for_api10s(
     if not api10_list:
         return
 
-    result = session.execute(
-        _FETCH_BY_API10S_SQL, {"api10s": api10_list}
-    ).mappings()
+    result = session.execute(_FETCH_BY_API10S_SQL, {"api10s": api10_list}).mappings()
     for row in result:
         yield ProductionRecord(
             api10=row["api10"],

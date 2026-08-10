@@ -20,9 +20,7 @@ from app.forecasting.orchestrator import _stream_rate_at_index, detect_stream_pe
 from app.forecasting.peak_detection import detect_onset, detect_peak
 
 
-def _frame(
-    oil: list[float], water: list[float], gas: list[float] | None = None
-) -> pd.DataFrame:
+def _frame(oil: list[float], water: list[float], gas: list[float] | None = None) -> pd.DataFrame:
     n = len(oil)
     months = [date(2023, (i % 12) + 1, 1) for i in range(n)]
     if gas is None:
