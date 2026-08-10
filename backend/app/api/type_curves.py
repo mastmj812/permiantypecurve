@@ -1,13 +1,13 @@
 """Type curve API.
 
-  POST   /api/type-curves/compute             live preview (no persist)
-  POST   /api/type-curves                     save a new type curve
-  GET    /api/type-curves                     list saved curves
-  GET    /api/type-curves/{id}                fetch one curve (incl. series)
-  PATCH  /api/type-curves/{id}                rename or update notes
-  DELETE /api/type-curves/{id}                delete
-  POST   /api/type-curves/{id}/versions       save-as-new-version
-  GET    /api/type-curves/{id}/export         CSV (zip) download
+POST   /api/type-curves/compute             live preview (no persist)
+POST   /api/type-curves                     save a new type curve
+GET    /api/type-curves                     list saved curves
+GET    /api/type-curves/{id}                fetch one curve (incl. series)
+PATCH  /api/type-curves/{id}                rename or update notes
+DELETE /api/type-curves/{id}                delete
+POST   /api/type-curves/{id}/versions       save-as-new-version
+GET    /api/type-curves/{id}/export         CSV (zip) download
 """
 
 from __future__ import annotations
@@ -95,6 +95,7 @@ class ComputeResponse(BaseModel):
 
 class FitOverride(BaseModel):
     """Manual override of the Arps + ramp fit for one stream."""
+
     qi: float
     Di: float
     b: float
@@ -163,9 +164,7 @@ class ProvenanceIn(BaseModel):
     (single source; the server copies it into the stored provenance).
     """
 
-    selection_events: list[SelectionEventIn] = Field(
-        default_factory=list, max_length=200
-    )
+    selection_events: list[SelectionEventIn] = Field(default_factory=list, max_length=200)
     partition: PartitionIn | None = None
     exclusions: dict[str, ExclusionEntryIn] = Field(default_factory=dict)
 
@@ -198,6 +197,7 @@ class SaveRequest(BaseModel):
 
 class TypeCurvePreviewRequest(BaseModel):
     """Live preview body for the manual tweak panel — no persistence."""
+
     qi: float
     Di: float
     b: float
@@ -461,8 +461,12 @@ def _apply_fit_overrides(
         if stream_name not in streams:
             continue
         fitted = evaluate_fit(
-            qi=ovr.qi, Di=ovr.Di, b=ovr.b, Df=ovr.Df,
-            qo=ovr.qo, peak_index=ovr.peak_index,
+            qi=ovr.qi,
+            Di=ovr.Di,
+            b=ovr.b,
+            Df=ovr.Df,
+            qo=ovr.qo,
+            peak_index=ovr.peak_index,
             n_months=n_months,
         )
         streams[stream_name]["fitted"] = fitted
@@ -475,9 +479,7 @@ def _apply_fit_overrides(
         if not per_pct:
             per_pct = {}
             streams[stream_name]["fitted_per_percentile"] = per_pct
-        per_pct["p50"] = {
-            k: v for k, v in fitted.items() if k != "smoothed_rate"
-        }
+        per_pct["p50"] = {k: v for k, v in fitted.items() if k != "smoothed_rate"}
 
         # And refresh the matching per-percentile EUR scalar so the
         # metadata sheet's fitted_eur_per_1000ft row uses the override
@@ -572,9 +574,7 @@ def _compute(
     # tail matches the cohort composition rather than always Delaware.
     cohort_subbasins = (
         session.execute(
-            select(Well.subbasin).where(
-                Well.api10.in_([fw.api10 for fw in forecast_wells])
-            )
+            select(Well.subbasin).where(Well.api10.in_([fw.api10 for fw in forecast_wells]))
         )
         .scalars()
         .all()
@@ -591,9 +591,7 @@ def _compute(
             r = fit_p50_series(series, df_terminal_per_year=cohort_df)
             fitted_eur[key] = r["eur_per_unit"] if r is not None else None
             if r is not None:
-                fitted_per_pct[key] = {
-                    k: v for k, v in r.items() if k != "smoothed_rate"
-                }
+                fitted_per_pct[key] = {k: v for k, v in r.items() if k != "smoothed_rate"}
             else:
                 fitted_per_pct[key] = None
         fitted_streams[stream_name] = replace(
@@ -685,7 +683,8 @@ def compute_type_curve(
     req: ComputeRequest, session: Session = Depends(get_session)
 ) -> ComputeResponse:
     payload = _compute(
-        session, req.api10s,
+        session,
+        req.api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
@@ -707,8 +706,12 @@ def preview_type_curve_fit(req: TypeCurvePreviewRequest) -> TypeCurvePreviewResp
     from app.type_curves.fit_p50 import evaluate_fit
 
     fitted = evaluate_fit(
-        qi=req.qi, Di=req.Di, b=req.b, Df=req.Df,
-        qo=req.qo, peak_index=req.peak_index,
+        qi=req.qi,
+        Di=req.Di,
+        b=req.b,
+        Df=req.Df,
+        qo=req.qo,
+        peak_index=req.peak_index,
         n_months=req.n_months,
     )
     return TypeCurvePreviewResponse(
@@ -757,17 +760,13 @@ def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
         {
             f
             for f in session.execute(
-                select(Well.formation_blueox)
-                .where(Well.api10.in_(req.included_api10s))
-                .distinct()
+                select(Well.formation_blueox).where(Well.api10.in_(req.included_api10s)).distinct()
             ).scalars()
             if f
         }
     )
 
-    universe = compute_universe(
-        session, [entry["geometry"] for entry in aoi_polygons], formations
-    )
+    universe = compute_universe(session, [entry["geometry"] for entry in aoi_polygons], formations)
 
     return {
         "version": 1,
@@ -781,8 +780,7 @@ def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
         "universe": universe,
         "partition": p.partition.model_dump() if p.partition else None,
         "exclusions": {
-            api10: {"code": e.code, "note": e.note, "at": now}
-            for api10, e in p.exclusions.items()
+            api10: {"code": e.code, "note": e.note, "at": now} for api10, e in p.exclusions.items()
         },
         "post_save_removals": [],
         "post_save_additions": [],
@@ -816,20 +814,17 @@ def _persist(
 
 
 @router.post("", response_model=TypeCurveRow, status_code=201)
-def save_type_curve(
-    req: SaveRequest, session: Session = Depends(get_session)
-) -> TypeCurveRow:
+def save_type_curve(req: SaveRequest, session: Session = Depends(get_session)) -> TypeCurveRow:
     payload = _compute(
-        session, req.included_api10s,
+        session,
+        req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     provenance = _build_provenance(session, req)
-    row = _persist(
-        session, payload=payload, req=req, version_of=None, provenance=provenance
-    )
+    row = _persist(session, payload=payload, req=req, version_of=None, provenance=provenance)
     log.info(
         "type_curve_saved",
         id=str(row.id),
@@ -854,7 +849,8 @@ def save_as_new_version(
     # re-aggregating the parent. Without it the version's series silently
     # reverts every per-well engineering edit to the global fits.
     payload = _compute(
-        session, req.included_api10s,
+        session,
+        req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
@@ -872,7 +868,10 @@ def save_as_new_version(
     else:
         provenance = {}
     row = _persist(
-        session, payload=payload, req=req, version_of=parent.id,
+        session,
+        payload=payload,
+        req=req,
+        version_of=parent.id,
         provenance=provenance,
     )
     # Risking and per-well overrides ride the lineage: a new version
@@ -881,9 +880,7 @@ def save_as_new_version(
     # to the new membership — the series above was computed WITH those
     # overrides, so the child must carry the matching record. Clear or
     # adjust explicitly via PATCH/DELETE if review says otherwise.
-    inherited_overrides = _inherit_overrides(
-        parent.forecast_overrides, req.included_api10s
-    )
+    inherited_overrides = _inherit_overrides(parent.forecast_overrides, req.included_api10s)
     if parent.risk_multipliers or inherited_overrides:
         if parent.risk_multipliers:
             row.risk_multipliers = dict(parent.risk_multipliers)
@@ -901,8 +898,11 @@ def save_as_new_version(
         session.refresh(row)
         took_over_deal = True
     log.info(
-        "type_curve_versioned", id=str(row.id), parent=str(parent.id),
-        n_wells=len(req.included_api10s), took_over_deal=took_over_deal,
+        "type_curve_versioned",
+        id=str(row.id),
+        parent=str(parent.id),
+        n_wells=len(req.included_api10s),
+        took_over_deal=took_over_deal,
         overrides_inherited=len(inherited_overrides),
     )
     return TypeCurveRow.from_orm_row(row)
@@ -915,12 +915,12 @@ def save_as_new_version(
 def list_type_curves(
     session: Session = Depends(get_session),
 ) -> list[TypeCurveSummary]:
-    rows = session.execute(
-        select(TypeCurve).order_by(TypeCurve.created_at.desc())
-    ).scalars().all()
+    rows = session.execute(select(TypeCurve).order_by(TypeCurve.created_at.desc())).scalars().all()
     return [
         TypeCurveSummary(
-            id=r.id, name=r.name, notes=r.notes,
+            id=r.id,
+            name=r.name,
+            notes=r.notes,
             normalization_basis=r.normalization_basis,
             alignment_method=r.alignment_method,
             n_wells=len(r.included_api10s or []),
@@ -970,9 +970,7 @@ def patch_type_curve(
         # That's the "Di reverts to 57 after Update Fit" symptom.
         # deepcopy isolates the mutation; flag_modified is belt-and-
         # suspenders so we don't depend on SQLAlchemy's value-compare.
-        updated_series = _apply_fit_overrides(
-            copy.deepcopy(row.series or {}), req.fit_overrides
-        )
+        updated_series = _apply_fit_overrides(copy.deepcopy(row.series or {}), req.fit_overrides)
         row.series = updated_series
         flag_modified(row, "series")
     # Explicit-null-vs-omitted matters for deal_id: omitted leaves the
@@ -1127,9 +1125,7 @@ def _fitted_params_by_pct(
             if series:
                 r = fit_p50_series(series)
                 fit = (
-                    {k: v for k, v in r.items() if k != "smoothed_rate"}
-                    if r is not None
-                    else None
+                    {k: v for k, v in r.items() if k != "smoothed_rate"} if r is not None else None
                 )
         fits[key] = fit
     return fits
@@ -1153,7 +1149,10 @@ def _evaluate_fitted_rates(
             rates_by_pct[key] = None
             continue
         evaluated = evaluate_fit(
-            qi=fit["qi"], Di=fit["Di"], b=fit["b"], Df=fit["Df"],
+            qi=fit["qi"],
+            Di=fit["Di"],
+            b=fit["b"],
+            Df=fit["Df"],
             qo=fit.get("qo", fit["qi"]),
             peak_index=fit.get("peak_index", 0),
             n_months=_FORECAST_N_MONTHS,
@@ -1162,9 +1161,7 @@ def _evaluate_fitted_rates(
     return rates_by_pct
 
 
-def _forecast_csv(
-    stream_data: dict[str, Any], alignment: str
-) -> bytes:
+def _forecast_csv(stream_data: dict[str, Any], alignment: str) -> bytes:
     """Build {stream}_forecast.csv: per-percentile fitted rate + cum
     out to 50 years, for handoff to an economics model.
 
@@ -1216,29 +1213,38 @@ def _forecast_csv(
     return buf.getvalue().encode()
 
 
-def _stream_csv(
-    stream_name: str, stream_data: dict[str, Any], alignment: str
-) -> bytes:
+def _stream_csv(stream_name: str, stream_data: dict[str, Any], alignment: str) -> bytes:
     # Column name reflects the alignment so downstream consumers know
     # whether month 1 is peak month or first-prod month.
     month_col = _month_col_label(alignment)
     buf = io.StringIO()
     writer = csv.writer(buf)
-    writer.writerow([
-        month_col, "p10", "p25", "p50", "p75", "p90", "mean", "well_count",
-    ])
+    writer.writerow(
+        [
+            month_col,
+            "p10",
+            "p25",
+            "p50",
+            "p75",
+            "p90",
+            "mean",
+            "well_count",
+        ]
+    )
     months = len(stream_data["p50"])
     for i in range(months):
-        writer.writerow([
-            i + 1,
-            stream_data["p10"][i],
-            stream_data["p25"][i],
-            stream_data["p50"][i],
-            stream_data["p75"][i],
-            stream_data["p90"][i],
-            stream_data["mean"][i],
-            stream_data["well_count"][i],
-        ])
+        writer.writerow(
+            [
+                i + 1,
+                stream_data["p10"][i],
+                stream_data["p25"][i],
+                stream_data["p50"][i],
+                stream_data["p75"][i],
+                stream_data["p90"][i],
+                stream_data["mean"][i],
+                stream_data["well_count"][i],
+            ]
+        )
     return buf.getvalue().encode()
 
 
@@ -1263,17 +1269,15 @@ def _metadata_csv(tc: TypeCurve, series: dict[str, Any]) -> bytes:
     writer.writerow(["id", str(tc.id)])
     writer.writerow(["name", tc.name])
     writer.writerow(["notes", tc.notes or ""])
-    writer.writerow([
-        "normalization_basis",
-        _NORMALIZATION_LABEL.get(
-            tc.normalization_basis.value, tc.normalization_basis.value
-        ),
-    ])
+    writer.writerow(
+        [
+            "normalization_basis",
+            _NORMALIZATION_LABEL.get(tc.normalization_basis.value, tc.normalization_basis.value),
+        ]
+    )
     writer.writerow(["alignment_method", tc.alignment_method.value])
     # SPE / PRMS orientation: p10 columns = HIGH case, p90 = LOW case.
-    writer.writerow(
-        ["percentile_convention", "SPE (P10 = high case, P90 = low case)"]
-    )
+    writer.writerow(["percentile_convention", "SPE (P10 = high case, P90 = low case)"])
     # Geologic risking disclosure — the rate/forecast CSVs in this zip
     # already carry the multiplier when risked.
     if is_risked(tc.risk_multipliers):
@@ -1302,14 +1306,13 @@ def _metadata_csv(tc: TypeCurve, series: dict[str, Any]) -> bytes:
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name, {})
         eur = _fitted_eur_per_1000ft(s)
-        writer.writerow([
-            s_name,
-            *[
-                f"{eur[k]:.1f}" if eur.get(k) is not None else ""
-                for k in PERCENTILE_KEYS
-            ],
-            f"{eur['mean']:.1f}" if eur.get("mean") is not None else "",
-        ])
+        writer.writerow(
+            [
+                s_name,
+                *[f"{eur[k]:.1f}" if eur.get(k) is not None else "" for k in PERCENTILE_KEYS],
+                f"{eur['mean']:.1f}" if eur.get("mean") is not None else "",
+            ]
+        )
     writer.writerow([])
 
     # Raw P50 Arps params per stream so the downstream econ tool can
@@ -1325,15 +1328,19 @@ def _metadata_csv(tc: TypeCurve, series: dict[str, Any]) -> bytes:
         if params is None:
             writer.writerow([s_name, *["" for _ in _FITTED_PARAM_KEYS]])
             continue
-        writer.writerow([
-            s_name,
-            *[
-                "" if params.get(k) is None
-                else params[k] if isinstance(params[k], (str, int))
-                else f"{float(params[k]):.6f}"
-                for k in _FITTED_PARAM_KEYS
-            ],
-        ])
+        writer.writerow(
+            [
+                s_name,
+                *[
+                    ""
+                    if params.get(k) is None
+                    else params[k]
+                    if isinstance(params[k], (str, int))
+                    else f"{float(params[k]):.6f}"
+                    for k in _FITTED_PARAM_KEYS
+                ],
+            ]
+        )
     writer.writerow([])
 
     writer.writerow(["included_api10s"])
@@ -1379,33 +1386,27 @@ def get_type_curve_well_stats(
         return []
 
     well_rows = session.execute(
-        select(Well.api10, Well.name, Well.lateral_ft).where(
-            Well.api10.in_(api10s)
-        )
+        select(Well.api10, Well.name, Well.lateral_ft).where(Well.api10.in_(api10s))
     ).all()
     well_by_api10 = {r.api10: r for r in well_rows}
 
     # Pull only oil forecasts — probit is oil-only today.
-    forecast_rows = session.execute(
-        select(Forecast)
-        .where(Forecast.api10.in_(api10s))
-        .where(Forecast.stream == Stream.OIL)
-    ).scalars().all()
+    forecast_rows = (
+        session.execute(
+            select(Forecast).where(Forecast.api10.in_(api10s)).where(Forecast.stream == Stream.OIL)
+        )
+        .scalars()
+        .all()
+    )
     forecast_by_api10 = {f.api10: f for f in forecast_rows}
 
     out: list[TypeCurveWellStat] = []
     for api10 in api10s:
         wrow = well_by_api10.get(api10)
-        lat = (
-            float(wrow.lateral_ft)
-            if wrow and wrow.lateral_ft is not None
-            else None
-        )
+        lat = float(wrow.lateral_ft) if wrow and wrow.lateral_ft is not None else None
         name = wrow.name if wrow else None
 
-        resolved = resolve_forecast(
-            tc, api10, Stream.OIL, forecast_by_api10.get(api10)
-        )
+        resolved = resolve_forecast(tc, api10, Stream.OIL, forecast_by_api10.get(api10))
         payload = resolved.payload
         eur: float | None = None
 
@@ -1486,9 +1487,9 @@ def get_type_curve_workspace_wells(
     ).all()
     wells_by_api10 = {r.api10: r for r in well_rows}
 
-    forecast_rows = session.execute(
-        select(Forecast).where(Forecast.api10.in_(api10s))
-    ).scalars().all()
+    forecast_rows = (
+        session.execute(select(Forecast).where(Forecast.api10.in_(api10s))).scalars().all()
+    )
     forecasts_by_well: dict[str, dict[Stream, Forecast]] = {}
     for f in forecast_rows:
         forecasts_by_well.setdefault(f.api10, {})[f.stream] = f
@@ -1509,9 +1510,7 @@ def get_type_curve_workspace_wells(
                 well_operator=well.operator if well else None,
                 well_formation=well.formation if well else None,
                 well_lateral_ft=(
-                    float(well.lateral_ft)
-                    if well and well.lateral_ft is not None
-                    else None
+                    float(well.lateral_ft) if well and well.lateral_ft is not None else None
                 ),
                 well_first_prod_date=well.first_prod_date if well else None,
                 well_county=well.county if well else None,
@@ -1547,9 +1546,7 @@ def _resolve_stream(value: str) -> Stream:
     try:
         return Stream(value)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=404, detail=f"unknown stream: {value}"
-        ) from exc
+        raise HTTPException(status_code=404, detail=f"unknown stream: {value}") from exc
 
 
 def _override_payload_from_params(
@@ -1580,9 +1577,7 @@ def _override_payload_from_params(
     if qo is not None and peak_index_months is not None and peak_index_months > 0:
         params["qo"] = qo
         params["peak_index_months"] = int(peak_index_months)
-        eur = compute_total_eur(
-            model_type="modified_hyperbolic", params=params, economic_limit=0.0
-        )
+        eur = compute_total_eur(model_type="modified_hyperbolic", params=params, economic_limit=0.0)
     else:
         eur = compute_eur("modified_hyperbolic", params, economic_limit=0.0)
     di_eff = effective_decline_first_year(Di, b)
@@ -1595,9 +1590,7 @@ def _override_payload_from_params(
         "b": b,
         "df_terminal": Df,
         "qo": qo,
-        "peak_index_months": (
-            int(peak_index_months) if peak_index_months is not None else None
-        ),
+        "peak_index_months": (int(peak_index_months) if peak_index_months is not None else None),
         "eur": eur,
         "peak_rate": None,
         "peak_month_date": None,
@@ -1638,8 +1631,12 @@ def put_forecast_override(
         )
 
     payload = _override_payload_from_params(
-        qi=body.qi, Di=body.Di, b=body.b, Df=body.Df,
-        qo=body.qo, peak_index_months=body.peak_index_months,
+        qi=body.qi,
+        Di=body.Di,
+        b=body.b,
+        Df=body.Df,
+        qo=body.qo,
+        peak_index_months=body.peak_index_months,
     )
     overrides = dict(tc.forecast_overrides or {})
     well_block = dict(overrides.get(api10) or {})
@@ -1703,9 +1700,7 @@ def delete_forecast_override(
     # Return the now-resolved stream so the frontend can swap the
     # modal / workspace row to global without a second round-trip.
     global_f = session.execute(
-        select(Forecast)
-        .where(Forecast.api10 == api10)
-        .where(Forecast.stream == stream_enum)
+        select(Forecast).where(Forecast.api10 == api10).where(Forecast.stream == stream_enum)
     ).scalar_one_or_none()
     resolved = resolve_forecast(tc, api10, stream_enum, global_f)
     return WorkspaceStream(source=resolved.source, payload=resolved.payload)
@@ -1767,9 +1762,7 @@ def _record_membership_provenance(
     flag_modified(tc, "provenance")
 
 
-@router.patch(
-    "/{type_curve_id}/membership", response_model=TypeCurveRow
-)
+@router.patch("/{type_curve_id}/membership", response_model=TypeCurveRow)
 def patch_type_curve_membership(
     type_curve_id: uuid.UUID,
     body: MembershipPatch,
@@ -1788,16 +1781,10 @@ def patch_type_curve_membership(
         raise HTTPException(status_code=404, detail="not found")
 
     if body.add:
-        known = set(
-            session.execute(
-                select(Well.api10).where(Well.api10.in_(body.add))
-            ).scalars()
-        )
+        known = set(session.execute(select(Well.api10).where(Well.api10.in_(body.add))).scalars())
         unknown = [a for a in body.add if a not in known]
         if unknown:
-            raise HTTPException(
-                status_code=400, detail=f"unknown api10s: {unknown}"
-            )
+            raise HTTPException(status_code=400, detail=f"unknown api10s: {unknown}")
 
     old_members = list(tc.included_api10s or [])
     members = list(old_members)
@@ -1811,9 +1798,7 @@ def patch_type_curve_membership(
         # Tidy: drop overrides for removed wells so the JSONB doesn't
         # accumulate orphan entries that the resolver would never read.
         if tc.forecast_overrides:
-            overrides = {
-                k: v for k, v in tc.forecast_overrides.items() if k not in remove_set
-            }
+            overrides = {k: v for k, v in tc.forecast_overrides.items() if k not in remove_set}
             if overrides != tc.forecast_overrides:
                 tc.forecast_overrides = overrides
                 flag_modified(tc, "forecast_overrides")
@@ -1841,9 +1826,7 @@ def patch_type_curve_membership(
     return TypeCurveRow.from_orm_row(tc)
 
 
-@router.post(
-    "/{type_curve_id}/reaggregate", response_model=TypeCurveRow
-)
+@router.post("/{type_curve_id}/reaggregate", response_model=TypeCurveRow)
 def reaggregate_type_curve(
     type_curve_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> TypeCurveRow:
@@ -1914,15 +1897,11 @@ def export_type_curve(
         for s_name in ("oil", "gas", "water"):
             s = streams.get(s_name)
             if s:
-                zf.writestr(
-                    f"{s_name}_rates.csv", _stream_csv(s_name, s, alignment_val)
-                )
+                zf.writestr(f"{s_name}_rates.csv", _stream_csv(s_name, s, alignment_val))
                 # Fitted forecast out to 50 years for each percentile +
                 # mean — companion to the data-window _rates.csv for
                 # handoff to economics models.
-                zf.writestr(
-                    f"{s_name}_forecast.csv", _forecast_csv(s, alignment_val)
-                )
+                zf.writestr(f"{s_name}_forecast.csv", _forecast_csv(s, alignment_val))
         zf.writestr("metadata.csv", _metadata_csv(tc, series))
         # Type-well build-up: universe → coded culls → final cohort.
         # Degrades to an included-only roster on pre-provenance curves.
@@ -1942,9 +1921,7 @@ def export_type_curve(
 
 # Office Open XML presentation MIME type. Mirrors the XLSX_MEDIA_TYPE
 # constant in app/api/deals.py.
-PPTX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-)
+PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 @router.post("/{type_curve_id}/export.pptx")
@@ -1992,9 +1969,12 @@ async def export_type_curve_pptx(
     cum_water_bytes = await cum_water.read()
     map_bytes = await map_image.read()
     all_imgs = [
-        rate_oil_bytes, cum_oil_bytes,
-        rate_gas_bytes, cum_gas_bytes,
-        rate_water_bytes, cum_water_bytes,
+        rate_oil_bytes,
+        cum_oil_bytes,
+        rate_gas_bytes,
+        cum_gas_bytes,
+        rate_water_bytes,
+        cum_water_bytes,
         map_bytes,
     ]
     if not all(all_imgs):
@@ -2016,7 +1996,9 @@ async def export_type_curve_pptx(
 
     try:
         content = build_deal_slide_pptx(
-            session, type_curve_id, compare_with,
+            session,
+            type_curve_id,
+            compare_with,
             stream_pngs={
                 "oil": (rate_oil_bytes, cum_oil_bytes),
                 "gas": (rate_gas_bytes, cum_gas_bytes),

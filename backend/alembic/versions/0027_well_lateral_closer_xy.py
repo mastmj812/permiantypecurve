@@ -33,9 +33,7 @@ def upgrade() -> None:
     )
     # Filter predicate on the map tile / selection queries — same
     # rationale as the existing lateral_ft/first_prod_date indexes.
-    op.create_index(
-        "ix_wells_lateral_closer_xy_ft", "wells", ["lateral_closer_xy_ft"]
-    )
+    op.create_index("ix_wells_lateral_closer_xy_ft", "wells", ["lateral_closer_xy_ft"])
 
 
 def downgrade() -> None:

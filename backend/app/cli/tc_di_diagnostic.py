@@ -74,9 +74,7 @@ def _empty_tc_for_resolver() -> TypeCurve:
     return tc
 
 
-def _collect_api10s(
-    raw: list[str] | None, path: str | None
-) -> list[str] | None:
+def _collect_api10s(raw: list[str] | None, path: str | None) -> list[str] | None:
     """Flatten --api10s (CSV/repeated) + --api10s-file into a de-duped,
     order-preserving list. None when neither is supplied."""
     out: list[str] = []
@@ -98,16 +96,12 @@ def _collect_api10s(
     return out or None
 
 
-def _load_type_curve(
-    session: Session, *, name: str, version_id: str | None
-) -> TypeCurve | None:
+def _load_type_curve(session: Session, *, name: str, version_id: str | None) -> TypeCurve | None:
     if version_id is not None:
         return session.get(TypeCurve, uuid.UUID(version_id))
     rows = (
         session.execute(
-            select(TypeCurve)
-            .where(TypeCurve.name == name)
-            .order_by(TypeCurve.created_at.desc())
+            select(TypeCurve).where(TypeCurve.name == name).order_by(TypeCurve.created_at.desc())
         )
         .scalars()
         .all()
@@ -123,16 +117,10 @@ def _load_type_curve(
     return rows[0]
 
 
-def _global_forecasts(
-    session: Session, api10s: list[str]
-) -> dict[tuple[str, Stream], Forecast]:
+def _global_forecasts(session: Session, api10s: list[str]) -> dict[tuple[str, Stream], Forecast]:
     """{(api10, stream): Forecast} for the cohort — the override fallback,
     same source the loader's resolver reads from."""
-    rows = (
-        session.execute(select(Forecast).where(Forecast.api10.in_(api10s)))
-        .scalars()
-        .all()
-    )
+    rows = session.execute(select(Forecast).where(Forecast.api10.in_(api10s))).scalars().all()
     return {(f.api10, f.stream): f for f in rows}
 
 
@@ -169,9 +157,7 @@ def _median_well_stats(
     }
 
 
-def _shapley_split(
-    di_m: float, b_m: float, di_f: float, b_f: float
-) -> tuple[float, float]:
+def _shapley_split(di_m: float, b_m: float, di_f: float, b_f: float) -> tuple[float, float]:
     """Order-independent (Shapley) attribution of the effective-decline gap
     eff(di_f, b_f) - eff(di_m, b_m) to the Di change and the b change.
 
@@ -197,12 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Decompose the Review-vs-TypeCurve Di gap for a cohort."
     )
-    parser.add_argument(
-        "--name", default=None, help="Name of a SAVED type curve to diagnose."
-    )
-    parser.add_argument(
-        "--version-id", default=None, help="Pin an exact type_curves.id (UUID)."
-    )
+    parser.add_argument("--name", default=None, help="Name of a SAVED type curve to diagnose.")
+    parser.add_argument("--version-id", default=None, help="Pin an exact type_curves.id (UUID).")
     parser.add_argument(
         "--api10s",
         action="append",

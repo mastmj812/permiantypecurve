@@ -22,11 +22,11 @@ from app.db.enum_helpers import pg_enum
 
 
 class WellStatus(str, enum.Enum):
-    PDP = "PDP"          # producing
-    DUC = "DUC"          # drilled uncompleted (Novi Spud/DUC)
-    PA = "PA"            # plugged & abandoned
-    SI = "SI"            # shut-in
-    TA = "TA"            # temporarily abandoned
+    PDP = "PDP"  # producing
+    DUC = "DUC"  # drilled uncompleted (Novi Spud/DUC)
+    PA = "PA"  # plugged & abandoned
+    SI = "SI"  # shut-in
+    TA = "TA"  # temporarily abandoned
     INACTIVE = "INACTIVE"
     UNKNOWN = "UNKNOWN"
 
@@ -103,20 +103,14 @@ class Well(Base):
         index=True,
     )
 
-    sh_geom: Mapped[Any | None] = mapped_column(
-        Geometry(geometry_type="POINT", srid=4326)
-    )
-    bh_geom: Mapped[Any | None] = mapped_column(
-        Geometry(geometry_type="POINT", srid=4326)
-    )
+    sh_geom: Mapped[Any | None] = mapped_column(Geometry(geometry_type="POINT", srid=4326))
+    bh_geom: Mapped[Any | None] = mapped_column(Geometry(geometry_type="POINT", srid=4326))
 
     # 4-point LINESTRING built upstream in
     # engineering_db.curated.wells.wellstick_geom (SHL -> LP -> MP -> BHL).
     # The legacy wellstick_source enum was dropped in the cutover — only
     # one source remains.
-    wellstick: Mapped[Any | None] = mapped_column(
-        Geometry(geometry_type="LINESTRING", srid=4326)
-    )
+    wellstick: Mapped[Any | None] = mapped_column(Geometry(geometry_type="LINESTRING", srid=4326))
 
     last_synced_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

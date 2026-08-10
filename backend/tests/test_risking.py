@@ -39,9 +39,16 @@ from .test_blueox_export import _data, _params, _zone
 
 def _fit(qi: float = 300.0, qo: float = 120.0) -> dict[str, Any]:
     return {
-        "qi": qi, "Di": 2.5, "b": 1.1, "Df": 0.08,
-        "qo": qo, "peak_index": 3, "r2": 0.97,
-        "ramp_eur": 20_000.0, "arps_eur": 180_000.0, "eur_per_unit": 200_000.0,
+        "qi": qi,
+        "Di": 2.5,
+        "b": 1.1,
+        "Df": 0.08,
+        "qo": qo,
+        "peak_index": 3,
+        "r2": 0.97,
+        "ramp_eur": 20_000.0,
+        "arps_eur": 180_000.0,
+        "eur_per_unit": 200_000.0,
         "smoothed_rate": [qo, qi * 0.8, qi, qi * 0.9],
     }
 
@@ -58,7 +65,11 @@ def _series() -> dict[str, Any]:
             "well_count": [12, 12, 11],
             "implied_eur_per_1000ft": {"p50": 150_000.0 * scale, "mean": 155_000.0 * scale},
             "fitted": _fit(300.0 * scale, 120.0 * scale),
-            "fitted_eur_per_unit": {"p10": 260_000.0 * scale, "p50": 200_000.0 * scale, "p90": None},
+            "fitted_eur_per_unit": {
+                "p10": 260_000.0 * scale,
+                "p50": 200_000.0 * scale,
+                "p90": None,
+            },
             "fitted_per_percentile": {
                 "p10": _fit(400.0 * scale, 160.0 * scale),
                 "p50": _fit(300.0 * scale, 120.0 * scale),
@@ -119,9 +130,7 @@ def test_scaling_touches_only_rate_dimensioned_values() -> None:
         assert oil["fitted"][key] == pytest.approx(ref["fitted"][key] * 0.85)
     for key in ("Di", "b", "Df", "peak_index", "r2"):
         assert oil["fitted"][key] == ref["fitted"][key]
-    assert oil["fitted"]["smoothed_rate"] == [
-        v * 0.85 for v in ref["fitted"]["smoothed_rate"]
-    ]
+    assert oil["fitted"]["smoothed_rate"] == [v * 0.85 for v in ref["fitted"]["smoothed_rate"]]
     # per-percentile store moves WITH the published fit (the
     # _apply_fit_overrides lesson); missing slots stay None
     assert oil["fitted_per_percentile"]["p10"]["qi"] == pytest.approx(400.0 * 0.85)
@@ -151,7 +160,13 @@ def test_arps_homogeneity_param_scaling_equals_rate_scaling() -> None:
     mul = 0.85
     base = evaluate_fit(qi=300.0, Di=2.5, b=1.1, Df=0.08, qo=120.0, peak_index=3, n_months=120)
     scaled = evaluate_fit(
-        qi=300.0 * mul, Di=2.5, b=1.1, Df=0.08, qo=120.0 * mul, peak_index=3, n_months=120,
+        qi=300.0 * mul,
+        Di=2.5,
+        b=1.1,
+        Df=0.08,
+        qo=120.0 * mul,
+        peak_index=3,
+        n_months=120,
     )
     for a, b_ in zip(base["smoothed_rate"], scaled["smoothed_rate"], strict=True):
         assert b_ == pytest.approx(a * mul, rel=1e-9)

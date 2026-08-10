@@ -27,9 +27,7 @@ def upgrade() -> None:
     # autocommit_block escapes the surrounding transaction (same pattern
     # as 0002).
     with op.get_context().autocommit_block():
-        op.execute(
-            "ALTER TYPE alignment_method ADD VALUE IF NOT EXISTS 'peak_ramp'"
-        )
+        op.execute("ALTER TYPE alignment_method ADD VALUE IF NOT EXISTS 'peak_ramp'")
 
 
 def downgrade() -> None:

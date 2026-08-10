@@ -28,8 +28,12 @@ def _well(
     if water_rates is None:
         water_rates = [None] * n
     return WellSeries(
-        api10=api10, lateral_ft=lateral_ft, proppant_lbs=None,
-        oil_rates=oil_rates, gas_rates=gas_rates, water_rates=water_rates,
+        api10=api10,
+        lateral_ft=lateral_ft,
+        proppant_lbs=None,
+        oil_rates=oil_rates,
+        gas_rates=gas_rates,
+        water_rates=water_rates,
     )
 
 
@@ -96,10 +100,7 @@ def test_spe_percentile_orientation_p10_is_high_case() -> None:
     # per-1000ft normalized → linear-interpolated statistical
     # percentiles: 90th = 46 (→ P10), 75th = 40 (→ P25), median = 30,
     # 25th = 20 (→ P75), 10th = 14 (→ P90).
-    wells = [
-        _well(str(i), flat_oil=r * 100.0, n=3)
-        for i, r in enumerate([1, 2, 3, 4, 5])
-    ]
+    wells = [_well(str(i), flat_oil=r * 100.0, n=3) for i, r in enumerate([1, 2, 3, 4, 5])]
     agg = aggregate(wells)
     s = agg.streams["oil"]
     for j in range(3):

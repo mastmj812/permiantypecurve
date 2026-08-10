@@ -128,9 +128,7 @@ def _job(
         session.commit()
 
 
-def _watermark_set(
-    session: Session, entity: SyncEntity, scope_key: str, ts: datetime
-) -> None:
+def _watermark_set(session: Session, entity: SyncEntity, scope_key: str, ts: datetime) -> None:
     row = session.get(SyncWatermark, (entity, scope_key))
     if row is None:
         row = SyncWatermark(entity=entity, scope_key=scope_key, last_synced_at=ts)
@@ -204,10 +202,7 @@ def sync_permian(
         with SessionLocal() as session:
             # Read the api10 list AFTER headers committed so we cover
             # every well just loaded.
-            api10s = [
-                r[0]
-                for r in session.execute(select(Well.api10)).all()
-            ]
+            api10s = [r[0] for r in session.execute(select(Well.api10)).all()]
             with _job(session, SyncEntity.PRODUCTION, SCOPE_KEY) as job:
                 with Session(wh_engine) as wh:
                     prod_iter = fetch_production_for_api10s(wh, api10s)

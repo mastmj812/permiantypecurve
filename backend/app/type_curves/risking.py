@@ -52,7 +52,9 @@ def normalize_multipliers(raw: dict[str, Any] | None) -> dict[str, float]:
             raise ValueError(f"unknown risking stream {key!r} (expected oil/gas/water)")
         mul = float(value)
         if not math.isfinite(mul) or mul <= 0.0:
-            raise ValueError(f"risking multiplier for {key} must be a positive finite number, got {value!r}")
+            raise ValueError(
+                f"risking multiplier for {key} must be a positive finite number, got {value!r}"
+            )
         out[key] = mul
     return out
 
@@ -125,8 +127,7 @@ def apply_risking(series: dict[str, Any], raw_muls: dict[str, Any] | None) -> di
         implied = block.get("implied_eur_per_1000ft")
         if isinstance(implied, dict):
             block["implied_eur_per_1000ft"] = {
-                k: (v * mul if isinstance(v, (int, float)) else v)
-                for k, v in implied.items()
+                k: (v * mul if isinstance(v, (int, float)) else v) for k, v in implied.items()
             }
         fitted = block.get("fitted")
         if isinstance(fitted, dict):
@@ -139,7 +140,6 @@ def apply_risking(series: dict[str, Any], raw_muls: dict[str, Any] | None) -> di
         eur_map = block.get("fitted_eur_per_unit")
         if isinstance(eur_map, dict):
             block["fitted_eur_per_unit"] = {
-                k: (v * mul if isinstance(v, (int, float)) else v)
-                for k, v in eur_map.items()
+                k: (v * mul if isinstance(v, (int, float)) else v) for k, v in eur_map.items()
             }
     return risked

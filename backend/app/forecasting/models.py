@@ -27,9 +27,7 @@ _B_EXPONENTIAL_THRESHOLD: float = 1e-6
 @overload
 def arps_exponential(t: float, qi: float, Di: float) -> float: ...
 @overload
-def arps_exponential(
-    t: NDArray[np.float64], qi: float, Di: float
-) -> NDArray[np.float64]: ...
+def arps_exponential(t: NDArray[np.float64], qi: float, Di: float) -> NDArray[np.float64]: ...
 
 
 def arps_exponential(t, qi, Di):  # type: ignore[no-untyped-def]
@@ -60,9 +58,7 @@ def arps_hyperbolic(t, qi, Di, b):  # type: ignore[no-untyped-def]
 @overload
 def arps_harmonic(t: float, qi: float, Di: float) -> float: ...
 @overload
-def arps_harmonic(
-    t: NDArray[np.float64], qi: float, Di: float
-) -> NDArray[np.float64]: ...
+def arps_harmonic(t: NDArray[np.float64], qi: float, Di: float) -> NDArray[np.float64]: ...
 
 
 def arps_harmonic(t, qi, Di):  # type: ignore[no-untyped-def]

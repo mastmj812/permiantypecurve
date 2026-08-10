@@ -22,9 +22,7 @@ def upgrade() -> None:
     # Alembic's autocommit_block escapes the surrounding transaction so the
     # DDL can land. Subsequent rows can reference the new value immediately.
     with op.get_context().autocommit_block():
-        op.execute(
-            "ALTER TYPE alignment_method ADD VALUE IF NOT EXISTS 'first_prod_month'"
-        )
+        op.execute("ALTER TYPE alignment_method ADD VALUE IF NOT EXISTS 'first_prod_month'")
 
 
 def downgrade() -> None:

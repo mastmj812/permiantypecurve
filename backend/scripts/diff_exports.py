@@ -9,6 +9,7 @@ Plus shared metadata (id/name/basis/alignment/...). We diff each of
 these to confirm both export paths agree on numeric content for the
 same curve.
 """
+
 from __future__ import annotations
 
 import csv
@@ -28,8 +29,10 @@ from app.db.session import SessionLocal
 TC_ID = uuid.UUID("2f5bfeba-caf3-457d-a0a0-c424e7738604")  # holdTheLine_bs1s
 s = SessionLocal()
 tc = s.get(TypeCurve, TC_ID)
-print(f"Curve: {tc.name}, n_wells={len(tc.included_api14s)}, "
-      f"series.n_months={tc.series.get('n_months')}")
+print(
+    f"Curve: {tc.name}, n_wells={len(tc.included_api14s)}, "
+    f"series.n_months={tc.series.get('n_months')}"
+)
 print()
 
 # ---- Build the CSV ZIP via the actual handler ----
@@ -74,9 +77,7 @@ def parse_forecast_csv(content: bytes) -> dict[int, dict[str, dict[str, float]]]
 
 csv_forecasts: dict[str, dict[int, dict[str, dict[str, float]]]] = {}
 for stream in ("oil", "gas", "water"):
-    csv_forecasts[stream] = parse_forecast_csv(
-        zf.read(f"{stream}_forecast.csv")
-    )
+    csv_forecasts[stream] = parse_forecast_csv(zf.read(f"{stream}_forecast.csv"))
 
 # Parse the XLSX forecast sheet (wide layout).
 xlsx_rows = list(fcst_ws.iter_rows(values_only=True))
@@ -146,14 +147,11 @@ def parse_metadata_csv(content: bytes) -> dict[str, Any]:
             continue
         if section == "eur" and row[0] in ("oil", "gas", "water"):
             out["eur"][row[0]] = {
-                k: float(v) if v else None
-                for k, v in zip(eur_header, row[1:], strict=False)
+                k: float(v) if v else None for k, v in zip(eur_header, row[1:], strict=False)
             }
             continue
         if section == "params" and row[0] in ("oil", "gas", "water"):
-            out["params"][row[0]] = {
-                k: v for k, v in zip(param_header, row[1:], strict=False)
-            }
+            out["params"][row[0]] = {k: v for k, v in zip(param_header, row[1:], strict=False)}
             continue
         if row[0] == "included_api14s":
             section = None
@@ -167,18 +165,12 @@ xlsx_meta_rows = list(meta_ws.iter_rows(values_only=True))
 
 def find_block(rows: list, header_prefix: str) -> tuple[int, int]:
     for i, r in enumerate(rows):
-        if (
-            r and r[0]
-            and isinstance(r[0], str)
-            and r[0].startswith(header_prefix)
-        ):
+        if r and r[0] and isinstance(r[0], str) and r[0].startswith(header_prefix):
             return i + 1, i + 2
     return -1, -1
 
 
-eur_hdr_row, eur_data_row = find_block(
-    xlsx_meta_rows, "fitted_eur_per_1000ft"
-)
+eur_hdr_row, eur_data_row = find_block(xlsx_meta_rows, "fitted_eur_per_1000ft")
 prm_hdr_row, prm_data_row = find_block(xlsx_meta_rows, "fitted_p50_params")
 
 xlsx_eur: dict[str, dict[str, Any]] = {}
@@ -186,18 +178,14 @@ xlsx_eur_header = list(xlsx_meta_rows[eur_hdr_row])[1:]
 for i in range(3):
     r = xlsx_meta_rows[eur_data_row + i]
     if r and r[0] in ("oil", "gas", "water"):
-        xlsx_eur[r[0]] = {
-            k: r[1 + j] for j, k in enumerate(xlsx_eur_header)
-        }
+        xlsx_eur[r[0]] = {k: r[1 + j] for j, k in enumerate(xlsx_eur_header)}
 
 xlsx_params: dict[str, dict[str, Any]] = {}
 xlsx_param_header = list(xlsx_meta_rows[prm_hdr_row])[1:]
 for i in range(3):
     r = xlsx_meta_rows[prm_data_row + i]
     if r and r[0] in ("oil", "gas", "water"):
-        xlsx_params[r[0]] = {
-            k: r[1 + j] for j, k in enumerate(xlsx_param_header)
-        }
+        xlsx_params[r[0]] = {k: r[1 + j] for j, k in enumerate(xlsx_param_header)}
 
 print("Comparing fitted_eur_per_1000ft per stream × percentile:")
 eur_ok = True
@@ -216,16 +204,13 @@ for stream in ("oil", "gas", "water"):
             print(f"   X {stream}.{pct}: xlsx={x}, csv={c} (diff {d:.2f})")
             eur_ok = False
 if eur_ok:
-    print("   OK All 18 (3 streams x 6 percentiles) fitted EURs agree "
-          "within 0.5 BBL/MCF per 1k ft")
+    print("   OK All 18 (3 streams x 6 percentiles) fitted EURs agree within 0.5 BBL/MCF per 1k ft")
 
 print()
 print("Comparing fitted_p50_params per stream:")
 prm_ok = True
 for stream in ("oil", "gas", "water"):
-    for k in (
-        "model_type", "qi", "Di", "b", "Df", "qo", "peak_index"
-    ):
+    for k in ("model_type", "qi", "Di", "b", "Df", "qo", "peak_index"):
         x = xlsx_params.get(stream, {}).get(k)
         c = csv_meta["params"].get(stream, {}).get(k)
         if x is None and (c == "" or c is None):

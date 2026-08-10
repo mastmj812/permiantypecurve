@@ -38,9 +38,7 @@ from app.db.base import Base
 class DealPolygon(Base):
     __tablename__ = "deal_polygons"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     # Nullable: a freshly-uploaded polygon lives unlinked until the
     # user assigns it to a deal via the admin modal. ON DELETE SET
     # NULL keeps polygons around if a deal is removed.
@@ -53,9 +51,7 @@ class DealPolygon(Base):
     # non-numeric attribute, falling back to "Polygon {fid}". Helps
     # the user identify rows in the admin modal.
     name: Mapped[str] = mapped_column(String(255), nullable=False)
-    geom: Mapped[Any] = mapped_column(
-        Geometry(geometry_type="MULTIPOLYGON", srid=4326)
-    )
+    geom: Mapped[Any] = mapped_column(Geometry(geometry_type="MULTIPOLYGON", srid=4326))
     attributes: Mapped[dict[str, Any]] = mapped_column(
         JSONB, nullable=False, server_default="'{}'::jsonb"
     )
@@ -65,8 +61,4 @@ class DealPolygon(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    __table_args__ = (
-        Index(
-            "ix_deal_polygons_geom_gist", "geom", postgresql_using="gist"
-        ),
-    )
+    __table_args__ = (Index("ix_deal_polygons_geom_gist", "geom", postgresql_using="gist"),)

@@ -107,9 +107,7 @@ def upgrade() -> None:
     # partitioning column (prod_date), which is Timescale's hard
     # requirement for unique constraints on hypertables.
     # ------------------------------------------------------------------
-    op.drop_constraint(
-        "pk_production_monthly", "production_monthly", type_="primary"
-    )
+    op.drop_constraint("pk_production_monthly", "production_monthly", type_="primary")
     op.drop_column("production_monthly", "api14")
     op.drop_column("production_monthly", "rate_prodday_bopd")
     op.drop_column("production_monthly", "rate_prodday_mcfd")
@@ -136,9 +134,7 @@ def upgrade() -> None:
     # ------------------------------------------------------------------
     # 5. forecasts: swap api14 column, FK, UQ.
     # ------------------------------------------------------------------
-    op.drop_constraint(
-        "uq_forecasts_api14_stream", "forecasts", type_="unique"
-    )
+    op.drop_constraint("uq_forecasts_api14_stream", "forecasts", type_="unique")
     op.drop_column("forecasts", "api14")
     op.add_column(
         "forecasts",
@@ -152,9 +148,7 @@ def upgrade() -> None:
         ["api10"],
         ondelete="CASCADE",
     )
-    op.create_unique_constraint(
-        "uq_forecasts_api10_stream", "forecasts", ["api10", "stream"]
-    )
+    op.create_unique_constraint("uq_forecasts_api10_stream", "forecasts", ["api10", "stream"])
 
     # ------------------------------------------------------------------
     # 6. type_curves: swap the api14 array for an api10 array.

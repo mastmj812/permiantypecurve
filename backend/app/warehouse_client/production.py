@@ -65,9 +65,7 @@ def fetch_production_for_api10s(
     if not api10_list:
         return
 
-    result = session.execute(
-        _FETCH_BY_API10S_SQL, {"api10s": api10_list}
-    ).mappings()
+    result = session.execute(_FETCH_BY_API10S_SQL, {"api10s": api10_list}).mappings()
     for row in result:
         yield ProductionRecord(
             api10=row["api10"],

@@ -129,9 +129,7 @@ def build_deal_slide_pptx(
 
     pres = Presentation(str(TEMPLATE_PATH))
     if len(pres.slides) < 2:
-        raise ValueError(
-            "template must have at least 2 slides (stream slide + well table)"
-        )
+        raise ValueError("template must have at least 2 slides (stream slide + well table)")
 
     # Template starts as [stream_template (slide 0), wells (slide 1)].
     # Duplicate the stream slide twice — both copies land at the end —
@@ -154,7 +152,11 @@ def build_deal_slide_pptx(
         _fill_param_table(param_table, tc, prev)
         probit_png = (probit_pngs or {}).get(stream)
         _place_chart_images(
-            slide, rate_png, cum_png, map_png, probit_png=probit_png,
+            slide,
+            rate_png,
+            cum_png,
+            map_png,
+            probit_png=probit_png,
         )
 
     # --- wells slide (now at index 3) ---
@@ -329,9 +331,7 @@ def _delete_row(table: Table, row_idx: int) -> None:
     tr.getparent().remove(tr)
 
 
-def _fill_param_table(
-    table: Table, tc: TypeCurve, prev: TypeCurve | None
-) -> None:
+def _fill_param_table(table: Table, tc: TypeCurve, prev: TypeCurve | None) -> None:
     """Slide-1 param table: row 0 is header, row 1 is the current
     curve's row, optional row 2 is the previous curve when comparing.
 
@@ -364,9 +364,7 @@ def _fill_param_table(
 
     _write_row(table, row_idx=header_rows, values=format_param_row(tc))
     if prev is not None:
-        _write_row(
-            table, row_idx=header_rows + 1, values=format_param_row(prev)
-        )
+        _write_row(table, row_idx=header_rows + 1, values=format_param_row(prev))
 
 
 def _fill_well_table(table: Table, rows: list[tuple[Any, ...]]) -> None:
@@ -482,12 +480,18 @@ def _place_chart_images(
     cum_top = Inches(_CHART_TOP_IN + _CHART_HEIGHT_IN + _CHART_GAP_IN)
 
     slide.shapes.add_picture(
-        io.BytesIO(rate_png), chart_left, rate_top,
-        width=chart_width, height=chart_height,
+        io.BytesIO(rate_png),
+        chart_left,
+        rate_top,
+        width=chart_width,
+        height=chart_height,
     )
     slide.shapes.add_picture(
-        io.BytesIO(cum_png), chart_left, cum_top,
-        width=chart_width, height=chart_height,
+        io.BytesIO(cum_png),
+        chart_left,
+        cum_top,
+        width=chart_width,
+        height=chart_height,
     )
     _add_downtime_footnote(slide)
 
@@ -498,8 +502,10 @@ def _place_chart_images(
         # mirrored right margin.
         slide.shapes.add_picture(
             io.BytesIO(map_png),
-            Inches(_BIG_MAP_LEFT_IN), Inches(_CHART_TOP_IN),
-            width=Inches(_BIG_MAP_WIDTH_IN), height=Inches(_BIG_MAP_HEIGHT_IN),
+            Inches(_BIG_MAP_LEFT_IN),
+            Inches(_CHART_TOP_IN),
+            width=Inches(_BIG_MAP_WIDTH_IN),
+            height=Inches(_BIG_MAP_HEIGHT_IN),
         )
         return
 
@@ -507,11 +513,15 @@ def _place_chart_images(
     # goes bottom-right at the same size.
     slide.shapes.add_picture(
         io.BytesIO(map_png),
-        right_col_left, rate_top,
-        width=chart_width, height=chart_height,
+        right_col_left,
+        rate_top,
+        width=chart_width,
+        height=chart_height,
     )
     slide.shapes.add_picture(
         io.BytesIO(probit_png),
-        right_col_left, cum_top,
-        width=chart_width, height=chart_height,
+        right_col_left,
+        cum_top,
+        width=chart_width,
+        height=chart_height,
     )

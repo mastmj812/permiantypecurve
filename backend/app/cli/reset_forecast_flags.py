@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=None,
         help="Comma-separated api10 list (or repeated --api10s) to scope "
-             "the reset. Omit to hit every forecast row.",
+        "the reset. Omit to hit every forecast row.",
     )
     parser.add_argument(
         "--dry-run",
@@ -76,8 +76,8 @@ def main(argv: list[str] | None = None) -> int:
         "--refit",
         action="store_true",
         help="After clearing flags, re-run the auto-fitter on the same "
-             "wells via app.forecasting.orchestrator.run_forecast_batch. "
-             "Required if you want the persisted params to also revert.",
+        "wells via app.forecasting.orchestrator.run_forecast_batch. "
+        "Required if you want the persisted params to also revert.",
     )
     parser.add_argument("--log-level", default="INFO")
     args = parser.parse_args(argv)
@@ -98,9 +98,7 @@ def main(argv: list[str] | None = None) -> int:
         n_edited = len(session.execute(q_edited).scalars().all())
         n_locked = len(session.execute(q_locked).scalars().all())
 
-        scope_desc = (
-            f"{len(api10s)} api10s" if api10s is not None else "all wells"
-        )
+        scope_desc = f"{len(api10s)} api10s" if api10s is not None else "all wells"
         print(
             f"Scope: {scope_desc}. "
             f"Would clear manual_override on {n_edited} forecast(s), "
@@ -136,27 +134,14 @@ def main(argv: list[str] | None = None) -> int:
             # The orchestrator wants an explicit api10 list. Pull every
             # api10 with a forecast row so "refit everything" still works.
             with SessionLocal() as session:
-                api10s = [
-                    r[0]
-                    for r in session.execute(select(Forecast.api10).distinct()).all()
-                ]
+                api10s = [r[0] for r in session.execute(select(Forecast.api10).distinct()).all()]
 
         print(f"Re-fitting {len(api10s)} well(s)…")
         cfg = ForecastConfig()
         with SessionLocal() as session:
             results = forecast_wells(session, api10s, config=cfg)
-        n_ok = sum(
-            1
-            for streams in results.values()
-            for r in streams.values()
-            if r is not None
-        )
-        n_failed = sum(
-            1
-            for streams in results.values()
-            for r in streams.values()
-            if r is None
-        )
+        n_ok = sum(1 for streams in results.values() for r in streams.values() if r is not None)
+        n_failed = sum(1 for streams in results.values() for r in streams.values() if r is None)
         log.info(
             "refit_done",
             wells=len(api10s),
@@ -164,8 +149,7 @@ def main(argv: list[str] | None = None) -> int:
             streams_failed=n_failed,
         )
         print(
-            f"Refit: {len(api10s)} wells, {n_ok} stream-fits succeeded, "
-            f"{n_failed} skipped/failed."
+            f"Refit: {len(api10s)} wells, {n_ok} stream-fits succeeded, {n_failed} skipped/failed."
         )
 
     return 0

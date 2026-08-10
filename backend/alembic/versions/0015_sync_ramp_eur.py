@@ -74,23 +74,18 @@ def upgrade() -> None:
                 params=params,
             )
         except Exception as e:
-            log.warning(
-                "eur_recompute_failed", id=str(row.id), error=str(e)[:200]
-            )
+            log.warning("eur_recompute_failed", id=str(row.id), error=str(e)[:200])
             skipped += 1
             continue
         conn.execute(
-            sa.text(
-                "UPDATE forecasts SET eur = :eur, params = :params "
-                "WHERE id = :id"
-            ).bindparams(sa.bindparam("params", type_=JSONB())),
+            sa.text("UPDATE forecasts SET eur = :eur, params = :params WHERE id = :id").bindparams(
+                sa.bindparam("params", type_=JSONB())
+            ),
             {"eur": float(new_eur), "params": params, "id": row.id},
         )
         updated += 1
 
-    log.info(
-        "params_ramp_sync_done", updated=updated, skipped=skipped
-    )
+    log.info("params_ramp_sync_done", updated=updated, skipped=skipped)
 
 
 def downgrade() -> None:

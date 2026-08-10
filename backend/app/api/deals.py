@@ -100,9 +100,7 @@ from app.warehouse_client.session import get_warehouse_session
 router = APIRouter(prefix="/deals", tags=["deals"])
 log = get_logger("api.deals")
 
-XLSX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 # ============================ schemas ============================
@@ -214,11 +212,13 @@ def list_deals(session: Session = Depends(get_session)) -> list[DealSummary]:
 @router.get("/{deal_id}", response_model=DealRow)
 def get_deal(deal_id: uuid.UUID, session: Session = Depends(get_session)) -> DealRow:
     deal = _load_or_404(session, deal_id)
-    curves = session.execute(
-        select(TypeCurve)
-        .where(TypeCurve.deal_id == deal_id)
-        .order_by(TypeCurve.name)
-    ).scalars().all()
+    curves = (
+        session.execute(
+            select(TypeCurve).where(TypeCurve.deal_id == deal_id).order_by(TypeCurve.name)
+        )
+        .scalars()
+        .all()
+    )
     return DealRow(
         id=deal.id,
         name=deal.name,
@@ -331,12 +331,12 @@ def _write_metadata_sheet(
     ws.append(["id", str(tc.id)])
     ws.append(["name", tc.name])
     ws.append(["notes", tc.notes or ""])
-    ws.append([
-        "normalization_basis",
-        _NORMALIZATION_LABEL.get(
-            tc.normalization_basis.value, tc.normalization_basis.value
-        ),
-    ])
+    ws.append(
+        [
+            "normalization_basis",
+            _NORMALIZATION_LABEL.get(tc.normalization_basis.value, tc.normalization_basis.value),
+        ]
+    )
     ws.append(["alignment_method", tc.alignment_method.value])
     # SPE / PRMS reserves orientation: the p10 columns are the HIGH
     # case (exceeded by 10% of wells), p90 the LOW case. Stamped here
@@ -346,9 +346,7 @@ def _write_metadata_sheet(
     # the sibling forecast sheet already carry the multiplier.
     if is_risked(tc.risk_multipliers or {}):
         ws.append(["risking", "geologic_multipliers_applied"])
-        for s_name, mul in sorted(
-            normalize_multipliers(tc.risk_multipliers or {}).items()
-        ):
+        for s_name, mul in sorted(normalize_multipliers(tc.risk_multipliers or {}).items()):
             ws.append([f"risk_mult_{s_name}", round(mul, 4)])
     else:
         ws.append(["risking", "unrisked"])
@@ -383,9 +381,7 @@ def _write_metadata_sheet(
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name, {})
         eur = _fitted_eur_per_1000ft(s)
-        ws.append(
-            [s_name, *(eur.get(k) for k in PERCENTILE_KEYS), eur.get("mean")]
-        )
+        ws.append([s_name, *(eur.get(k) for k in PERCENTILE_KEYS), eur.get("mean")])
     ws.append([])
 
     # Raw P50 Arps params per stream — same shape the
@@ -494,11 +490,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve, series: dict[str, Any]) -> Non
                     continue
                 rate = float(arr[i])
                 nxt = arr[i + 1] if i + 1 < len(arr) else None
-                b = (
-                    float(nxt)
-                    if nxt is not None and math.isfinite(float(nxt))
-                    else rate
-                )
+                b = float(nxt) if nxt is not None and math.isfinite(float(nxt)) else rate
                 cum_by_pct[key] += (rate + b) / 2.0 * _DAYS_PER_MONTH
                 row.append(rate)
                 row.append(cum_by_pct[key])
@@ -521,9 +513,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve, series: dict[str, Any]) -> Non
     ws.column_dimensions["A"].width = 10
 
 
-def _build_workbook(
-    deal: Deal, curves: list[TypeCurve], session: Session | None = None
-) -> bytes:
+def _build_workbook(deal: Deal, curves: list[TypeCurve], session: Session | None = None) -> bytes:
     from openpyxl import Workbook
 
     wb = Workbook()
@@ -558,15 +548,15 @@ _FILENAME_SLUG_RE = re.compile(r"[^A-Za-z0-9]+")
 
 
 @router.get("/{deal_id}/export.xlsx")
-def export_deal(
-    deal_id: uuid.UUID, session: Session = Depends(get_session)
-) -> Response:
+def export_deal(deal_id: uuid.UUID, session: Session = Depends(get_session)) -> Response:
     deal = _load_or_404(session, deal_id)
-    curves = session.execute(
-        select(TypeCurve)
-        .where(TypeCurve.deal_id == deal_id)
-        .order_by(TypeCurve.name)
-    ).scalars().all()
+    curves = (
+        session.execute(
+            select(TypeCurve).where(TypeCurve.deal_id == deal_id).order_by(TypeCurve.name)
+        )
+        .scalars()
+        .all()
+    )
     if not curves:
         raise HTTPException(status_code=400, detail="deal has no curves assigned")
     content = _build_workbook(deal, list(curves), session)
@@ -635,6 +625,7 @@ class BlueOxZoneSpec(BaseModel):
         if isinstance(v, str) and v.strip().upper() == "RES":
             return "UPSIDE"
         return v
+
     # narvi formation_blueox bench codes whose planned wells belong to
     # this zone (a zone commonly spans benches: WCA_1 + WCA_2 -> WCA).
     # Benches must be disjoint across zones WITHIN OVERLAPPING SCENARIO
@@ -735,10 +726,14 @@ def _inventory_row_from_narvi(nw: NarviInventoryWell) -> InventoryRow:
         gunbarrel_offset_ft=xs[0] if len(xs) >= 1 else None,
         gunbarrel_offset_b_ft=xs[1] if len(xs) >= 2 else None,
         lateral_azimuth_deg=nw.lateral_azimuth_deg,
-        heel_a_lon=leg_a[0], heel_a_lat=leg_a[1],
-        toe_a_lon=leg_a[2], toe_a_lat=leg_a[3],
-        heel_b_lon=leg_b[0], heel_b_lat=leg_b[1],
-        toe_b_lon=leg_b[2], toe_b_lat=leg_b[3],
+        heel_a_lon=leg_a[0],
+        heel_a_lat=leg_a[1],
+        toe_a_lon=leg_a[2],
+        toe_a_lat=leg_a[3],
+        heel_b_lon=leg_b[0],
+        heel_b_lat=leg_b[1],
+        toe_b_lon=leg_b[2],
+        toe_b_lat=leg_b[3],
     )
 
 
@@ -866,13 +861,15 @@ def _collect_blueox_zone(
     series = apply_risking(tc.series or {}, tc.risk_multipliers)
     streams = series.get("streams", {})
     fits_by_stream = {
-        s: _fitted_params_by_pct(streams.get(s) or {})
-        for s in ("oil", "gas", "water")
+        s: _fitted_params_by_pct(streams.get(s) or {}) for s in ("oil", "gas", "water")
     }
 
     def _rates(fit: dict[str, Any]) -> list[float]:
         evaluated = evaluate_fit(
-            qi=fit["qi"], Di=fit["Di"], b=fit["b"], Df=fit["Df"],
+            qi=fit["qi"],
+            Di=fit["Di"],
+            b=fit["b"],
+            Df=fit["Df"],
             qo=fit.get("qo", fit["qi"]),
             peak_index=fit.get("peak_index", 0),
             n_months=_FORECAST_N_MONTHS,
@@ -904,23 +901,25 @@ def _collect_blueox_zone(
             qi_units = _BLUEOX_QI_UNITS[stream]
             if basis == "per_1000_lateral_ft":
                 qi_units += " per 1,000 ft"
-            params_rows.append({
-                "stream": stream,
-                "level": lv,
-                # Already risked (the fit came from the risked series);
-                # risk_mult + qi_basis disclose it per the amendment.
-                "qi": float(fit["qi"]),
-                "qi_units": qi_units,
-                "qi_basis": "fitted_qi_risked" if muls[stream] != 1.0 else "fitted_qi",
-                "risk_mult": round(muls[stream], 4),
-                "b_factor": b_factor,
-                "di": di,
-                "dmin": float(fit["Df"]),
-                "notes": (
-                    f"{tc.alignment_method.value} alignment; qi at peak "
-                    f"month {peak_month}{eff_txt}"
-                ),
-            })
+            params_rows.append(
+                {
+                    "stream": stream,
+                    "level": lv,
+                    # Already risked (the fit came from the risked series);
+                    # risk_mult + qi_basis disclose it per the amendment.
+                    "qi": float(fit["qi"]),
+                    "qi_units": qi_units,
+                    "qi_basis": "fitted_qi_risked" if muls[stream] != 1.0 else "fitted_qi",
+                    "risk_mult": round(muls[stream], 4),
+                    "b_factor": b_factor,
+                    "di": di,
+                    "dmin": float(fit["Df"]),
+                    "notes": (
+                        f"{tc.alignment_method.value} alignment; qi at peak "
+                        f"month {peak_month}{eff_txt}"
+                    ),
+                }
+            )
         # Water rides on the base level only (contract: no percentile
         # water columns); included when a water fit exists.
         if lv == "P50":
@@ -939,9 +938,7 @@ def _collect_blueox_zone(
     # the receiver can map the analog cohort (2026-07-29 amendment,
     # additive columns after the shared 12 — lenient loaders unaffected).
     geo = well_geo_rows(session, list(tc.included_api10s or []))
-    analog_rows = [
-        tuple(r) + geo.get(str(r[0]), EMPTY_GEO) for r in analog_rows
-    ]
+    analog_rows = [tuple(r) + geo.get(str(r[0]), EMPTY_GEO) for r in analog_rows]
 
     inventory: list[InventoryRow] = []
     # narvi wells first: completed lateral (EUR driver) is the producing
@@ -964,12 +961,14 @@ def _collect_blueox_zone(
                 "and the analog cohort has no laterals to default from"
             )
             continue
-        inventory.append(InventoryRow(
-            producing_lateral_ft=float(producing),
-            drilled_lateral_ft=float(inv.drilled_lateral_ft),
-            well_name=inv.well_name,
-            category=inv.category,
-        ))
+        inventory.append(
+            InventoryRow(
+                producing_lateral_ft=float(producing),
+                drilled_lateral_ft=float(inv.drilled_lateral_ft),
+                well_name=inv.well_name,
+                category=inv.category,
+            )
+        )
 
     return ZoneData(
         zone_name=zone_name,
@@ -982,8 +981,7 @@ def _collect_blueox_zone(
         inventory=inventory,
         # Declared in the manifest when non-empty (scoped zones only).
         scenario_scope=tuple(
-            f"{ref.deal_id}/{ref.scenario_id}"
-            for ref in (spec.scenario_scope or [])
+            f"{ref.deal_id}/{ref.scenario_id}" for ref in (spec.scenario_scope or [])
         ),
     )
 
@@ -1025,8 +1023,7 @@ def _fetch_narvi_by_zone(
             if unknown:
                 errors.append(
                     f"zone {zname!r} scenario_scope names scenarios not in "
-                    "this drop's selections: "
-                    + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
+                    "this drop's selections: " + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
                 )
         for bench in spec.benches:
             claims = bench_claims.setdefault(bench, [])
@@ -1057,9 +1054,7 @@ def _fetch_narvi_by_zone(
     seen_pairs = {(w.deal_id, w.scenario_id) for w in wells}
     for pair in pairs:
         if pair not in seen_pairs:
-            errors.append(
-                f"narvi selection {pair[0]}/{pair[1]} matched no inventory wells"
-            )
+            errors.append(f"narvi selection {pair[0]}/{pair[1]} matched no inventory wells")
 
     # EXISTING producers (narvi category 'pdp', well_name = api10) ride
     # along as display rows for the downstream gunbarrel automation.
@@ -1126,17 +1121,14 @@ def _fetch_narvi_by_zone(
             "planned wells whose bench is zoned but whose scenario no "
             "zone's scenario_scope covers: "
             + ", ".join(
-                f"{b} in {d}/{s} ({n} wells)"
-                for (b, d, s), n in sorted(scope_missed.items())
+                f"{b} in {d}/{s} ({n} wells)" for (b, d, s), n in sorted(scope_missed.items())
             )
             + " — widen a zone's scope or exclude the bench"
         )
     for bench, n in excluded.items():
         if n == 0:
             errors.append(f"exclude_benches entry {bench!r} matched no wells")
-    exclusions = tuple(
-        f"{b} ({n} wells)" for b, n in sorted(excluded.items()) if n > 0
-    )
+    exclusions = tuple(f"{b} ({n} wells)" for b, n in sorted(excluded.items()) if n > 0)
     return by_zone, exclusions, unzoned_pdp
 
 
@@ -1146,8 +1138,7 @@ def _collect_blueox_data(
     """Assemble the full pure-builder input; 422 on any assembly problem."""
     errors: list[str] = []
     delivered = [
-        lv for lv in ("P10", "P25", "P50", "P75", "P90")
-        if lv == "P50" or lv in req.levels
+        lv for lv in ("P10", "P25", "P50", "P75", "P90") if lv == "P50" or lv in req.levels
     ]
 
     # Zone names must be resolved before the narvi distribution (the
@@ -1169,10 +1160,12 @@ def _collect_blueox_data(
         if w.completed_lateral_ft is None or w.drilled_lateral_ft is None:
             log.info("blueox_pdp_context_missing_laterals", well=w.well_name)
             continue
-        pdp_context_rows.append((
-            w.formation or "(unknown)",
-            _inventory_row_from_narvi(w),
-        ))
+        pdp_context_rows.append(
+            (
+                w.formation or "(unknown)",
+                _inventory_row_from_narvi(w),
+            )
+        )
 
     zones: list[ZoneData] = []
     curves: list[TypeCurve] = []
@@ -1196,7 +1189,12 @@ def _collect_blueox_data(
             )
         curves.append(tc)
         zone = _collect_blueox_zone(
-            session, tc, spec, delivered, req.curve_months, errors,
+            session,
+            tc,
+            spec,
+            delivered,
+            req.curve_months,
+            errors,
             narvi_wells=narvi_by_zone.get(spec.zone_name or tc.name, []),
         )
         if zone is not None:
@@ -1204,11 +1202,17 @@ def _collect_blueox_data(
             risked_by_zone[zone.zone_name] = is_risked(tc.risk_multipliers or {})
             all_apis.update(str(r[0]) for r in zone.analog_rows)
 
-    prod_rows_db = session.execute(
-        select(ProductionMonthly)
-        .where(ProductionMonthly.api10.in_(sorted(all_apis)))
-        .order_by(ProductionMonthly.api10, ProductionMonthly.prod_date)
-    ).scalars().all() if all_apis else []
+    prod_rows_db = (
+        session.execute(
+            select(ProductionMonthly)
+            .where(ProductionMonthly.api10.in_(sorted(all_apis)))
+            .order_by(ProductionMonthly.api10, ProductionMonthly.prod_date)
+        )
+        .scalars()
+        .all()
+        if all_apis
+        else []
+    )
 
     if not prod_rows_db:
         errors.append("no monthly production history found for any analog well")
@@ -1262,20 +1266,22 @@ def _collect_blueox_data(
         try:
             with contextmanager(get_warehouse_session)() as wh:
                 frames = fetch_narvi_dsu_frames(
-                    wh, [pair_by_dsu_id[d] for d in referenced_dsu_ids
-                         if d in pair_by_dsu_id],
+                    wh,
+                    [pair_by_dsu_id[d] for d in referenced_dsu_ids if d in pair_by_dsu_id],
                 )
                 # TC-vs-Novi benchmark (2026-07-27 amendment): one row
                 # per zone, always — n=0 rows declare stickless zones.
                 novi_vintage = fetch_intel_vintage(wh)
                 for zone in zones:
-                    novi_comparison.append(_collect_novi_comparison(
-                        wh,
-                        zone.zone_name,
-                        narvi_by_zone.get(zone.zone_name, []),
-                        risked_by_zone.get(zone.zone_name, False),
-                        novi_vintage,
-                    ))
+                    novi_comparison.append(
+                        _collect_novi_comparison(
+                            wh,
+                            zone.zone_name,
+                            narvi_by_zone.get(zone.zone_name, []),
+                            risked_by_zone.get(zone.zone_name, False),
+                            novi_vintage,
+                        )
+                    )
         except Exception as exc:  # surface as a 422, not a 500
             raise HTTPException(
                 status_code=422,
@@ -1283,8 +1289,10 @@ def _collect_blueox_data(
             ) from exc
         dsu_meta = [
             DsuMetaRow(
-                dsu_id=f.dsu_id, azimuth_deg=f.azimuth_deg,
-                origin_lon=f.origin_lon, origin_lat=f.origin_lat,
+                dsu_id=f.dsu_id,
+                azimuth_deg=f.azimuth_deg,
+                origin_lon=f.origin_lon,
+                origin_lat=f.origin_lat,
             )
             for f in frames
         ]
@@ -1337,17 +1345,19 @@ def _scenario_status(
     out = []
     for s in selections:
         cur = current.get((s.deal_id, s.scenario_id))
-        out.append({
-            "deal_id": s.deal_id,
-            "scenario_id": s.scenario_id,
-            "pinned_updated_at": s.pinned_updated_at,
-            "current_updated_at": cur,
-            "stale": (
-                s.pinned_updated_at is not None
-                and cur is not None
-                and cur != s.pinned_updated_at
-            ),
-        })
+        out.append(
+            {
+                "deal_id": s.deal_id,
+                "scenario_id": s.scenario_id,
+                "pinned_updated_at": s.pinned_updated_at,
+                "current_updated_at": cur,
+                "stale": (
+                    s.pinned_updated_at is not None
+                    and cur is not None
+                    and cur != s.pinned_updated_at
+                ),
+            }
+        )
     return out
 
 
@@ -1386,9 +1396,7 @@ class NoviComparisonResponse(BaseModel):
     zones: list[NoviComparisonZoneOut]
 
 
-@router.get(
-    "/{deal_id}/novi-comparison", response_model=NoviComparisonResponse
-)
+@router.get("/{deal_id}/novi-comparison", response_model=NoviComparisonResponse)
 def get_novi_comparison(
     deal_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> NoviComparisonResponse:
@@ -1438,34 +1446,34 @@ def get_novi_comparison(
                     is_risked(tc.risk_multipliers or {}),
                     vintage,
                 )
-                out.append(NoviComparisonZoneOut(
-                    zone_name=comp.zone_name,
-                    type_curve_id=spec.type_curve_id,
-                    n_sticks=comp.n_sticks,
-                    n_self=comp.n_self,
-                    n_neighborhood=comp.n_neighborhood,
-                    n_pud=comp.n_pud,
-                    n_res=comp.n_res,
-                    n_wells_no_set=comp.n_wells_no_set,
-                    radius_m=comp.radius_m,
-                    lateral_tol=comp.lateral_tol,
-                    low_n=comp.low_n,
-                    stale_vintage=comp.stale_vintage,
-                    tc_risked=comp.tc_risked,
-                    intel_vintage=comp.intel_vintage,
-                    step_days=STEP_DAYS,
-                    # The collection returns period VOLUMES (the
-                    # workbook convention); the chart wants rates.
-                    oil_rate=[v / STEP_DAYS for v in comp.oil_bbl],
-                    gas_rate=[v / STEP_DAYS for v in comp.gas_mcf],
-                    water_rate=[v / STEP_DAYS for v in comp.water_bbl],
-                ))
+                out.append(
+                    NoviComparisonZoneOut(
+                        zone_name=comp.zone_name,
+                        type_curve_id=spec.type_curve_id,
+                        n_sticks=comp.n_sticks,
+                        n_self=comp.n_self,
+                        n_neighborhood=comp.n_neighborhood,
+                        n_pud=comp.n_pud,
+                        n_res=comp.n_res,
+                        n_wells_no_set=comp.n_wells_no_set,
+                        radius_m=comp.radius_m,
+                        lateral_tol=comp.lateral_tol,
+                        low_n=comp.low_n,
+                        stale_vintage=comp.stale_vintage,
+                        tc_risked=comp.tc_risked,
+                        intel_vintage=comp.intel_vintage,
+                        step_days=STEP_DAYS,
+                        # The collection returns period VOLUMES (the
+                        # workbook convention); the chart wants rates.
+                        oil_rate=[v / STEP_DAYS for v in comp.oil_bbl],
+                        gas_rate=[v / STEP_DAYS for v in comp.gas_mcf],
+                        water_rate=[v / STEP_DAYS for v in comp.water_bbl],
+                    )
+                )
     except HTTPException:
         raise
     except Exception as exc:  # surface as a 422, not a 500
-        raise HTTPException(
-            status_code=422, detail=f"novi comparison fetch failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"novi comparison fetch failed: {exc}") from exc
     return NoviComparisonResponse(zones=out)
 
 
@@ -1477,9 +1485,7 @@ def get_blueox_config(
     if not deal.blueox_config:
         return BlueOxConfigResponse(config=None, narvi_status=[])
     cfg = BlueOxExportRequest.model_validate(deal.blueox_config)
-    return BlueOxConfigResponse(
-        config=cfg, narvi_status=_scenario_status(cfg.narvi_selections)
-    )
+    return BlueOxConfigResponse(config=cfg, narvi_status=_scenario_status(cfg.narvi_selections))
 
 
 @router.put("/{deal_id}/blueox-config", response_model=BlueOxConfigResponse)
@@ -1508,8 +1514,7 @@ def put_blueox_config(
                 detail=(
                     f"zone {spec.zone_name or spec.type_curve_id!s} "
                     "scenario_scope names scenarios not in this config's "
-                    "selections: "
-                    + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
+                    "selections: " + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
                 ),
             )
     pairs = [(s.deal_id, s.scenario_id) for s in req.narvi_selections]
@@ -1525,17 +1530,14 @@ def put_blueox_config(
         if missing:
             raise HTTPException(
                 status_code=422,
-                detail="narvi scenarios not found: "
-                + ", ".join(f"{d}/{s}" for d, s in missing),
+                detail="narvi scenarios not found: " + ", ".join(f"{d}/{s}" for d, s in missing),
             )
         for sel in req.narvi_selections:
             sel.pinned_updated_at = current[(sel.deal_id, sel.scenario_id)]
     deal.blueox_config = req.model_dump(mode="json")
     session.commit()
     log.info("deal_blueox_config_saved", id=str(deal_id), codename=req.codename)
-    return BlueOxConfigResponse(
-        config=req, narvi_status=_scenario_status(req.narvi_selections)
-    )
+    return BlueOxConfigResponse(config=req, narvi_status=_scenario_status(req.narvi_selections))
 
 
 # Read-only narvi passthroughs (the config UI's scenario pick list).
@@ -1614,18 +1616,14 @@ class NarviScenarioDetailOut(BaseModel):
 
 
 @narvi_router.get("/scenario-detail", response_model=NarviScenarioDetailOut)
-def get_narvi_scenario_detail(
-    deal_id: str, scenario_id: str
-) -> NarviScenarioDetailOut:
+def get_narvi_scenario_detail(deal_id: str, scenario_id: str) -> NarviScenarioDetailOut:
     """Geometry payload for one scenario — the dossier preview's map
     (AOI + legs/turns) and gunbarrel (offset vs TVD) inputs."""
     try:
         with contextmanager(get_warehouse_session)() as wh:
             detail = fetch_narvi_scenario_detail(wh, deal_id, scenario_id)
     except Exception as exc:
-        raise HTTPException(
-            status_code=502, detail=f"narvi scenario detail failed: {exc}"
-        ) from exc
+        raise HTTPException(status_code=502, detail=f"narvi scenario detail failed: {exc}") from exc
     if detail is None:
         raise HTTPException(
             status_code=404,
@@ -1656,9 +1654,7 @@ def get_narvi_scenario_detail(
     )
 
 
-PPTX_MEDIA_TYPE = (
-    "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-)
+PPTX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
 
 
 @router.post("/{deal_id}/dossier.pptx")
@@ -1689,9 +1685,7 @@ async def export_deal_dossier(
     try:
         manifest = json.loads(raw_manifest)
     except ValueError as exc:
-        raise HTTPException(
-            status_code=422, detail=f"manifest is not valid JSON: {exc}"
-        ) from exc
+        raise HTTPException(status_code=422, detail=f"manifest is not valid JSON: {exc}") from exc
 
     pngs: dict[str, bytes] = {}
     for key, value in form.multi_items():
@@ -1701,9 +1695,7 @@ async def export_deal_dossier(
     def png(name: str) -> bytes:
         data = pngs.get(name)
         if not data:
-            raise HTTPException(
-                status_code=422, detail=f"missing panel image {name!r}"
-            )
+            raise HTTPException(status_code=422, detail=f"missing panel image {name!r}")
         return data
 
     scenarios: list[ScenarioSlideInput] = []
@@ -1721,9 +1713,7 @@ async def export_deal_dossier(
         try:
             tc_id = uuid.UUID(str(cv.get("type_curve_id")))
         except ValueError as exc:
-            raise HTTPException(
-                status_code=422, detail=f"curve {i}: bad type_curve_id"
-            ) from exc
+            raise HTTPException(status_code=422, detail=f"curve {i}: bad type_curve_id") from exc
         curves.append(
             CurveSlideInput(
                 type_curve_id=tc_id,

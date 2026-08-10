@@ -29,9 +29,22 @@ PER_10K_FACTOR: float = 10.0
 # and ``frontend/src/components/slide/SlideParamTable.tsx::HEADERS``.
 PARAM_HEADERS: tuple[str, ...] = (
     "Type Curve Name",
-    "Oil Initial", "Oil Mo", "Oil Peak", "Oil B", "Oil Di", "Oil EUR",
-    "Gas Initial", "Gas Mo", "Gas Peak", "Gas B", "Gas Di", "Gas EUR",
-    "Water Peak", "Water B", "Water Di", "Water EUR",
+    "Oil Initial",
+    "Oil Mo",
+    "Oil Peak",
+    "Oil B",
+    "Oil Di",
+    "Oil EUR",
+    "Gas Initial",
+    "Gas Mo",
+    "Gas Peak",
+    "Gas B",
+    "Gas Di",
+    "Gas EUR",
+    "Water Peak",
+    "Water B",
+    "Water Di",
+    "Water EUR",
 )
 
 

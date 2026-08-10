@@ -60,9 +60,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "ix_deal_polygons_deal_id", "deal_polygons", ["deal_id"]
-    )
+    op.create_index("ix_deal_polygons_deal_id", "deal_polygons", ["deal_id"])
     op.create_index(
         "ix_deal_polygons_geom_gist",
         "deal_polygons",

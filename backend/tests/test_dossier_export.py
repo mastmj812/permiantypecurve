@@ -61,9 +61,7 @@ def _curve_input(tc: Any) -> CurveSlideInput:
 
 
 def _slide_texts(slide: Any) -> str:
-    return " ".join(
-        sh.text_frame.text for sh in slide.shapes if sh.has_text_frame
-    )
+    return " ".join(sh.text_frame.text for sh in slide.shapes if sh.has_text_frame)
 
 
 def test_dossier_slide_order_and_shapes() -> None:
@@ -80,10 +78,7 @@ def test_dossier_slide_order_and_shapes() -> None:
     for idx, title in ((0, "plan_brotime_20"), (1, "plan_brotime_20_35")):
         slide = pres.slides[idx]
         pictures = [s for s in slide.shapes if isinstance(s, Picture)]
-        tables = [
-            s for s in slide.shapes
-            if isinstance(s, GraphicFrame) and s.has_table
-        ]
+        tables = [s for s in slide.shapes if isinstance(s, GraphicFrame) and s.has_table]
         assert len(pictures) == 2  # map + gunbarrel
         assert not tables  # param table stripped
         text = _slide_texts(slide)
@@ -92,10 +87,7 @@ def test_dossier_slide_order_and_shapes() -> None:
 
     for idx, stream in ((2, "Oil"), (3, "Gas"), (4, "Water")):
         slide = pres.slides[idx]
-        tables = [
-            s for s in slide.shapes
-            if isinstance(s, GraphicFrame) and s.has_table
-        ]
+        tables = [s for s in slide.shapes if isinstance(s, GraphicFrame) and s.has_table]
         assert len(tables) == 1  # 17-col param table
         pictures = [s for s in slide.shapes if isinstance(s, Picture)]
         assert len(pictures) == 3  # rate + cum + map
@@ -120,9 +112,7 @@ def test_dossier_rejects_unknown_curve_and_empty() -> None:
             [
                 CurveSlideInput(
                     type_curve_id=uuid.uuid4(),
-                    stream_pngs=dict.fromkeys(
-                        ("oil", "gas", "water"), (_PNG, _PNG)
-                    ),
+                    stream_pngs=dict.fromkeys(("oil", "gas", "water"), (_PNG, _PNG)),
                     map_png=_PNG,
                 )
             ],
@@ -152,10 +142,7 @@ def test_dossier_comparison_slides_append_after_curves() -> None:
     assert len(pres.slides) == 5
     slide = pres.slides[4]
     pictures = [s for s in slide.shapes if isinstance(s, Picture)]
-    tables = [
-        s for s in slide.shapes
-        if isinstance(s, GraphicFrame) and s.has_table
-    ]
+    tables = [s for s in slide.shapes if isinstance(s, GraphicFrame) and s.has_table]
     assert len(pictures) == 1  # the single full-width figure
     assert not tables  # param table stripped
     text = _slide_texts(slide)

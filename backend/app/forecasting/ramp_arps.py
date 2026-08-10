@@ -95,9 +95,7 @@ def evaluate_well_rate(
     # at 0 right at the seam → rate equals qi → matches the ramp's
     # endpoint exactly.
     arps_t = t[~ramp_mask] - peak_t
-    out[~ramp_mask] = _eval_modified_hyperbolic_rate(
-        arps_t, qi=qi, Di=Di, b=b, Df=Df
-    )
+    out[~ramp_mask] = _eval_modified_hyperbolic_rate(arps_t, qi=qi, Di=Di, b=b, Df=Df)
     return np.maximum(out, 0.0)
 
 
@@ -179,17 +177,13 @@ def model_cum_at_t(
         return 0.0
     arps_params: dict[str, float] = {"qi": qi, "Di": Di, "b": b, "Df": Df}
     if qo is None or peak_index_months is None or peak_index_months <= 0:
-        return compute_eur(
-            "modified_hyperbolic", arps_params, horizon_years=t_years
-        )
+        return compute_eur("modified_hyperbolic", arps_params, horizon_years=t_years)
     peak_t = peak_index_months / 12.0
     if t_years <= peak_t:
         rate_at_t = qo + (qi - qo) * (t_years / peak_t)
         return ((qo + rate_at_t) / 2.0) * t_years * DAYS_PER_YEAR
     ramp_eur = compute_ramp_eur(qo=qo, qi=qi, peak_index=peak_index_months)
-    arps_cum = compute_eur(
-        "modified_hyperbolic", arps_params, horizon_years=t_years - peak_t
-    )
+    arps_cum = compute_eur("modified_hyperbolic", arps_params, horizon_years=t_years - peak_t)
     return ramp_eur + arps_cum
 
 
@@ -229,8 +223,7 @@ def compute_total_eur(
         model_type, params, horizon_years=arps_horizon, economic_limit=economic_limit
     )
     return (
-        compute_ramp_eur(qo=float(qo), qi=float(qi), peak_index=int(peak_index_months))
-        + arps_eur
+        compute_ramp_eur(qo=float(qo), qi=float(qi), peak_index=int(peak_index_months)) + arps_eur
     )
 
 
@@ -254,11 +247,7 @@ def trapezoid_eur(rates: Sequence[float | None]) -> float:
             continue
         a_f = float(a)
         nxt = rates[i + 1] if i + 1 < n else None
-        b_f = (
-            float(nxt)
-            if nxt is not None and math.isfinite(float(nxt))
-            else a_f
-        )
+        b_f = float(nxt) if nxt is not None and math.isfinite(float(nxt)) else a_f
         cum += (a_f + b_f) / 2.0 * _DAYS_PER_MONTH
     return cum
 
@@ -365,8 +354,12 @@ def evaluate_fit(
     """
     smoothed = build_ramp_arps_rate(
         n_months=n_months,
-        qo=qo, qi=qi, peak_index=peak_index,
-        Di=Di, b=b, Df=Df,
+        qo=qo,
+        qi=qi,
+        peak_index=peak_index,
+        Di=Di,
+        b=b,
+        Df=Df,
     )
     # The ramp consumes peak_t years up front; integrate the Arps tail
     # over the REMAINING (horizon - peak_t) years so ramp_eur + arps_eur

@@ -115,9 +115,7 @@ def build_deal_dossier_pptx(
 
     pres = Presentation(str(TEMPLATE_PATH))
     if len(pres.slides) < 2:
-        raise ValueError(
-            "template must have at least 2 slides (stream slide + well table)"
-        )
+        raise ValueError("template must have at least 2 slides (stream slide + well table)")
 
     # Template is [stream_template, wells]. Every dossier slide starts
     # as a duplicate of the stream template (appended at the end); the

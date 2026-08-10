@@ -62,9 +62,7 @@ def upgrade() -> None:
                 params=params,
             )
         except Exception as e:
-            log.warning(
-                "eur_recompute_failed", id=str(row.id), error=str(e)[:200]
-            )
+            log.warning("eur_recompute_failed", id=str(row.id), error=str(e)[:200])
             skipped += 1
             continue
         # Cast a JSON-serialized string into jsonb directly. Doesn't
@@ -72,8 +70,7 @@ def upgrade() -> None:
         # which was the suspected failure mode in 0015.
         conn.execute(
             sa.text(
-                "UPDATE forecasts SET eur = :eur, params = CAST(:params AS jsonb) "
-                "WHERE id = :id"
+                "UPDATE forecasts SET eur = :eur, params = CAST(:params AS jsonb) WHERE id = :id"
             ),
             {
                 "eur": float(new_eur),

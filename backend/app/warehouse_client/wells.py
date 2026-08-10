@@ -83,6 +83,7 @@ _FETCH_ONE_SQL = text(
 
 def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
     """Build a WellHeader from a SQLAlchemy result mapping."""
+
     def _to_float(v: object) -> float | None:
         # curated stores some intensity columns as bigint/integer; widen
         # to float for downstream rate math.

@@ -41,10 +41,7 @@ log = get_logger("alembic.0014_recompute_total_eur")
 def upgrade() -> None:
     conn = op.get_bind()
     rows = conn.execute(
-        sa.text(
-            "SELECT id, model_type, params FROM forecasts "
-            "WHERE params IS NOT NULL"
-        )
+        sa.text("SELECT id, model_type, params FROM forecasts WHERE params IS NOT NULL")
     ).fetchall()
 
     updated = 0

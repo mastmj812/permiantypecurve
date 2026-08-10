@@ -116,6 +116,7 @@ def detect_at_bound(
             notes.append(f"b at upper bound ({B_HI:.1f})")
     return (bool(notes), "; ".join(notes) if notes else None)
 
+
 # Volume + rate columns per stream — match production_monthly schema.
 STREAM_RATE_COLUMN = {
     "oil": "rate_calday_bopd",
@@ -185,9 +186,7 @@ def _flag_downtime(rates: pd.Series, absolute_floor: float = 0.0) -> pd.Series:
     max. The absolute floor is separate from that — pass 0.0 to
     disable the absolute leg entirely (the pre-floor behavior).
     """
-    local_max = rates.rolling(
-        window=_DOWNTIME_WINDOW, center=True, min_periods=1
-    ).max()
+    local_max = rates.rolling(window=_DOWNTIME_WINDOW, center=True, min_periods=1).max()
     relative_threshold = (_DOWNTIME_THRESHOLD * local_max).clip(lower=1.0)
     return (rates < relative_threshold) | (rates < absolute_floor)
 
@@ -247,9 +246,7 @@ def _rmse(actual: NDArray[np.float64], predicted: NDArray[np.float64]) -> float:
     return float(np.sqrt(np.mean((actual - predicted) ** 2)))
 
 
-def _cum_callable(
-    model_type: str, df_terminal: float
-) -> Callable[..., NDArray[np.float64]]:
+def _cum_callable(model_type: str, df_terminal: float) -> Callable[..., NDArray[np.float64]]:
     """Curry the Df out of modified_hyperbolic so curve_fit only varies the
     free parameters listed in MODEL_FREE_PARAMS."""
     if model_type == "arps_exponential":
@@ -263,9 +260,7 @@ def _cum_callable(
     raise ValueError(f"unsupported model_type: {model_type}")
 
 
-def _rate_callable(
-    model_type: str, df_terminal: float
-) -> Callable[..., NDArray[np.float64]]:
+def _rate_callable(model_type: str, df_terminal: float) -> Callable[..., NDArray[np.float64]]:
     if model_type == "arps_exponential":
         return arps_exponential
     if model_type == "arps_hyperbolic":
@@ -391,9 +386,7 @@ def _fit_core(
     """
     t = df["t_years"].to_numpy(dtype=float)
     y = df[target_col].to_numpy(dtype=float)
-    popt, _pcov = curve_fit(
-        func, t, y, p0=p0, bounds=bounds, maxfev=10_000
-    )
+    popt, _pcov = curve_fit(func, t, y, p0=p0, bounds=bounds, maxfev=10_000)
     return popt, func(t, *popt)
 
 
@@ -452,9 +445,7 @@ def fit_rate_cum(
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
     floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
-    df, downtime_ratio = _post_peak_slice(
-        monthly_df, peak, rate_col, vol_col, downtime_floor=floor
-    )
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, downtime_floor=floor)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
@@ -462,13 +453,16 @@ def fit_rate_cum(
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
     bounds, p0 = _bounds_and_p0(
-        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg),
-        qi_lo=qi_lo, qi_hi=qi_hi, b_lo=b_lo, b_hi=b_hi,
+        model_type,
+        peak.peak_rate,
+        di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo,
+        qi_hi=qi_hi,
+        b_lo=b_lo,
+        b_hi=b_hi,
     )
 
-    popt, predicted = _fit_core(
-        df, target_col="cum_vol", func=func, bounds=bounds, p0=p0
-    )
+    popt, predicted = _fit_core(df, target_col="cum_vol", func=func, bounds=bounds, p0=p0)
     actual = df["cum_vol"].to_numpy(dtype=float)
     return _build_result(
         model_type=model_type,
@@ -498,9 +492,7 @@ def fit_rate_time(
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
     floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
-    df, downtime_ratio = _post_peak_slice(
-        monthly_df, peak, rate_col, vol_col, downtime_floor=floor
-    )
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, downtime_floor=floor)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)
@@ -508,13 +500,16 @@ def fit_rate_time(
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
     bounds, p0 = _bounds_and_p0(
-        model_type, peak.peak_rate, di_hi=_stream_di_hi(stream, cfg),
-        qi_lo=qi_lo, qi_hi=qi_hi, b_lo=b_lo, b_hi=b_hi,
+        model_type,
+        peak.peak_rate,
+        di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo,
+        qi_hi=qi_hi,
+        b_lo=b_lo,
+        b_hi=b_hi,
     )
 
-    popt, predicted = _fit_core(
-        df, target_col="rate", func=func, bounds=bounds, p0=p0
-    )
+    popt, predicted = _fit_core(df, target_col="rate", func=func, bounds=bounds, p0=p0)
     actual = df["rate"].to_numpy(dtype=float)
     return _build_result(
         model_type=model_type,
@@ -561,9 +556,8 @@ def _di_at_bound(di: float | None, *, di_hi: float = DI_NOMINAL_HI_PER_YEAR) -> 
     """
     if di is None:
         return False
-    return (
-        di < DI_NOMINAL_LO_PER_YEAR * (1 + BOUND_TOLERANCE_PCT)
-        or di > di_hi * (1 - BOUND_TOLERANCE_PCT)
+    return di < DI_NOMINAL_LO_PER_YEAR * (1 + BOUND_TOLERANCE_PCT) or di > di_hi * (
+        1 - BOUND_TOLERANCE_PCT
     )
 
 

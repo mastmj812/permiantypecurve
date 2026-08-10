@@ -42,19 +42,13 @@ def _rate_at_t(model_type: str, params: dict[str, float], t: float) -> float:
     if model_type == "arps_harmonic":
         return float(arps_harmonic(t, params["qi"], params["Di"]))
     if model_type == "modified_hyperbolic":
-        return float(
-            modified_hyperbolic(
-                t, params["qi"], params["Di"], params["b"], params["Df"]
-            )
-        )
+        return float(modified_hyperbolic(t, params["qi"], params["Di"], params["b"], params["Df"]))
     if model_type == "duong":
         return float(duong(t, params["q1"], params["m"], params["a"]))
     raise ValueError(f"unknown model_type: {model_type}")
 
 
-def _solve_t_at_rate(
-    target_rate: float, model_type: str, params: dict[str, float]
-) -> float:
+def _solve_t_at_rate(target_rate: float, model_type: str, params: dict[str, float]) -> float:
     """Time (years) at which the model's rate drops to `target_rate`.
 
     Returns inf if the rate never reaches the target (e.g. target > qi).
@@ -89,9 +83,7 @@ def _solve_t_at_rate(
         Di, b, Df = params["Di"], params["b"], params["Df"]
         t_s = switchover_time(Di, Df, b)
         if not math.isfinite(t_s):
-            return _solve_t_at_rate(
-                target_rate, "arps_hyperbolic", {"qi": qi, "Di": Di, "b": b}
-            )
+            return _solve_t_at_rate(target_rate, "arps_hyperbolic", {"qi": qi, "Di": Di, "b": b})
         q_s = qi * (Df / Di) ** (1.0 / b)
         if target_rate < q_s:
             # Reached after switchover, in the exponential tail.

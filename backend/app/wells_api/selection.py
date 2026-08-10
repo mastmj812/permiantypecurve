@@ -46,6 +46,7 @@ log = get_logger("api.wells.selection")
 
 # ---------------- request/response models ----------------
 
+
 class FilterSpecBody(BaseModel):
     formations: list[str] = Field(default_factory=list)
     operators: list[str] = Field(default_factory=list)
@@ -75,9 +76,7 @@ class FilterSpecBody(BaseModel):
             formations=tuple(self.formations),
             operators=tuple(self.operators),
             counties=tuple(self.counties),
-            statuses=tuple(
-                WellStatus(s) for s in self.statuses if s in WellStatus.__members__
-            )
+            statuses=tuple(WellStatus(s) for s in self.statuses if s in WellStatus.__members__)
             or (WellStatus.PDP,),
             first_prod_start=self.first_prod_start,
             first_prod_end=self.first_prod_end,
@@ -159,14 +158,11 @@ def _rows_for_api10s(session: Session, api10s: list[str]) -> list[WellSummaryRow
 
 # ---------------- spatial selection ----------------
 
+
 @router.post("/select", response_model=SelectResponse)
-def select_wells(
-    req: SelectRequest, session: Session = Depends(get_session)
-) -> SelectResponse:
+def select_wells(req: SelectRequest, session: Session = Depends(get_session)) -> SelectResponse:
     if req.polygon is None and req.bbox is None:
-        raise HTTPException(
-            status_code=400, detail="must provide either polygon or bbox"
-        )
+        raise HTTPException(status_code=400, detail="must provide either polygon or bbox")
 
     spec = req.filters.to_spec()
     filter_clauses = spec.to_sqlalchemy_clauses()
@@ -177,15 +173,15 @@ def select_wells(
     if req.polygon is not None:
         # GeoJSON arrives as Python dict — psycopg passes it as text to
         # ST_GeomFromGeoJSON which wants a JSON string, not a record.
-        geom_sql = text(
-            "ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326)"
-        ).bindparams(geojson=json.dumps(req.polygon))
+        geom_sql = text("ST_SetSRID(ST_GeomFromGeoJSON(:geojson), 4326)").bindparams(
+            geojson=json.dumps(req.polygon)
+        )
     else:
         assert req.bbox is not None
         w, s, e, n = req.bbox
-        geom_sql = text(
-            "ST_SetSRID(ST_MakeEnvelope(:w, :s, :e, :n, 4326), 4326)"
-        ).bindparams(w=w, s=s, e=e, n=n)
+        geom_sql = text("ST_SetSRID(ST_MakeEnvelope(:w, :s, :e, :n, 4326), 4326)").bindparams(
+            w=w, s=s, e=e, n=n
+        )
 
     candidate = func.coalesce(Well.wellstick, Well.sh_geom)
     spatial = func.ST_Intersects(candidate, geom_sql)
@@ -228,6 +224,7 @@ def select_wells(
 
 
 # ---------------- summary-only refresh ----------------
+
 
 @router.post("/summary", response_model=SummaryResponse)
 def summary_for_api10s(

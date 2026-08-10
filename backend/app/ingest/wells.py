@@ -103,9 +103,7 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
         values = header_to_upsert_values(h, now)
         stmt = pg_insert(Well.__table__).values(**values)
         update_cols = {c: stmt.excluded[c] for c in values if c != "api10"}
-        stmt = stmt.on_conflict_do_update(
-            index_elements=["api10"], set_=update_cols
-        )
+        stmt = stmt.on_conflict_do_update(index_elements=["api10"], set_=update_cols)
         session.execute(stmt)
         n += 1
     session.commit()
@@ -114,6 +112,4 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
 
 
 def well_exists(session: Session, api10: str) -> bool:
-    return (
-        session.scalar(select(Well.api10).where(Well.api10 == api10)) is not None
-    )
+    return session.scalar(select(Well.api10).where(Well.api10 == api10)) is not None

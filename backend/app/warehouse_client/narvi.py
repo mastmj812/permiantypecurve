@@ -107,9 +107,8 @@ class NarviInventoryWell:
     novi_wellname: str | None = None
 
 
-_FETCH_SQL = (
-    text(
-        """
+_FETCH_SQL = text(
+    """
         SELECT deal_id, scenario_id, well_name, formation,
                completed_lateral_ft, drilled_lateral_ft, well_type,
                target_tvd_ft, lateral_azimuth_deg,
@@ -123,8 +122,7 @@ _FETCH_SQL = (
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id, well_name
         """
-    ).bindparams(bindparam("pairs", expanding=True))
-)
+).bindparams(bindparam("pairs", expanding=True))
 
 
 def _parse_legs(
@@ -144,12 +142,12 @@ def _parse_legs(
         heel = leg.get("heel_lonlat")
         toe = leg.get("toe_lonlat")
         if (
-            isinstance(heel, (list, tuple)) and len(heel) == 2
-            and isinstance(toe, (list, tuple)) and len(toe) == 2
+            isinstance(heel, (list, tuple))
+            and len(heel) == 2
+            and isinstance(toe, (list, tuple))
+            and len(toe) == 2
         ):
-            quads.append(
-                (float(heel[0]), float(heel[1]), float(toe[0]), float(toe[1]))
-            )
+            quads.append((float(heel[0]), float(heel[1]), float(toe[0]), float(toe[1])))
     return tuple(xs), tuple(quads)
 
 
@@ -240,15 +238,13 @@ def fetch_narvi_scenarios(wh: Session) -> list[NarviScenario]:
     ]
 
 
-_UPDATED_AT_SQL = (
-    text(
-        """
+_UPDATED_AT_SQL = text(
+    """
         SELECT deal_id, scenario_id, updated_at
         FROM narvi.scenario
         WHERE (deal_id, scenario_id) IN :pairs
         """
-    ).bindparams(bindparam("pairs", expanding=True))
-)
+).bindparams(bindparam("pairs", expanding=True))
 
 
 def fetch_scenario_updated_at(
@@ -259,9 +255,7 @@ def fetch_scenario_updated_at(
     absent from the result."""
     if not selections:
         return {}
-    rows = wh.execute(
-        _UPDATED_AT_SQL, {"pairs": [tuple(p) for p in selections]}
-    ).all()
+    rows = wh.execute(_UPDATED_AT_SQL, {"pairs": [tuple(p) for p in selections]}).all()
     return {(r.deal_id, r.scenario_id): r.updated_at.isoformat() for r in rows}
 
 
@@ -334,9 +328,7 @@ def fetch_narvi_scenario_detail(
     ).one_or_none()
     if header is None:
         return None
-    rows = wh.execute(
-        _DETAIL_WELLS_SQL, {"deal_id": deal_id, "scenario_id": scenario_id}
-    ).all()
+    rows = wh.execute(_DETAIL_WELLS_SQL, {"deal_id": deal_id, "scenario_id": scenario_id}).all()
     wells: list[NarviScenarioWellGeo] = []
     for r in rows:
         xs: list[float] = []
@@ -357,13 +349,9 @@ def fetch_narvi_scenario_detail(
                 well_type=r.well_type,
                 n_legs=r.n_legs,
                 completed_lateral_ft=(
-                    float(r.completed_lateral_ft)
-                    if r.completed_lateral_ft is not None
-                    else None
+                    float(r.completed_lateral_ft) if r.completed_lateral_ft is not None else None
                 ),
-                target_tvd_ft=(
-                    float(r.target_tvd_ft) if r.target_tvd_ft is not None else None
-                ),
+                target_tvd_ft=(float(r.target_tvd_ft) if r.target_tvd_ft is not None else None),
                 legs_geojson=r.legs_geojson,
                 turn_geojson=r.turn_geojson,
                 gunbarrel_xs=tuple(xs),
@@ -397,9 +385,8 @@ class NarviDsuFrame:
 # Origin must match narvi exactly: narvi takes the parcel centroid in
 # its WORK CRS (UTM 13N / EPSG:32613), so centroid there, then back to
 # WGS84 — a 4326 centroid can differ by metres on stretched parcels.
-_DSU_FRAME_SQL = (
-    text(
-        """
+_DSU_FRAME_SQL = text(
+    """
         SELECT deal_id, scenario_id, azimuth_deg,
                ST_X(ST_Transform(
                    ST_Centroid(ST_Transform(aoi_geom, 32613)), 4326)) AS origin_lon,
@@ -409,8 +396,7 @@ _DSU_FRAME_SQL = (
         WHERE (deal_id, scenario_id) IN :pairs
         ORDER BY deal_id, scenario_id
         """
-    ).bindparams(bindparam("pairs", expanding=True))
-)
+).bindparams(bindparam("pairs", expanding=True))
 
 
 def fetch_narvi_dsu_frames(
@@ -421,21 +407,13 @@ def fetch_narvi_dsu_frames(
     inventory fetch already flags typos)."""
     if not selections:
         return []
-    rows = wh.execute(
-        _DSU_FRAME_SQL, {"pairs": [tuple(p) for p in selections]}
-    ).all()
+    rows = wh.execute(_DSU_FRAME_SQL, {"pairs": [tuple(p) for p in selections]}).all()
     return [
         NarviDsuFrame(
             dsu_id=f"{r.deal_id}/{r.scenario_id}",
-            azimuth_deg=(
-                float(r.azimuth_deg) if r.azimuth_deg is not None else None
-            ),
-            origin_lon=(
-                float(r.origin_lon) if r.origin_lon is not None else None
-            ),
-            origin_lat=(
-                float(r.origin_lat) if r.origin_lat is not None else None
-            ),
+            azimuth_deg=(float(r.azimuth_deg) if r.azimuth_deg is not None else None),
+            origin_lon=(float(r.origin_lon) if r.origin_lon is not None else None),
+            origin_lat=(float(r.origin_lat) if r.origin_lat is not None else None),
         )
         for r in rows
     ]
@@ -463,26 +441,18 @@ def fetch_narvi_inventory(
                 well_name=r.well_name,
                 formation=r.formation,
                 completed_lateral_ft=(
-                    float(r.completed_lateral_ft)
-                    if r.completed_lateral_ft is not None
-                    else None
+                    float(r.completed_lateral_ft) if r.completed_lateral_ft is not None else None
                 ),
                 drilled_lateral_ft=(
-                    float(r.drilled_lateral_ft)
-                    if r.drilled_lateral_ft is not None
-                    else None
+                    float(r.drilled_lateral_ft) if r.drilled_lateral_ft is not None else None
                 ),
                 well_type=r.well_type,
                 category=r.category,
                 pdp_count_3mi=r.pdp_count_3mi,
                 handoff_category=r.handoff_category,
-                target_tvd_ft=(
-                    float(r.target_tvd_ft) if r.target_tvd_ft is not None else None
-                ),
+                target_tvd_ft=(float(r.target_tvd_ft) if r.target_tvd_ft is not None else None),
                 lateral_azimuth_deg=(
-                    float(r.lateral_azimuth_deg)
-                    if r.lateral_azimuth_deg is not None
-                    else None
+                    float(r.lateral_azimuth_deg) if r.lateral_azimuth_deg is not None else None
                 ),
                 gunbarrel_xs=xs,
                 legs_lonlat=quads,

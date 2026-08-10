@@ -15,9 +15,7 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
 
-    pmtiles_path: Path = Field(
-        default=Path("/app/basemap/permian.pmtiles"), alias="PMTILES_PATH"
-    )
+    pmtiles_path: Path = Field(default=Path("/app/basemap/permian.pmtiles"), alias="PMTILES_PATH")
     plss_geojson_path: Path = Field(
         default=Path("/app/basemap/plss_tx_nm.geojson"), alias="PLSS_GEOJSON_PATH"
     )
@@ -41,9 +39,7 @@ class Settings(BaseSettings):
     # the warehouse_client data layer (replaces enverus_client post-cutover).
     # None = warehouse not configured; warehouse_client calls raise on use,
     # but the app still boots so the legacy Enverus path keeps working.
-    warehouse_database_url: str | None = Field(
-        default=None, alias="WAREHOUSE_DATABASE_URL"
-    )
+    warehouse_database_url: str | None = Field(default=None, alias="WAREHOUSE_DATABASE_URL")
 
 
 settings = Settings()

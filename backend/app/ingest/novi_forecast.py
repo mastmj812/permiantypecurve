@@ -30,9 +30,7 @@ from app.warehouse_client.base import NoviForecastRecord
 log = get_logger("ingest.novi_forecast")
 
 
-def delete_novi_forecast_for_api10s(
-    session: Session, api10s: list[str]
-) -> int:
+def delete_novi_forecast_for_api10s(session: Session, api10s: list[str]) -> int:
     """Drop all existing Novi forecast rows for ``api10s``.
 
     Called by the sync orchestrator before re-inserting the fresh
@@ -43,9 +41,7 @@ def delete_novi_forecast_for_api10s(
     if not api10s:
         return 0
     result = session.execute(
-        delete(NoviForecastMonthly.__table__).where(
-            NoviForecastMonthly.api10.in_(api10s)
-        )
+        delete(NoviForecastMonthly.__table__).where(NoviForecastMonthly.api10.in_(api10s))
     )
     deleted = int(result.rowcount or 0)
     log.info("delete_novi_forecast_vintage", count=deleted)
@@ -65,9 +61,7 @@ def _record_to_row(r: NoviForecastRecord) -> dict[str, Any]:
     }
 
 
-def upsert_novi_forecast_records(
-    session: Session, records: Iterable[NoviForecastRecord]
-) -> int:
+def upsert_novi_forecast_records(session: Session, records: Iterable[NoviForecastRecord]) -> int:
     """Upsert a batch. Returns the count of rows written."""
     rows = [_record_to_row(r) for r in records]
     if not rows:
@@ -79,9 +73,7 @@ def upsert_novi_forecast_records(
         for c in NoviForecastMonthly.__table__.columns
         if c.name not in {"api10", "prod_date"}
     }
-    stmt = stmt.on_conflict_do_update(
-        index_elements=["api10", "prod_date"], set_=update_cols
-    )
+    stmt = stmt.on_conflict_do_update(index_elements=["api10", "prod_date"], set_=update_cols)
     session.execute(stmt)
     session.commit()
     log.info("upsert_novi_forecast", count=len(rows))

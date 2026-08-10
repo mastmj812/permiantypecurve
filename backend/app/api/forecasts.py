@@ -1,27 +1,27 @@
 """Forecast API.
 
-  POST /api/forecasts/batch
-      body: {api10s: [...], config?: {...}}
-      → 202; runs in background; poll /api/sync/status for the SyncJob row.
+POST /api/forecasts/batch
+    body: {api10s: [...], config?: {...}}
+    → 202; runs in background; poll /api/sync/status for the SyncJob row.
 
-  GET  /api/forecasts?api10=...
-      → list per-stream forecasts for one or more wells.
+GET  /api/forecasts?api10=...
+    → list per-stream forecasts for one or more wells.
 
-  GET  /api/forecasts/{id}
-      → single forecast.
+GET  /api/forecasts/{id}
+    → single forecast.
 
-  PATCH /api/forecasts/{id}
-      body: {params?: {...}, locked?: bool, manual_override?: bool}
-      → mutate fit params; recompute EUR; mark `manual_override=True`.
+PATCH /api/forecasts/{id}
+    body: {params?: {...}, locked?: bool, manual_override?: bool}
+    → mutate fit params; recompute EUR; mark `manual_override=True`.
 
-  GET  /api/forecasts/{api10}/curves
-      → for the detail modal: history (rate + cum) + forecast (rate + cum)
-        per stream, plus the prodday rates so the toggle works.
+GET  /api/forecasts/{api10}/curves
+    → for the detail modal: history (rate + cum) + forecast (rate + cum)
+      per stream, plus the prodday rates so the toggle works.
 
-  POST /api/forecasts/preview
-      body: {model_type, params, df_terminal?, horizon_years?, econ_limit?}
-      → server-side curve evaluation for live re-render when the user edits
-        qi/Di/b/Df in the modal.
+POST /api/forecasts/preview
+    body: {model_type, params, df_terminal?, horizon_years?, econ_limit?}
+    → server-side curve evaluation for live re-render when the user edits
+      qi/Di/b/Df in the modal.
 """
 
 from __future__ import annotations
@@ -197,8 +197,8 @@ class ForecastRow(BaseModel):
     fit_method: FitMethod
     fit_r2: float | None
     fit_rmse: float | None
-    fit_at_bound: bool          # one or more fit parameters pinned at a bound
-    bound_note: str | None      # human-readable details when fit_at_bound is True
+    fit_at_bound: bool  # one or more fit parameters pinned at a bound
+    bound_note: str | None  # human-readable details when fit_at_bound is True
     # Fraction of post-peak months excluded as downtime (0.0–1.0). High
     # values signal the engineer should eyeball the fit since the well
     # was offline a lot. None on rows that predate the column.
@@ -243,9 +243,7 @@ class ForecastRow(BaseModel):
     @classmethod
     def from_orm_row(cls, f: Forecast) -> ForecastRow:
         di_eff = (
-            effective_decline_first_year(f.di_initial, f.b)
-            if f.di_initial is not None
-            else None
+            effective_decline_first_year(f.di_initial, f.b) if f.di_initial is not None else None
         )
         at_bound, bound_note = (False, None)
         if f.qi is not None and f.di_initial is not None and f.peak_rate is not None:
@@ -254,22 +252,37 @@ class ForecastRow(BaseModel):
             # fit-time config isn't persisted, but the badge is a QC hint
             # and the defaults are what the autoforecast uses.
             at_bound, bound_note = detect_at_bound(
-                qi=f.qi, di=f.di_initial, b=f.b, peak_rate=f.peak_rate,
+                qi=f.qi,
+                di=f.di_initial,
+                b=f.b,
+                peak_rate=f.peak_rate,
                 di_hi=_stream_di_hi(f.stream.value, ForecastConfig()),
             )
         return cls(
-            id=f.id, api10=f.api10, stream=f.stream, model_type=f.model_type,
-            params=f.params, qi=f.qi, di_initial=f.di_initial,
-            di_effective=di_eff, b=f.b,
+            id=f.id,
+            api10=f.api10,
+            stream=f.stream,
+            model_type=f.model_type,
+            params=f.params,
+            qi=f.qi,
+            di_initial=f.di_initial,
+            di_effective=di_eff,
+            b=f.b,
             df_terminal=f.df_terminal,
-            qo=f.qo, peak_index_months=f.peak_index_months,
+            qo=f.qo,
+            peak_index_months=f.peak_index_months,
             eur=f.eur,
-            peak_month_date=f.peak_month_date, peak_rate=f.peak_rate,
-            fit_method=f.fit_method, fit_r2=f.fit_r2, fit_rmse=f.fit_rmse,
-            fit_at_bound=at_bound, bound_note=bound_note,
+            peak_month_date=f.peak_month_date,
+            peak_rate=f.peak_rate,
+            fit_method=f.fit_method,
+            fit_r2=f.fit_r2,
+            fit_rmse=f.fit_rmse,
+            fit_at_bound=at_bound,
+            bound_note=bound_note,
             downtime_ratio=f.downtime_ratio,
             diagnostics=f.diagnostics,
-            manual_override=f.manual_override, locked=f.locked,
+            manual_override=f.manual_override,
+            locked=f.locked,
             updated_at=f.updated_at,
         )
 
@@ -283,8 +296,8 @@ class PatchRequest(BaseModel):
 
 class StreamCurves(BaseModel):
     stream: Stream
-    months: list[date]                  # prod_date per history month
-    history_rate: list[float | None]    # rate_calday_*
+    months: list[date]  # prod_date per history month
+    history_rate: list[float | None]  # rate_calday_*
     history_cum: list[float | None]
     # Downtime-filtered variants for slide spaghetti — same shape as
     # history_rate / history_cum but with post-peak months flagged by
@@ -294,7 +307,7 @@ class StreamCurves(BaseModel):
     # TC forecast (which was fit without downtime contribution).
     history_rate_filtered: list[float | None]
     history_cum_filtered: list[float | None]
-    forecast_months: list[date]         # extended into the future
+    forecast_months: list[date]  # extended into the future
     forecast_rate: list[float]
     forecast_cum: list[float]
     # Novi's forecasted (PDP) series for this stream, from the synced
@@ -376,9 +389,7 @@ def _batch_bg(api10s: list[str], cfg: ForecastConfig, job_id: uuid.UUID) -> None
 
 
 @router.post("/batch", response_model=BatchResponse, status_code=202)
-def batch_forecast(
-    req: BatchRequest, background: BackgroundTasks
-) -> BatchResponse:
+def batch_forecast(req: BatchRequest, background: BackgroundTasks) -> BatchResponse:
     cfg = (req.config or ForecastConfigBody()).to_config()
     job_id = uuid.uuid4()
     # Partition synchronously when the user asked for cohort-transfer.
@@ -393,24 +404,24 @@ def batch_forecast(
             partition = partition_by_history(
                 session, list(req.api10s), cfg.short_history_cutoff_months
             )
-    api10s_to_fit = (
-        partition.long_api10s if partition is not None else list(req.api10s)
-    )
+    api10s_to_fit = partition.long_api10s if partition is not None else list(req.api10s)
     # Use the existing sync_jobs table for batch-job tracking. SyncEntity
     # doesn't have a "forecast" value yet; "well_headers" is the closest
     # bucket but we shouldn't pretend that's what this is. Tag it via metadata.
     with SessionLocal() as session:
-        session.add(SyncJob(
-            id=job_id,
-            entity=SyncEntity.WELL_HEADERS,
-            scope_key=f"forecast:{len(api10s_to_fit)}_wells",
-            status=SyncJobStatus.PENDING,
-            metadata_={
-                "kind": "forecast_batch",
-                "api10_count": len(api10s_to_fit),
-                "short_history_cutoff_months": cfg.short_history_cutoff_months,
-            },
-        ))
+        session.add(
+            SyncJob(
+                id=job_id,
+                entity=SyncEntity.WELL_HEADERS,
+                scope_key=f"forecast:{len(api10s_to_fit)}_wells",
+                status=SyncJobStatus.PENDING,
+                metadata_={
+                    "kind": "forecast_batch",
+                    "api10_count": len(api10s_to_fit),
+                    "short_history_cutoff_months": cfg.short_history_cutoff_months,
+                },
+            )
+        )
         session.commit()
     background.add_task(_batch_bg, api10s_to_fit, cfg, job_id)
     return BatchResponse(
@@ -573,9 +584,7 @@ def transfer_cohort_params(
     the batch (or waits for more wells to accrue history) and retries.
     """
     cfg = (req.config or ForecastConfigBody()).to_config()
-    partition = partition_by_history(
-        session, list(req.api10s), req.short_history_cutoff_months
-    )
+    partition = partition_by_history(session, list(req.api10s), req.short_history_cutoff_months)
 
     # Per-stream donor medians from the long cohort.
     donor_summaries: list[TransferStreamDonor] = []
@@ -586,15 +595,15 @@ def transfer_cohort_params(
         med = compute_donor_medians(donors)
         if med is None:
             continue
-        medians_by_stream[stream_str] = (
-            med.di, med.b, med.donor_count, med.donor_api10s
+        medians_by_stream[stream_str] = (med.di, med.b, med.donor_count, med.donor_api10s)
+        donor_summaries.append(
+            TransferStreamDonor(
+                stream=stream_enum,
+                donor_count=med.donor_count,
+                cohort_di=med.di,
+                cohort_b=med.b,
+            )
         )
-        donor_summaries.append(TransferStreamDonor(
-            stream=stream_enum,
-            donor_count=med.donor_count,
-            cohort_di=med.di,
-            cohort_b=med.b,
-        ))
 
     # Gate on oil — that's the stream whose Di degeneracy drove the
     # feature. Gas/water inherit the check by virtue of being in the
@@ -636,15 +645,11 @@ def transfer_cohort_params(
                 # produce all three streams) but possible if every
                 # long-cohort well lacked a same-stream forecast.
                 continue
-            cohort_di, cohort_b, donor_count, donor_api10s = (
-                medians_by_stream[stream_str]
-            )
+            cohort_di, cohort_b, donor_count, donor_api10s = medians_by_stream[stream_str]
             stream_enum = Stream(stream_str)
 
             existing = session.execute(
-                select(Forecast).where(
-                    Forecast.api10 == api10, Forecast.stream == stream_enum
-                )
+                select(Forecast).where(Forecast.api10 == api10, Forecast.stream == stream_enum)
             ).scalar_one_or_none()
             if existing is not None and existing.locked:
                 skipped_locked.append((api10, stream_enum))
@@ -666,9 +671,7 @@ def transfer_cohort_params(
             # timing. Only Di/b are inherited from the cohort median.
             floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream_str])
             onset_index = min(
-                detect_onset(
-                    monthly, rate_column=STREAM_RATE_COLUMN[stream_str], floor=floor
-                ),
+                detect_onset(monthly, rate_column=STREAM_RATE_COLUMN[stream_str], floor=floor),
                 int(stream_peak.peak_index),
             )
             qo = _stream_rate_at_index(monthly, onset_index, stream_str)
@@ -813,15 +816,12 @@ def _apply_method_one(
     # historical anchor for pre-migration rows). onset is 0 for streams
     # with no leading sub-floor months, so this reduces to first_prod.
     has_ramp = (
-        f.peak_index_months is not None
-        or (f.params or {}).get("peak_index_months") is not None
+        f.peak_index_months is not None or (f.params or {}).get("peak_index_months") is not None
     )
     onset_m = int((f.params or {}).get("onset_index_months") or 0)
     if has_ramp:
         anchor = (
-            _add_months(well_first_prod_date, onset_m)
-            if well_first_prod_date is not None
-            else None
+            _add_months(well_first_prod_date, onset_m) if well_first_prod_date is not None else None
         )
     else:
         anchor = f.peak_month_date
@@ -900,9 +900,19 @@ def list_forecasts(
         stmt = stmt.where(Forecast.api10.in_(api10))
     out: list[ForecastRow] = []
     for (
-        f, name, operator, formation, lateral_ft, vintage_year,
-        first_prod_date, county, novi_oil_eur,
-        oil_cum, gas_cum, water_cum, last_prod_date,
+        f,
+        name,
+        operator,
+        formation,
+        lateral_ft,
+        vintage_year,
+        first_prod_date,
+        county,
+        novi_oil_eur,
+        oil_cum,
+        gas_cum,
+        water_cum,
+        last_prod_date,
     ) in session.execute(stmt).all():
         row = ForecastRow.from_orm_row(f)
         # mutate in-place — model_copy(update=) would also work but allocates.
@@ -913,14 +923,15 @@ def list_forecasts(
         row.well_vintage_year = int(vintage_year) if vintage_year is not None else None
         row.well_first_prod_date = first_prod_date
         row.well_county = county
-        row.well_novi_oil_eur = (
-            float(novi_oil_eur) if novi_oil_eur is not None else None
-        )
+        row.well_novi_oil_eur = float(novi_oil_eur) if novi_oil_eur is not None else None
         cum_by_stream = {
-            Stream.OIL: oil_cum, Stream.GAS: gas_cum, Stream.WATER: water_cum,
+            Stream.OIL: oil_cum,
+            Stream.GAS: gas_cum,
+            Stream.WATER: water_cum,
         }
         _apply_method_one(
-            row, f,
+            row,
+            f,
             well_first_prod_date=first_prod_date,
             actual_cum=cum_by_stream.get(f.stream),
             last_prod_date=last_prod_date,
@@ -950,17 +961,11 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         # would revert the Review row to the un-standardized value on every
         # Save Override / Lock (PATCH splices this response back in-place).
         row.well_formation = well.formation_blueox
-        row.well_lateral_ft = (
-            float(well.lateral_ft) if well.lateral_ft is not None else None
-        )
-        row.well_vintage_year = (
-            int(well.vintage_year) if well.vintage_year is not None else None
-        )
+        row.well_lateral_ft = float(well.lateral_ft) if well.lateral_ft is not None else None
+        row.well_vintage_year = int(well.vintage_year) if well.vintage_year is not None else None
         row.well_first_prod_date = well.first_prod_date
         row.well_county = well.county
-        row.well_novi_oil_eur = (
-            float(well.novi_oil_eur) if well.novi_oil_eur is not None else None
-        )
+        row.well_novi_oil_eur = float(well.novi_oil_eur) if well.novi_oil_eur is not None else None
     # Per-stream production aggregate for the Method-1 EUR computation.
     # One scalar SUM query; cheap on the indexed (api10, prod_date) PK.
     vol_attr = _STREAM_VOL_ATTR[f.stream]
@@ -971,7 +976,8 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         ).where(ProductionMonthly.api10 == f.api10)
     ).one()
     _apply_method_one(
-        row, f,
+        row,
+        f,
         well_first_prod_date=well.first_prod_date if well else None,
         actual_cum=actual_cum_row[0],
         last_prod_date=actual_cum_row[1],
@@ -1110,25 +1116,32 @@ def well_curves(
     in TC context so "Save TC override" updates the chart in place
     rather than snapping back to the global fit.
     """
-    prod_rows = session.execute(
-        select(ProductionMonthly).where(ProductionMonthly.api10 == api10)
-        .order_by(ProductionMonthly.prod_date)
-    ).scalars().all()
+    prod_rows = (
+        session.execute(
+            select(ProductionMonthly)
+            .where(ProductionMonthly.api10 == api10)
+            .order_by(ProductionMonthly.prod_date)
+        )
+        .scalars()
+        .all()
+    )
     if not prod_rows:
         raise HTTPException(status_code=404, detail=f"no production for {api10}")
 
-    forecasts = session.execute(
-        select(Forecast).where(Forecast.api10 == api10)
-    ).scalars().all()
+    forecasts = session.execute(select(Forecast).where(Forecast.api10 == api10)).scalars().all()
     fc_by_stream = {f.stream: f for f in forecasts}
 
     # Novi's forecast series for this well — queried once, sliced per
     # stream below. Empty list when the well has no synced Novi forecast.
-    novi_rows = session.execute(
-        select(NoviForecastMonthly)
-        .where(NoviForecastMonthly.api10 == api10)
-        .order_by(NoviForecastMonthly.prod_date)
-    ).scalars().all()
+    novi_rows = (
+        session.execute(
+            select(NoviForecastMonthly)
+            .where(NoviForecastMonthly.api10 == api10)
+            .order_by(NoviForecastMonthly.prod_date)
+        )
+        .scalars()
+        .all()
+    )
     novi_months_all = [r.prod_date for r in novi_rows]
 
     # Optional TC-context override: when present, the forecast portion
@@ -1172,9 +1185,7 @@ def well_curves(
         override_block = tc_overrides_for_well.get(stream_name) or None
         if override_block:
             eval_params = dict(override_block.get("params") or {})
-            eval_model_type = str(
-                override_block.get("model_type") or "modified_hyperbolic"
-            )
+            eval_model_type = str(override_block.get("model_type") or "modified_hyperbolic")
         elif fc:
             eval_params = dict(fc.params)
             eval_model_type = fc.model_type.value
@@ -1218,9 +1229,7 @@ def well_curves(
                 mo = ((anchor_date.month - 1 + i) % 12) + 1
                 forecast_months.append(date(yr, mo, 1))
 
-        history_rate_floats = [
-            float(v) if v is not None else None for v in history_rate
-        ]
+        history_rate_floats = [float(v) if v is not None else None for v in history_rate]
         history_cum_floats = [float(v) for v in history_cum]
         # Downtime-filter the post-peak portion of the observed series
         # so the slide spaghetti reflects only producing months — the
@@ -1241,27 +1250,27 @@ def well_curves(
         # stream's series is self-contained for the frontend.
         novi_cum_col = _STREAM_NOVI_CUM_COL[stream_name]
         novi_rate = [
-            float(v) if (v := getattr(r, rate_col)) is not None else None
-            for r in novi_rows
+            float(v) if (v := getattr(r, rate_col)) is not None else None for r in novi_rows
         ]
         novi_cum = [
-            float(v) if (v := getattr(r, novi_cum_col)) is not None else None
-            for r in novi_rows
+            float(v) if (v := getattr(r, novi_cum_col)) is not None else None for r in novi_rows
         ]
-        streams.append(StreamCurves(
-            stream=st,
-            months=months,
-            history_rate=history_rate_floats,
-            history_cum=history_cum_floats,
-            history_rate_filtered=history_rate_filtered,
-            history_cum_filtered=history_cum_filtered,
-            forecast_months=forecast_months,
-            forecast_rate=forecast_rate,
-            forecast_cum=forecast_cum,
-            novi_months=list(novi_months_all),
-            novi_rate=novi_rate,
-            novi_cum=novi_cum,
-        ))
+        streams.append(
+            StreamCurves(
+                stream=st,
+                months=months,
+                history_rate=history_rate_floats,
+                history_cum=history_cum_floats,
+                history_rate_filtered=history_rate_filtered,
+                history_cum_filtered=history_cum_filtered,
+                forecast_months=forecast_months,
+                forecast_rate=forecast_rate,
+                forecast_cum=forecast_cum,
+                novi_months=list(novi_months_all),
+                novi_rate=novi_rate,
+                novi_cum=novi_cum,
+            )
+        )
 
     return WellCurvesResponse(api10=api10, streams=streams)
 
@@ -1322,11 +1331,11 @@ def forecast_preview(
         # else at the saved forecast's peak. The editable param set the
         # modal posts doesn't carry onset (it's a fixed property of the
         # data), so fall back to the saved row's onset. Defaults to 0.
-        has_ramp = req.params.get("peak_index_months") is not None and req.params.get("qo") is not None
+        has_ramp = (
+            req.params.get("peak_index_months") is not None and req.params.get("qo") is not None
+        )
         fc_row = session.execute(
-            select(Forecast).where(
-                Forecast.api10 == req.api10, Forecast.stream == req.stream
-            )
+            select(Forecast).where(Forecast.api10 == req.api10, Forecast.stream == req.stream)
         ).scalar_one_or_none()
         req_onset = req.params.get("onset_index_months")
         onset_m = int(
@@ -1342,8 +1351,10 @@ def forecast_preview(
             anchor = fc_row.peak_month_date if fc_row is not None else None
         if anchor is not None and last_prod_date is not None and last_prod_date >= anchor:
             t_years = _months_between(anchor, last_prod_date) / 12.0
-            qi = req.params.get("qi"); Di = req.params.get("Di")
-            b = req.params.get("b"); Df = req.params.get("Df")
+            qi = req.params.get("qi")
+            Di = req.params.get("Di")
+            b = req.params.get("b")
+            Df = req.params.get("Df")
             if qi is not None and Di is not None and b is not None and Df is not None:
                 model_cum_endhist = model_cum_at_t(
                     qo=req.params.get("qo"),
@@ -1352,7 +1363,10 @@ def forecast_preview(
                         if req.params.get("peak_index_months") is not None
                         else None
                     ),
-                    qi=float(qi), Di=float(Di), b=float(b), Df=float(Df),
+                    qi=float(qi),
+                    Di=float(Di),
+                    b=float(b),
+                    Df=float(Df),
                     t_years=t_years,
                 )
                 eur_remaining = max(0.0, eur - model_cum_endhist)

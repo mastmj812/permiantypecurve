@@ -187,5 +187,3 @@ def fit_p50_series(
         "rmse": float(result.fit_rmse),
         "smoothed_rate": smoothed,
     }
-
-

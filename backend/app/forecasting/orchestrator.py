@@ -69,9 +69,7 @@ def df_terminal_for_subbasin(subbasin: str | None, config: ForecastConfig) -> fl
     return config.df_terminal_per_year
 
 
-def df_terminal_for_cohort(
-    subbasins: Iterable[str | None], config: ForecastConfig
-) -> float:
+def df_terminal_for_cohort(subbasins: Iterable[str | None], config: ForecastConfig) -> float:
     """Terminal Df for a type-curve cohort's aggregate P50 fit.
 
     The cohort's P50 is a single aggregate series, so one Df must be
@@ -116,6 +114,7 @@ def detect_stream_peaks(
     Pure function (takes a frame, no DB) so the per-stream rule is unit
     testable the same way ``cohort.classify_history`` is.
     """
+
     def _real(p: PeakResult | None) -> PeakResult | None:
         return p if (p is not None and p.peak_rate > 0) else None
 
@@ -140,10 +139,19 @@ def _load_monthly(session: Session, api10: str) -> pd.DataFrame:
         .where(ProductionMonthly.api10 == api10)
         .order_by(ProductionMonthly.prod_date)
     ).all()
-    df = pd.DataFrame(rows, columns=[
-        "prod_date", "oil_bbl", "gas_mcf", "water_bbl", "producing_days",
-        "rate_calday_bopd", "rate_calday_mcfd", "rate_calday_bwpd",
-    ])
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "prod_date",
+            "oil_bbl",
+            "gas_mcf",
+            "water_bbl",
+            "producing_days",
+            "rate_calday_bopd",
+            "rate_calday_mcfd",
+            "rate_calday_bwpd",
+        ],
+    )
     # Coalesce NULL monthly volumes / rates to 0. Raw warehouse production
     # carries reporting-gap months — a real calendar row where a stream's
     # volume + rate are NULL (operator filed a partial report; common on
@@ -159,8 +167,13 @@ def _load_monthly(session: Session, api10: str) -> pd.DataFrame:
     # nothing), the zero-rate month is then dropped by the downtime filter,
     # and the fit proceeds. Wells with no gaps are unaffected (no-op fill).
     _numeric = [
-        "oil_bbl", "gas_mcf", "water_bbl", "producing_days",
-        "rate_calday_bopd", "rate_calday_mcfd", "rate_calday_bwpd",
+        "oil_bbl",
+        "gas_mcf",
+        "water_bbl",
+        "producing_days",
+        "rate_calday_bopd",
+        "rate_calday_mcfd",
+        "rate_calday_bwpd",
     ]
     df[_numeric] = df[_numeric].apply(pd.to_numeric, errors="coerce").fillna(0.0)
     return df
@@ -177,9 +190,7 @@ def _persist(
     exists — locked forecasts are skipped so a bulk re-fit doesn't wipe
     a user's manual override."""
     existing = session.execute(
-        select(Forecast).where(
-            Forecast.api10 == api10, Forecast.stream == Stream(stream)
-        )
+        select(Forecast).where(Forecast.api10 == api10, Forecast.stream == Stream(stream))
     ).scalar_one_or_none()
     if existing is not None and existing.locked:
         log.info("forecast_locked_skip", api10=api10, stream=stream)
@@ -224,9 +235,7 @@ def _persist(
         for c in values
         if c not in {"id", "api10", "stream", "created_at", "locked"}
     }
-    stmt = stmt.on_conflict_do_update(
-        constraint="uq_forecasts_api10_stream", set_=update_cols
-    )
+    stmt = stmt.on_conflict_do_update(constraint="uq_forecasts_api10_stream", set_=update_cols)
     session.execute(stmt)
     session.commit()
     return values.get("id") or existing.id  # type: ignore[union-attr]
@@ -363,9 +372,7 @@ _STREAM_RATE_COL: dict[str, str] = {
 }
 
 
-def stream_rate_at_peak(
-    monthly: pd.DataFrame, peak: PeakResult, stream: str
-) -> float:
+def stream_rate_at_peak(monthly: pd.DataFrame, peak: PeakResult, stream: str) -> float:
     """Return the stream's calday rate at ``peak``'s month.
 
     Public helper — the cohort-transfer endpoint anchors short-history
@@ -381,9 +388,7 @@ def stream_rate_at_peak(
     return float(val) if val is not None and not pd.isna(val) else 0.0
 
 
-def _stream_rate_at_index(
-    monthly: pd.DataFrame, index: int, stream: str
-) -> float | None:
+def _stream_rate_at_index(monthly: pd.DataFrame, index: int, stream: str) -> float | None:
     """Return the stream's calday rate at ``index`` (0-based, chronological).
 
     Anchors ``qo`` at the stream's onset month rather than the well's

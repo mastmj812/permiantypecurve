@@ -89,7 +89,10 @@ def _full_provenance() -> tuple[dict[str, Any], list[str]]:
         "aoi": {
             "polygons": [
                 {
-                    "geometry": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                    "geometry": {
+                        "type": "Polygon",
+                        "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                    },
                     "kind": "lasso",
                     "drawn_at": "2026-08-05T00:00:00Z",
                     "area_sq_mi": 41.7,
@@ -113,7 +116,10 @@ def _full_provenance() -> tuple[dict[str, Any], list[str]]:
                 "kind": "polygon",
                 "at": "2026-08-05T00:00:00Z",
                 "api10s": staged,
-                "polygon": {"type": "Polygon", "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]},
+                "polygon": {
+                    "type": "Polygon",
+                    "coordinates": [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                },
                 "filters": {},
             }
         ],
@@ -135,12 +141,9 @@ def _full_provenance() -> tuple[dict[str, Any], list[str]]:
             }
         },
         "post_save_removals": [
-            {"api10": "W11", "code": "data_quality", "note": None,
-             "at": "2026-08-06T01:00:00Z"}
+            {"api10": "W11", "code": "data_quality", "note": None, "at": "2026-08-06T01:00:00Z"}
         ],
-        "post_save_additions": [
-            {"api10": "X99", "at": "2026-08-06T01:00:00Z"}
-        ],
+        "post_save_additions": [{"api10": "X99", "at": "2026-08-06T01:00:00Z"}],
     }
     included = ["W01", "W02", "W08", "X99"]
     return prov, included
@@ -263,7 +266,10 @@ def test_spacing_stage_culls_outside_range_and_unbounded() -> None:
     # W22: absent from WellSpacing (NULL); W23: real spacing in range
     # but never staged → falls through to not_selected.
     for api10, spacing in (
-        ("W20", 1600.0), ("W21", 2800.0), ("W22", None), ("W23", 660.0),
+        ("W20", 1600.0),
+        ("W21", 2800.0),
+        ("W22", None),
+        ("W23", 660.0),
     ):
         w = _uni_well(api10)
         w["lateral_closer_xy_ft"] = spacing
@@ -365,9 +371,7 @@ def test_buildup_csv_shape() -> None:
     # + 1 out-of-universe row.
     assert any(line.startswith("# curve_name") for line in lines)
     assert any(line.startswith("# final_cohort") for line in lines)
-    header_idx = next(
-        i for i, line in enumerate(lines) if line.startswith("api10,")
-    )
+    header_idx = next(i for i, line in enumerate(lines) if line.startswith("api10,"))
     roster = lines[header_idx + 1 :]
     assert len(roster) == 11 + 1
     assert any("added outside AOI/universe" in line for line in roster)

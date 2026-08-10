@@ -1,9 +1,9 @@
 """Per-well detail + filter facets.
 
-  GET /api/wells/{api10}                 → full attributes + geometry as GeoJSON
-  GET /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
-  GET /api/wells/filters/facets          → formation + status counts for the left rail
-  GET /api/wells/wellsticks?api10s=...   → GeoJSON FeatureCollection for the review-tab map
+GET /api/wells/{api10}                 → full attributes + geometry as GeoJSON
+GET /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
+GET /api/wells/filters/facets          → formation + status counts for the left rail
+GET /api/wells/wellsticks?api10s=...   → GeoJSON FeatureCollection for the review-tab map
 """
 
 from __future__ import annotations
@@ -175,9 +175,7 @@ def well_details(
             first_prod_date=r.first_prod_date,
             vintage_year=int(r.vintage_year) if r.vintage_year is not None else None,
             county=r.county,
-            novi_oil_eur=(
-                float(r.novi_oil_eur) if r.novi_oil_eur is not None else None
-            ),
+            novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
         )
         for r in rows
     ]
@@ -237,6 +235,7 @@ def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDeta
 
 # ---------------- filter facets ----------------
 
+
 class OperatorMatch(BaseModel):
     operator: str
     count: int
@@ -279,9 +278,7 @@ class FilterFacets(BaseModel):
     first_prod_year_max: int | None
 
 
-def _facet_clauses_excluding(
-    spec: FilterSpec, *, exclude_attr: str
-) -> list[ColumnElement[bool]]:
+def _facet_clauses_excluding(spec: FilterSpec, *, exclude_attr: str) -> list[ColumnElement[bool]]:
     """Build the WHERE clauses for one facet's count.
 
     Standard faceted-search pattern: each facet's counts are computed
@@ -320,20 +317,18 @@ def filter_facets(
     # Facet universe + counts use the standardized formation_blueox codes
     # (the filter dimension; raw `formation` is retained elsewhere for display).
     all_formations: list[str] = [
-        v for (v,) in session.execute(
-            select(Well.formation_blueox)
-            .where(Well.formation_blueox.isnot(None))
-            .distinct()
+        v
+        for (v,) in session.execute(
+            select(Well.formation_blueox).where(Well.formation_blueox.isnot(None)).distinct()
         ).all()
     ]
     all_counties: list[str] = [
-        v for (v,) in session.execute(
+        v
+        for (v,) in session.execute(
             select(Well.county).where(Well.county.isnot(None)).distinct()
         ).all()
     ]
-    all_statuses: list[Any] = [
-        v for (v,) in session.execute(select(Well.status).distinct()).all()
-    ]
+    all_statuses: list[Any] = [v for (v,) in session.execute(select(Well.status).distinct()).all()]
 
     def _counts_under(clauses: list[ColumnElement[bool]], col: Any) -> dict[Any, int]:
         stmt = select(col, func.count()).group_by(col)
@@ -352,17 +347,11 @@ def filter_facets(
     )
 
     formations_out = sorted(
-        (
-            FacetCount(value=v, count=formations_count.get(v, 0))
-            for v in all_formations
-        ),
+        (FacetCount(value=v, count=formations_count.get(v, 0)) for v in all_formations),
         key=lambda f: (-f.count, f.value),
     )
     counties_out = sorted(
-        (
-            FacetCount(value=v, count=counties_count.get(v, 0))
-            for v in all_counties
-        ),
+        (FacetCount(value=v, count=counties_count.get(v, 0)) for v in all_counties),
         key=lambda f: (-f.count, f.value),
     )
     statuses_out = [

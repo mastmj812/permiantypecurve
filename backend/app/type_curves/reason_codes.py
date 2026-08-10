@@ -26,7 +26,6 @@ def validate_code(code: str) -> str:
     """Return ``code`` if known, else raise ValueError (→ 422 in pydantic)."""
     if code not in REVIEW_REASON_CODES:
         raise ValueError(
-            f"unknown reason code {code!r}; expected one of "
-            f"{sorted(REVIEW_REASON_CODES)}"
+            f"unknown reason code {code!r}; expected one of {sorted(REVIEW_REASON_CODES)}"
         )
     return code

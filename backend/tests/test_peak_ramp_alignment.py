@@ -28,8 +28,12 @@ _TRUE_DI = 2.0
 
 def _params(ramp_months: int) -> dict[str, float | int]:
     return {
-        "qi": _TRUE_QI, "Di": _TRUE_DI, "b": 1.0, "Df": 0.08,
-        "qo": 300.0, "peak_index_months": ramp_months,
+        "qi": _TRUE_QI,
+        "Di": _TRUE_DI,
+        "b": 1.0,
+        "Df": 0.08,
+        "qo": 300.0,
+        "peak_index_months": ramp_months,
     }
 
 
@@ -38,23 +42,24 @@ def _panel(ramps: list[int], *, anchor: int | None, n_months: int = 120):
     wells = []
     for i, r in enumerate(ramps):
         shift = (anchor - r) if anchor is not None else 0
-        rates = _forecast_rates(
-            _params(r), n_months, include_ramp=True, shift_months=shift
+        rates = _forecast_rates(_params(r), n_months, include_ramp=True, shift_months=shift)
+        wells.append(
+            WellSeries(
+                api10=f"well{i}",
+                lateral_ft=1000.0,
+                proppant_lbs=None,
+                oil_rates=rates,
+                gas_rates=[None] * n_months,
+                water_rates=[None] * n_months,
+            )
         )
-        wells.append(WellSeries(
-            api10=f"well{i}", lateral_ft=1000.0, proppant_lbs=None,
-            oil_rates=rates, gas_rates=[None] * n_months,
-            water_rates=[None] * n_months,
-        ))
     return aggregate(wells, n_months=n_months)
 
 
 def test_shift_places_every_peak_on_the_anchor() -> None:
     M = 2
     for ramp in (0, 1, 2, 3, 4):
-        rates = _forecast_rates(
-            _params(ramp), 24, include_ramp=True, shift_months=M - ramp
-        )
+        rates = _forecast_rates(_params(ramp), 24, include_ramp=True, shift_months=M - ramp)
         assert len(rates) == 24
         # Peak (the max finite value) must land exactly on month M.
         finite = [(i, v) for i, v in enumerate(rates) if v is not None]

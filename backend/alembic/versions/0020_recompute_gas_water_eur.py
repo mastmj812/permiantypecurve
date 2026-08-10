@@ -72,9 +72,7 @@ def upgrade() -> None:
                 params=params,
             )
         except Exception as e:
-            log.warning(
-                "eur_recompute_failed", id=str(row.id), error=str(e)[:200]
-            )
+            log.warning("eur_recompute_failed", id=str(row.id), error=str(e)[:200])
             skipped += 1
             continue
         conn.execute(

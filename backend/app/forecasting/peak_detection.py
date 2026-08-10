@@ -39,7 +39,7 @@ ONSET_SUSTAIN_MONTHS: int = 2
 class PeakResult:
     peak_month_date: date
     peak_rate: float  # rate_calday_bopd AT the peak month (not the rolling-max value)
-    peak_index: int   # 0-based index into the sorted monthly series
+    peak_index: int  # 0-based index into the sorted monthly series
 
 
 def onset_index_from_rates(

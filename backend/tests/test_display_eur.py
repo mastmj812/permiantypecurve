@@ -55,9 +55,7 @@ def test_trapezoid_eur_linear_decline_exact() -> None:
     # Trapezoid is exact for a linear rate profile: 3 samples 100→50→0
     # over 2 month-intervals + the final flat-extrapolated 0-month.
     rates = [100.0, 50.0, 0.0]
-    assert trapezoid_eur(rates) == pytest.approx(
-        (75.0 + 25.0 + 0.0) * _DAYS_PER_MONTH
-    )
+    assert trapezoid_eur(rates) == pytest.approx((75.0 + 25.0 + 0.0) * _DAYS_PER_MONTH)
 
 
 def test_display_eur_matches_closed_form_without_ramp() -> None:
@@ -112,9 +110,7 @@ def test_display_eur_from_params_ignores_broken_ramp_fields() -> None:
     # Non-finite / non-numeric ramp fields degrade to pure Arps instead
     # of erroring (mirrors the frontend's eurFromForecastParams).
     params = {**_PARAMS, "qo": float("nan"), "peak_index_months": None}
-    assert display_eur_from_params(params) == pytest.approx(
-        compute_display_eur(**_PARAMS)
-    )
+    assert display_eur_from_params(params) == pytest.approx(compute_display_eur(**_PARAMS))
 
 
 def test_export_well_rows_use_shared_convention() -> None:
@@ -123,9 +119,7 @@ def test_export_well_rows_use_shared_convention() -> None:
     # shows. (The old inline version was a rectangle sum with the ramp
     # dropped.)
     params = {**_PARAMS, **_RAMP}
-    assert eur_monthly_trapezoid(params) == pytest.approx(
-        display_eur_from_params(params)
-    )
+    assert eur_monthly_trapezoid(params) == pytest.approx(display_eur_from_params(params))
     assert eur_monthly_trapezoid(params) == pytest.approx(
         compute_total_eur(model_type="modified_hyperbolic", params=params),
         rel=0.01,

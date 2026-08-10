@@ -10,12 +10,20 @@ from app.wells_api.summary import (
 )
 
 
-def _row(api10: str, *, formation: str | None = "Wolfcamp A",
-         operator: str | None = "Op A", year: int | None = 2022,
-         lat_ft: float | None = 10000.0) -> WellSummaryRow:
+def _row(
+    api10: str,
+    *,
+    formation: str | None = "Wolfcamp A",
+    operator: str | None = "Op A",
+    year: int | None = 2022,
+    lat_ft: float | None = 10000.0,
+) -> WellSummaryRow:
     return WellSummaryRow(
-        api10=api10, formation=formation, operator=operator,
-        first_prod_year=year, lateral_ft=lat_ft,
+        api10=api10,
+        formation=formation,
+        operator=operator,
+        first_prod_year=year,
+        lateral_ft=lat_ft,
     )
 
 
@@ -68,19 +76,14 @@ def test_vintage_histogram_sorted_ascending() -> None:
 
 
 def test_operators_top5_descending_with_ties_broken_by_name() -> None:
-    rows = [
-        _row(f"{i}", operator="Op A") for i in range(7)
-    ] + [
-        _row(f"b{i}", operator="Op B") for i in range(3)
-    ] + [
-        _row(f"c{i}", operator="Op C") for i in range(3)
-    ] + [
-        _row(f"d{i}", operator="Op D") for i in range(2)
-    ] + [
-        _row(f"e{i}", operator="Op E") for i in range(2)
-    ] + [
-        _row(f"f{i}", operator="Op F") for i in range(1)
-    ]
+    rows = (
+        [_row(f"{i}", operator="Op A") for i in range(7)]
+        + [_row(f"b{i}", operator="Op B") for i in range(3)]
+        + [_row(f"c{i}", operator="Op C") for i in range(3)]
+        + [_row(f"d{i}", operator="Op D") for i in range(2)]
+        + [_row(f"e{i}", operator="Op E") for i in range(2)]
+        + [_row(f"f{i}", operator="Op F") for i in range(1)]
+    )
     s = build_summary(rows)
     # Only top-5 surfaced. Op F drops off.
     assert len(s.operators_top5) == 5

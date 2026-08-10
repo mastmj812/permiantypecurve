@@ -48,7 +48,27 @@ def test_simple_rising_then_falling_picks_max_month() -> None:
 def test_late_life_spike_does_not_win() -> None:
     # Real peak in month 2; freak spike in month 17 (zero-indexed, so 18th month).
     # If the algorithm didn't restrict to first 12, month 17 would win at 2000.
-    rates = [200, 800, 700, 600, 500, 450, 400, 350, 300, 280, 260, 250, 230, 210, 190, 170, 160, 2000, 80]
+    rates = [
+        200,
+        800,
+        700,
+        600,
+        500,
+        450,
+        400,
+        350,
+        300,
+        280,
+        260,
+        250,
+        230,
+        210,
+        190,
+        170,
+        160,
+        2000,
+        80,
+    ]
     df = _make(rates)
     peak = detect_oil_peak(df)
     assert peak is not None
@@ -106,9 +126,7 @@ def test_detect_peak_on_water_column_catches_early_hard_peak() -> None:
     # Oil ramps to a month-3 peak; water spikes at month 1 then craters.
     oil = [200, 450, 700, 900, 820, 700, 600, 520, 460, 410, 370, 340]
     water = [1500, 4200, 2600, 1500, 1100, 900, 780, 700, 640, 600, 560, 530]
-    df = pd.DataFrame(
-        {"prod_date": months, "rate_calday_bopd": oil, "rate_calday_bwpd": water}
-    )
+    df = pd.DataFrame({"prod_date": months, "rate_calday_bopd": oil, "rate_calday_bwpd": water})
 
     oil_peak = detect_peak(df, rate_column="rate_calday_bopd")
     water_peak = detect_peak(df, rate_column="rate_calday_bwpd")

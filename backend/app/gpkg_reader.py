@@ -238,9 +238,7 @@ def _polygonal(geom: BaseGeometry) -> Polygon | MultiPolygon | None:
     if isinstance(geom, Polygon | MultiPolygon):
         return geom
     if isinstance(geom, GeometryCollection):
-        polys = [
-            g for g in geom.geoms if isinstance(g, Polygon | MultiPolygon) and not g.is_empty
-        ]
+        polys = [g for g in geom.geoms if isinstance(g, Polygon | MultiPolygon) and not g.is_empty]
         if polys:
             u = unary_union(polys)
             if isinstance(u, Polygon | MultiPolygon):

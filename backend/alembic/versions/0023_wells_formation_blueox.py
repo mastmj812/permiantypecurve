@@ -26,12 +26,8 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "wells", sa.Column("formation_blueox", sa.String(length=64), nullable=True)
-    )
-    op.add_column(
-        "wells", sa.Column("basin_blueox", sa.String(length=16), nullable=True)
-    )
+    op.add_column("wells", sa.Column("formation_blueox", sa.String(length=64), nullable=True))
+    op.add_column("wells", sa.Column("basin_blueox", sa.String(length=16), nullable=True))
     op.create_index("ix_wells_formation_blueox", "wells", ["formation_blueox"])
     op.create_index("ix_wells_basin_blueox", "wells", ["basin_blueox"])
 

@@ -134,10 +134,7 @@ def compute_donor_medians(donors: list[Forecast]) -> DonorMedians | None:
     has the per-well edit / lock UI to handle individual wonky fits;
     this just keeps a single edge case from dragging the cohort.
     """
-    valid = [
-        f for f in donors
-        if f.di_initial is not None and f.b is not None
-    ]
+    valid = [f for f in donors if f.di_initial is not None and f.b is not None]
     if not valid:
         return None
     di_arr = np.array([f.di_initial for f in valid], dtype=float)
@@ -150,9 +147,7 @@ def compute_donor_medians(donors: list[Forecast]) -> DonorMedians | None:
     )
 
 
-def load_stream_donors(
-    session: Session, long_api10s: list[str], stream: Stream
-) -> list[Forecast]:
+def load_stream_donors(session: Session, long_api10s: list[str], stream: Stream) -> list[Forecast]:
     """Fetch the per-stream Forecast rows for the long-history cohort.
 
     Whether each row came from a fresh autoforecast or the user's
@@ -168,5 +163,7 @@ def load_stream_donors(
                 Forecast.api10.in_(long_api10s),
                 Forecast.stream == stream,
             )
-        ).scalars().all()
+        )
+        .scalars()
+        .all()
     )
