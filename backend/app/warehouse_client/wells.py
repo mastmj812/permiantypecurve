@@ -46,12 +46,27 @@ def _status_from_curated(raw: str | None) -> str:
 # wellstick as a WKT string so the SQLAlchemy result row stays simple
 # Python types — geometry parsing happens at persistence time.
 #
-# Wellstick source preference: the Enverus survey-derived lateral path
-# (curated.enverus_lateral_lines, ~99% of horizontals) over the 4-point
-# Novi SHL→LP→MP→BHL wellstick_geom, which degenerates on u-turn/horseshoe
-# wells. The COALESCE fallback keeps the ~1% without an Enverus line.
+# Wellstick source preference, three tiers:
+#   1. Enverus survey-derived lateral path (curated.enverus_lateral_lines,
+#      ~97% of horizontals after its stub guard) — traces u-turns;
+#   2. the 4-point Novi SHL→LP→MP→BHL wellstick_geom;
+#   3. a straight SHL→BHL segment built from the header coordinates —
+#      last resort so a well with usable coordinates NEVER renders as a
+#      dot just because both geometry sources failed. Guarded against
+#      identical endpoints (a zero-length line IS the dot problem).
+_STICK_COALESCE_SQL = """
+        COALESCE(ST_AsText(ell.lateral_geom),
+                 ST_AsText(we.wellstick_geom),
+                 CASE WHEN we.surface_lon IS NOT NULL AND we.surface_lat IS NOT NULL
+                       AND we.bhl_lon IS NOT NULL AND we.bhl_lat IS NOT NULL
+                       AND (we.surface_lon <> we.bhl_lon OR we.surface_lat <> we.bhl_lat)
+                      THEN ST_AsText(ST_MakeLine(
+                             ST_SetSRID(ST_MakePoint(we.surface_lon, we.surface_lat), 4326),
+                             ST_SetSRID(ST_MakePoint(we.bhl_lon, we.bhl_lat), 4326)))
+                 END)                        AS wellstick_wkt"""
+
 _FETCH_ONE_SQL = text(
-    """
+    f"""
     SELECT
         we.api10,
         we.api14_unformatted                 AS api14,
@@ -73,8 +88,7 @@ _FETCH_ONE_SQL = text(
         we.surface_lon                       AS sh_lon,
         we.bhl_lat                           AS bh_lat,
         we.bhl_lon                           AS bh_lon,
-        COALESCE(ST_AsText(ell.lateral_geom),
-                 ST_AsText(we.wellstick_geom)) AS wellstick_wkt,
+{_STICK_COALESCE_SQL},
         we.first_production_year             AS vintage_year,
         we.completion_vintage_bucket,
         we.is_horizontal,
@@ -146,8 +160,8 @@ def fetch_well_by_api10(session: Session, api10: str) -> WellHeader | None:
 # Column block reused by the bulk fetcher. Kept as a module-level constant
 # so the single-well and bulk paths can't drift from each other. Columns are
 # `we.`-qualified — the FROM clause joins curated.enverus_lateral_lines for
-# the same wellstick COALESCE as _FETCH_ONE_SQL.
-_HEADER_COLUMNS_SQL = """
+# the same three-tier wellstick COALESCE as _FETCH_ONE_SQL.
+_HEADER_COLUMNS_SQL = f"""
     we.api10,
     we.api14_unformatted                 AS api14,
     we.well_name                         AS name,
@@ -168,8 +182,7 @@ _HEADER_COLUMNS_SQL = """
     we.surface_lon                       AS sh_lon,
     we.bhl_lat                           AS bh_lat,
     we.bhl_lon                           AS bh_lon,
-    COALESCE(ST_AsText(ell.lateral_geom),
-             ST_AsText(we.wellstick_geom)) AS wellstick_wkt,
+{_STICK_COALESCE_SQL},
     we.first_production_year             AS vintage_year,
     we.completion_vintage_bucket,
     we.is_horizontal,
