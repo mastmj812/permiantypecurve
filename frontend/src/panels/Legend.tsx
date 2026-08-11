@@ -29,10 +29,7 @@ export function Legend() {
       <div className="legend-section">
         <strong>Wellstick</strong>
         <div className="legend-item">
-          <span className="wellstick-sample solid" /> heel → bottomhole (survey)
-        </div>
-        <div className="legend-item">
-          <span className="wellstick-sample dashed" /> surface → bottomhole (no survey)
+          <span className="wellstick-sample solid" /> lateral path
         </div>
       </div>
     </div>

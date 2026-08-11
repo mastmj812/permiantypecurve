@@ -59,9 +59,10 @@ def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
     """Turn a warehouse ``WellHeader`` into the values dict the upsert
     passes to PostGIS.
 
-    The warehouse pre-computes the 4-point wellstick (Novi SHL→LP→MP→BHL,
-    served as WKT via ST_AsText) and pre-remaps status, so this is a near-
-    direct passthrough with no fallback chains.
+    The warehouse pre-computes the wellstick (Enverus survey-derived
+    lateral path preferred, 4-point Novi SHL→LP→MP→BHL fallback — the
+    COALESCE lives in warehouse_client/wells.py) and pre-remaps status,
+    so this is a near-direct passthrough with no fallback chains.
     """
     return {
         "api10": h.api10,

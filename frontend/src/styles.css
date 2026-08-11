@@ -988,7 +988,6 @@ input[type="date"], input[type="number"], input[type="search"] {
   border-top-color: #1f2937;
 }
 .wellstick-sample.solid { border-top-style: solid; }
-.wellstick-sample.dashed { border-top-style: dashed; }
 
 /* ---------- map hover tooltip ----------
    Shared by MapView (Map tab) and ReviewMap. MapLibre's default popup
