@@ -250,6 +250,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     // Floating (no backdrop) so the panel can be dragged aside while the
     // map/selection stays visible and interactive behind it — matching
     // ForecastDetailModal. Close via ✕ / Cancel / Esc.
+    <>
     <div className="modal-floating-wrap">
       <div
         className="modal inspect-modal modal-floating"
@@ -392,15 +393,19 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
           </div>
         </div>
       </div>
-      {showRemoveDialog && cohort && (
-        <ReasonDialog
-          title={`Remove ${removeCount} well${removeCount === 1 ? "" : "s"} from ${cohort.name}`}
-          detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
-          confirmLabel={`Remove ${removeCount}`}
-          onConfirm={removeFromCohort}
-          onCancel={() => setShowRemoveDialog(false)}
-        />
-      )}
     </div>
+    {/* OUTSIDE the floating wrap: .modal-floating-wrap is pointer-events:
+        none (only the inner .modal-floating re-enables them), so a dialog
+        nested inside it renders but can't be clicked. */}
+    {showRemoveDialog && cohort && (
+      <ReasonDialog
+        title={`Remove ${removeCount} well${removeCount === 1 ? "" : "s"} from ${cohort.name}`}
+        detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
+        confirmLabel={`Remove ${removeCount}`}
+        onConfirm={removeFromCohort}
+        onCancel={() => setShowRemoveDialog(false)}
+      />
+    )}
+    </>
   );
 }
