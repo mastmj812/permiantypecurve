@@ -45,38 +45,45 @@ def _status_from_curated(raw: str | None) -> str:
 # readability; we read by alias name via mappings(). ST_AsText keeps the
 # wellstick as a WKT string so the SQLAlchemy result row stays simple
 # Python types — geometry parsing happens at persistence time.
+#
+# Wellstick source preference: the Enverus survey-derived lateral path
+# (curated.enverus_lateral_lines, ~99% of horizontals) over the 4-point
+# Novi SHL→LP→MP→BHL wellstick_geom, which degenerates on u-turn/horseshoe
+# wells. The COALESCE fallback keeps the ~1% without an Enverus line.
 _FETCH_ONE_SQL = text(
     """
     SELECT
-        api10,
-        api14_unformatted                 AS api14,
-        well_name                         AS name,
-        current_operator                  AS operator,
-        formation,
-        formation_blueox,
-        basin_blueox,
-        first_production_date             AS first_prod_date,
-        lateral_length_ft                 AS lateral_ft,
-        proppant_lbs,
-        fluid_bbl,
-        tvd_ft,
-        county,
-        basin,
-        subbasin,
-        well_status                       AS status_raw,
-        surface_lat                       AS sh_lat,
-        surface_lon                       AS sh_lon,
-        bhl_lat                           AS bh_lat,
-        bhl_lon                           AS bh_lon,
-        ST_AsText(wellstick_geom)         AS wellstick_wkt,
-        first_production_year             AS vintage_year,
-        completion_vintage_bucket,
-        is_horizontal,
-        directional_survey_is_planned,
-        eur_50yr_oil_bbl                  AS novi_oil_eur,
-        lateral_closer_xy_ft
-    FROM curated.wells_enriched
-    WHERE api10 = :api10
+        we.api10,
+        we.api14_unformatted                 AS api14,
+        we.well_name                         AS name,
+        we.current_operator                  AS operator,
+        we.formation,
+        we.formation_blueox,
+        we.basin_blueox,
+        we.first_production_date             AS first_prod_date,
+        we.lateral_length_ft                 AS lateral_ft,
+        we.proppant_lbs,
+        we.fluid_bbl,
+        we.tvd_ft,
+        we.county,
+        we.basin,
+        we.subbasin,
+        we.well_status                       AS status_raw,
+        we.surface_lat                       AS sh_lat,
+        we.surface_lon                       AS sh_lon,
+        we.bhl_lat                           AS bh_lat,
+        we.bhl_lon                           AS bh_lon,
+        COALESCE(ST_AsText(ell.lateral_geom),
+                 ST_AsText(we.wellstick_geom)) AS wellstick_wkt,
+        we.first_production_year             AS vintage_year,
+        we.completion_vintage_bucket,
+        we.is_horizontal,
+        we.directional_survey_is_planned,
+        we.eur_50yr_oil_bbl                  AS novi_oil_eur,
+        we.lateral_closer_xy_ft
+    FROM curated.wells_enriched we
+    LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
+    WHERE we.api10 = :api10
     """
 )
 
@@ -137,35 +144,38 @@ def fetch_well_by_api10(session: Session, api10: str) -> WellHeader | None:
 
 
 # Column block reused by the bulk fetcher. Kept as a module-level constant
-# so the single-well and bulk paths can't drift from each other.
+# so the single-well and bulk paths can't drift from each other. Columns are
+# `we.`-qualified — the FROM clause joins curated.enverus_lateral_lines for
+# the same wellstick COALESCE as _FETCH_ONE_SQL.
 _HEADER_COLUMNS_SQL = """
-    api10,
-    api14_unformatted                 AS api14,
-    well_name                         AS name,
-    current_operator                  AS operator,
-    formation,
-    formation_blueox,
-    basin_blueox,
-    first_production_date             AS first_prod_date,
-    lateral_length_ft                 AS lateral_ft,
-    proppant_lbs,
-    fluid_bbl,
-    tvd_ft,
-    county,
-    basin,
-    subbasin,
-    well_status                       AS status_raw,
-    surface_lat                       AS sh_lat,
-    surface_lon                       AS sh_lon,
-    bhl_lat                           AS bh_lat,
-    bhl_lon                           AS bh_lon,
-    ST_AsText(wellstick_geom)         AS wellstick_wkt,
-    first_production_year             AS vintage_year,
-    completion_vintage_bucket,
-    is_horizontal,
-    directional_survey_is_planned,
-    eur_50yr_oil_bbl                  AS novi_oil_eur,
-    lateral_closer_xy_ft
+    we.api10,
+    we.api14_unformatted                 AS api14,
+    we.well_name                         AS name,
+    we.current_operator                  AS operator,
+    we.formation,
+    we.formation_blueox,
+    we.basin_blueox,
+    we.first_production_date             AS first_prod_date,
+    we.lateral_length_ft                 AS lateral_ft,
+    we.proppant_lbs,
+    we.fluid_bbl,
+    we.tvd_ft,
+    we.county,
+    we.basin,
+    we.subbasin,
+    we.well_status                       AS status_raw,
+    we.surface_lat                       AS sh_lat,
+    we.surface_lon                       AS sh_lon,
+    we.bhl_lat                           AS bh_lat,
+    we.bhl_lon                           AS bh_lon,
+    COALESCE(ST_AsText(ell.lateral_geom),
+             ST_AsText(we.wellstick_geom)) AS wellstick_wkt,
+    we.first_production_year             AS vintage_year,
+    we.completion_vintage_bucket,
+    we.is_horizontal,
+    we.directional_survey_is_planned,
+    we.eur_50yr_oil_bbl                  AS novi_oil_eur,
+    we.lateral_closer_xy_ft
 """
 
 
@@ -208,21 +218,22 @@ def fetch_well_headers(
         # drilled wellbore with no completion date at all — but never a
         # permit (phantom location, no wellbore). See the docstring.
         where_clauses.append(
-            "(first_completion_date >= :first_completion_after"
-            " OR (first_completion_date IS NULL"
-            " AND COALESCE(well_status, '') NOT ILIKE 'Permit%'))"
+            "(we.first_completion_date >= :first_completion_after"
+            " OR (we.first_completion_date IS NULL"
+            " AND COALESCE(we.well_status, '') NOT ILIKE 'Permit%'))"
         )
         params["first_completion_after"] = first_completion_after
     if horizontal_only:
-        where_clauses.append("is_horizontal = TRUE")
+        where_clauses.append("we.is_horizontal = TRUE")
 
     sql = text(
         f"""
         SELECT
 {_HEADER_COLUMNS_SQL}
-        FROM curated.wells_enriched
+        FROM curated.wells_enriched we
+        LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
         WHERE {" AND ".join(where_clauses)}
-        ORDER BY api10
+        ORDER BY we.api10
         """
     )
     result = session.execute(sql, params).mappings()
