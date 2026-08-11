@@ -1307,6 +1307,17 @@ input[type="date"], input[type="number"], input[type="search"] {
   flex-direction: column;
   gap: 12px;
   overflow-y: auto;
+  /* Resize plumbing: grow into the (resizable) modal's box so the
+     ResizeObserver sees the real available height and the charts scale
+     with it — without flex:1 the extra height pools as empty space
+     below the footer. min-height:0 lets it shrink; the stable
+     scrollbar gutter + overflow-x:hidden kill the feedback loop where
+     the vertical scrollbar's width made width-fitted charts overflow
+     into a phantom horizontal scrollbar. */
+  flex: 1 1 auto;
+  min-height: 0;
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
 }
 .inspect-modal-section {
   display: flex;
