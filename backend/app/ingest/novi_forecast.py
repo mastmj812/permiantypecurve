@@ -30,20 +30,33 @@ from app.warehouse_client.base import NoviForecastRecord
 log = get_logger("ingest.novi_forecast")
 
 
+# Postgres caps bind parameters at 65,535 per statement, and .in_(list)
+# expands to one bind per value. The sync passes the ENTIRE well universe
+# here (66,915 wells as of 2026-08-11 — it crossed the cap when the
+# u-turn is_horizontal fix added 260 wells and the full sync started
+# failing at exactly this statement). Chunk with generous headroom; the
+# handful of extra round-trips is noise next to the fetch that follows.
+_DELETE_CHUNK = 10_000
+
+
 def delete_novi_forecast_for_api10s(session: Session, api10s: list[str]) -> int:
     """Drop all existing Novi forecast rows for ``api10s``.
 
     Called by the sync orchestrator before re-inserting the fresh
     vintage (see module docstring). Returns the number of rows deleted.
     Does NOT commit — the caller owns the transaction so the delete
-    rides with the job bookkeeping.
+    rides with the job bookkeeping. Chunked to stay under the 65,535
+    bind-parameter cap (the sync passes the full well universe).
     """
     if not api10s:
         return 0
-    result = session.execute(
-        delete(NoviForecastMonthly.__table__).where(NoviForecastMonthly.api10.in_(api10s))
-    )
-    deleted = int(result.rowcount or 0)
+    deleted = 0
+    for i in range(0, len(api10s), _DELETE_CHUNK):
+        chunk = api10s[i : i + _DELETE_CHUNK]
+        result = session.execute(
+            delete(NoviForecastMonthly.__table__).where(NoviForecastMonthly.api10.in_(chunk))
+        )
+        deleted += int(result.rowcount or 0)
     log.info("delete_novi_forecast_vintage", count=deleted)
     return deleted
 

@@ -31,7 +31,10 @@ export function ReasonDialog({
   const [note, setNote] = useState("");
 
   return (
-    <div className="modal-backdrop" onClick={onCancel}>
+    // zIndex 120: must stack above the floating inspect modal (its wrap
+    // is z-index 100) and the buildup drawer (z-index 30) regardless of
+    // which surface opened this dialog.
+    <div className="modal-backdrop" style={{ zIndex: 120 }} onClick={onCancel}>
       <div
         className="modal"
         style={{ maxWidth: 420 }}
