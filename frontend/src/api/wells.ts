@@ -129,12 +129,15 @@ export async function fetchWellDetails(api10s: string[]): Promise<WellDetailLite
   return (await r.json()) as WellDetailLite[];
 }
 
-// Unfiltered neighbors of a staged set — the gun-barrel's greyed context
-// wells (any formation, any status; the map filters deliberately don't
-// apply). Display-only: context wells never stage, never persist.
+// Unfiltered context wells for the gun-barrel (any formation, any
+// status; the map filters deliberately don't apply). Preferred mode:
+// pass the draw polygon — context = the wells of the drawn footprint
+// (a strike-through shows exactly its section, not the next lease
+// over). Without a polygon the server falls back to a radius around
+// the staged sticks. Display-only: never staged, never persisted.
 export async function fetchContextWells(
   api10s: string[],
-  opts?: { radiusFt?: number; limit?: number },
+  opts?: { polygon?: GeoJsonPolygon | null; radiusFt?: number; limit?: number },
 ): Promise<WellDetailLite[]> {
   if (api10s.length === 0) return [];
   const r = await apiFetch("/api/wells/context", {
@@ -142,6 +145,7 @@ export async function fetchContextWells(
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
       api10s,
+      polygon: opts?.polygon ?? null,
       radius_ft: opts?.radiusFt ?? 3000,
       limit: opts?.limit ?? 300,
     }),

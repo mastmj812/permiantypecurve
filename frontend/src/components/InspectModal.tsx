@@ -147,7 +147,14 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   }, [api10s]);
 
   // Context fetch — once per staged set, independent of the detail
-  // fetch so a slow neighbor query never delays the staged circles.
+  // fetch so a slow context query never delays the staged circles.
+  // Population rule: when the inspected set came from a draw (the usual
+  // lasso/strike-through → Inspect habit), context = the unfiltered
+  // wells of THAT footprint — a strike-through shows exactly its
+  // section, not everything within a radius of the laterals (which
+  // pulled in the next lease over). The overlap guard keeps a stale
+  // polygon drawn elsewhere from defining a bogus footprint; with no
+  // relevant draw the server falls back to the 3,000-ft radius.
   useEffect(() => {
     let cancelled = false;
     if (api10s.length === 0) {
@@ -156,7 +163,12 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
         cancelled = true;
       };
     }
-    fetchContextWells(api10s)
+    const lastDraw = useMapStore.getState().lastDraw;
+    const fromDraw =
+      lastDraw != null && api10s.some((a) => lastDraw.api10s.includes(a));
+    fetchContextWells(api10s, {
+      polygon: fromDraw ? lastDraw.polygon : null,
+    })
       .then((rows) => {
         if (!cancelled) setContextWells(rows);
       })
@@ -303,14 +315,14 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                 <label
                   className="muted"
                   style={{ fontSize: 11, display: "inline-flex", gap: 4 }}
-                  title="Nearby wells of ANY formation/status (map filters ignored) — greyed, display-only, never staged"
+                  title="Unfiltered wells of the footprint you drew (any formation/status, map filters ignored) — greyed, display-only, never staged. Falls back to a 3,000-ft radius when the inspected set wasn't drawn."
                 >
                   <input
                     type="checkbox"
                     checked={showContext}
                     onChange={(e) => setShowContext(e.target.checked)}
                   />
-                  context wells (grey = nearby, any formation, display-only)
+                  context wells (grey = in your draw footprint, any formation)
                 </label>
               </div>
               <div className="inspect-modal-section">

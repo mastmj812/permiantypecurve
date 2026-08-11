@@ -16,8 +16,9 @@ from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.orm import Session
 
 from app.db.models import Well, WellStatus
@@ -188,11 +189,32 @@ def well_details(
 
 
 class ContextWellsRequest(BaseModel):
-    """Neighborhood query for the gun-barrel's greyed context wells."""
+    """Context query for the gun-barrel's greyed wells.
+
+    Two modes:
+      * ``polygon`` set → the DRAW FOOTPRINT: unfiltered wells whose
+        stick intersects the polygon the engineer drew (a strike-through
+        lasso defines exactly the section being inspected — no bleeding
+        into the next lease). Preferred; ``radius_ft`` is ignored.
+      * no polygon → fallback: wells within ``radius_ft`` of the staged
+        sticks (click-built inspections with no draw to anchor on).
+    """
 
     api10s: list[str] = Field(min_length=1, max_length=600)
+    polygon: dict[str, Any] | None = None
     radius_ft: float = Field(default=3000, gt=0, le=15_000)
     limit: int = Field(default=300, ge=1, le=500)
+
+    @field_validator("polygon")
+    @classmethod
+    def _vertex_cap(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Same defensive cap as the selection endpoints.
+        if v is not None:
+            coords = v.get("coordinates") or []
+            n = sum(len(ring) for ring in coords if isinstance(ring, list))
+            if n > 2000:
+                raise ValueError(f"polygon has {n} vertices; max 2000")
+        return v
 
 
 # Rough ft-per-degree at Permian latitude (~32°N): latitude is ~364,000
@@ -209,14 +231,14 @@ _FT_PER_DEG_LON_PERMIAN = _FT_PER_DEG_LAT * math.cos(math.radians(32.0))
 def context_wells(
     req: ContextWellsRequest, session: Session = Depends(get_session)
 ) -> list[WellDetailLite]:
-    """Wells NEAR the given set, deliberately unfiltered.
+    """Unfiltered wells for gun-barrel context — greyed, display-only.
 
-    The inspect modal's gun-barrel shows these greyed and non-selectable
-    so the engineer can judge co-development (e.g. a BS2_C bench right
-    above the BS2_S candidates) without the map filters hiding them and
-    without polluting the staged selection. Any formation, any status,
-    no FilterSpec — that's the point. Display-only: context wells never
-    stage, never persist, never enter provenance.
+    Draw-footprint mode (polygon set): everything whose stick intersects
+    the polygon the engineer drew, so a strike-through selection shows
+    exactly the wells of that section — any formation, any status, no
+    FilterSpec — and nothing from the next lease over. Radius mode is
+    the fallback for click-built inspections with no draw. Context
+    wells never stage, never persist, never enter provenance.
     """
     candidate = func.coalesce(Well.wellstick, Well.sh_geom)
     anchor = (
@@ -224,13 +246,19 @@ def context_wells(
         .where(Well.api10.in_(req.api10s))
         .scalar_subquery()
     )
-    radius_deg = req.radius_ft / _FT_PER_DEG_LON_PERMIAN
+    if req.polygon is not None:
+        # Same GeoJSON→geometry construction as wells_api/selection.py.
+        draw = sql_text("ST_SetSRID(ST_GeomFromGeoJSON(:ctx_poly), 4326)").bindparams(
+            ctx_poly=json.dumps(req.polygon)
+        )
+        spatial = func.ST_Intersects(candidate, draw)
+    else:
+        spatial = func.ST_DWithin(
+            candidate, anchor, req.radius_ft / _FT_PER_DEG_LON_PERMIAN
+        )
     rows = session.execute(
         select(*_LITE_COLUMNS)
-        .where(
-            Well.api10.not_in(req.api10s),
-            func.ST_DWithin(candidate, anchor, radius_deg),
-        )
+        .where(Well.api10.not_in(req.api10s), spatial)
         .order_by(func.ST_Distance(candidate, anchor))
         .limit(req.limit)
     ).all()
