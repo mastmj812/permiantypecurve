@@ -64,18 +64,21 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     return () => ro.disconnect();
   }, []);
 
-  // Gun-barrel fills the body width; height scales with the box but
-  // never shrinks below the pre-resize default. Production charts split
-  // the width two-up.
-  const gbWidth = bodySize ? Math.max(600, Math.floor(bodySize.w) - 8) : 880;
-  const gbHeight = bodySize
-    ? Math.max(320, Math.round(bodySize.h * 0.42))
-    : 320;
+  // Gun-barrel fills the body width; heights split the body's real
+  // height (flex:1 in CSS makes it track the resized modal box) minus
+  // ~110px of fixed chrome (context label, stream/scale pills, gaps).
+  // Width margins are deliberately generous so borders + the reserved
+  // scrollbar gutter can never trip horizontal overflow. Floors keep
+  // the pre-resize sizes as minimums.
+  const chromeH = 110;
+  const availH = bodySize ? Math.max(0, bodySize.h - chromeH) : 0;
+  const gbWidth = bodySize ? Math.max(600, Math.floor(bodySize.w) - 24) : 880;
+  const gbHeight = bodySize ? Math.max(320, Math.round(availH * 0.5)) : 320;
   const chartWidth = bodySize
-    ? Math.max(380, Math.floor((bodySize.w - 24) / 2))
+    ? Math.max(380, Math.floor((bodySize.w - 40) / 2))
     : 430;
   const chartHeight = bodySize
-    ? Math.max(240, Math.round(bodySize.h * 0.34))
+    ? Math.max(240, Math.round(availH * 0.42))
     : 240;
 
   // All wells start checked — engineer un-ticks the ones to drop.
@@ -336,7 +339,13 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
           )}
           {!loading && !error && wells && (
             <>
-              <div className="inspect-modal-section">
+              {/* Column layout: the context-wells toggle sits UNDER the
+                  chart — beside a full-width gun-barrel it collapses
+                  into an unreadable one-character-wide strip. */}
+              <div
+                className="inspect-modal-section"
+                style={{ flexDirection: "column", alignItems: "center", gap: 4 }}
+              >
                 <GunBarrel
                   wells={wells}
                   contextWells={showContext ? contextWells : undefined}
