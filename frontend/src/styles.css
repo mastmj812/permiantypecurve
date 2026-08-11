@@ -1261,8 +1261,17 @@ input[type="date"], input[type="number"], input[type="search"] {
 
 /* ---------- inspect modal ---------- */
 .inspect-modal {
-  width: calc(100% - 48px);
-  max-width: 1180px;
+  width: min(1180px, calc(100% - 48px));
+  /* Native bottom-right resize grip — the charts re-scale to the box
+     via the modal's ResizeObserver (they don't just gain scroll room).
+     resize requires overflow != visible; the body keeps its own
+     scroll, so hidden here loses nothing. */
+  resize: both;
+  overflow: hidden;
+  min-width: 720px;
+  min-height: 420px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 24px);
   display: flex;
   flex-direction: column;
 }

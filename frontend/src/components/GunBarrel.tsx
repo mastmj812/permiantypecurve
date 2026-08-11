@@ -12,7 +12,7 @@
 //
 // Pure SVG, no charting library — same approach as DeclineChart.
 
-import { useMemo, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 
 import type { WellDetailLite } from "../api/wells";
 import { colorForBlueox } from "../map/formations";
@@ -268,6 +268,19 @@ export function GunBarrel({
     y1: number;
   } | null>(null);
 
+  // TVD-axis zoom: drag a window on the y-axis gutter to zoom the depth
+  // range (one deep outlier otherwise compresses the shallow benches
+  // into an unreadable band). Double-click the gutter — or the reset
+  // pill — restores auto-fit. yZoom is in TVD feet; zoomBrush is the
+  // live drag band in svg pixels.
+  const [yZoom, setYZoom] = useState<{ min: number; max: number } | null>(null);
+  const [zoomBrush, setZoomBrush] = useState<{ y0: number; y1: number } | null>(
+    null,
+  );
+  // Clip circles to the plot rect so zoomed-out wells don't spill over
+  // the axes. useId keeps the clipPath id unique per mounted instance.
+  const clipId = useId();
+
   // Orientation flip. The projection canonicalizes +X to East (typical
   // West→East read), but section geometry varies pad-to-pad and the
   // engineer sometimes wants it mirrored. flip = true mirrors the
@@ -334,8 +347,9 @@ export function GunBarrel({
   const yMax0 = Math.max(...tvds);
   const ySpan = Math.max(yMax0 - yMin0, 200);
   const yPad = ySpan * 0.15;
-  const yMin = yMin0 - yPad;
-  const yMax = yMax0 + yPad;
+  // Manual TVD zoom overrides auto-fit; auto-fit stays the default.
+  const yMin = yZoom ? yZoom.min : yMin0 - yPad;
+  const yMax = yZoom ? yZoom.max : yMax0 + yPad;
   const yRange = yMax - yMin;
 
   // X: left→right = -offset → +offset. Y inverted: shallower at top.
@@ -347,6 +361,40 @@ export function GunBarrel({
   const xTicks = niceTicks(xMin, xMax, 6);
   const yTicks = niceTicks(yMin, yMax, 5);
 
+  // Drag on the y-axis gutter → zoom to that TVD window. The gutter
+  // rect stops propagation, so this never collides with box-select.
+  function onAxisMouseDown(e: React.MouseEvent<SVGRectElement>) {
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startY = e.clientY - rect.top;
+    // Freeze the at-drag-start scale so the window converts against the
+    // domain the user was looking at, even mid-re-render.
+    const y0 = plotArea.y;
+    const h = plotArea.h;
+    const dMin = yMin;
+    const dRange = yRange;
+    setZoomBrush({ y0: startY, y1: startY });
+    const clampPy = (py: number) => Math.min(Math.max(py, y0), y0 + h);
+    const onMove = (ev: MouseEvent) => {
+      setZoomBrush({ y0: startY, y1: ev.clientY - rect.top });
+    };
+    const onUp = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      setZoomBrush(null);
+      const endY = ev.clientY - rect.top;
+      if (Math.abs(endY - startY) < 8) return; // click, not a window
+      const tvdAt = (py: number) => dMin + ((clampPy(py) - y0) / h) * dRange;
+      const a = tvdAt(startY);
+      const b = tvdAt(endY);
+      setYZoom({ min: Math.min(a, b), max: Math.max(a, b) });
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
   // Start a rubber-band box on mousedown over empty chart background.
   // Mousedown on a well circle is left to that circle's onClick (toggle).
   // Modifier at drag start fixes the mode for the whole drag.
@@ -357,6 +405,8 @@ export function GunBarrel({
     if (!rect) return;
     const startX = e.clientX - rect.left;
     const startY = e.clientY - rect.top;
+    // Reserve the y-axis gutter for the zoom brush.
+    if (startX < plotArea.x) return;
     const mode: "replace" | "add" | "subtract" = e.shiftKey
       ? "add"
       : e.altKey
@@ -389,6 +439,9 @@ export function GunBarrel({
       for (const p of projected) {
         const cx = xScale(sgn * p.offsetFt);
         const cy = yScale(p.tvd);
+        // A well zoomed out of the visible TVD window is clipped from
+        // view — an oversized box must not silently grab it.
+        if (cy < plotArea.y || cy > plotArea.y + plotArea.h) continue;
         if (cx >= xa && cx <= xb && cy >= ya && cy <= yb) hit.push(p.api10);
       }
       onBoxSelect(hit, mode);
@@ -408,6 +461,18 @@ export function GunBarrel({
       >
         ⇋ {leftLabel}→{axisLabel}
       </button>
+      {yZoom && (
+        <button
+          type="button"
+          className="gun-barrel-flip-btn"
+          style={{ right: "auto", left: 6 }}
+          onClick={() => setYZoom(null)}
+          title="Reset the TVD zoom to auto-fit (or double-click the y-axis)"
+        >
+          ↕ reset {Math.round(yZoom.min).toLocaleString()}–
+          {Math.round(yZoom.max).toLocaleString()} ft
+        </button>
+      )}
       <svg
         ref={svgRef}
         width={width}
@@ -427,6 +492,20 @@ export function GunBarrel({
         fill="#fff"
         stroke="#e5e7eb"
       />
+
+      {/* Clip for well circles: a zoomed TVD window pushes out-of-range
+          wells outside the plot — clipping hides them AND removes their
+          pointer targets (clip-path affects hit-testing). */}
+      <defs>
+        <clipPath id={clipId}>
+          <rect
+            x={plotArea.x}
+            y={plotArea.y}
+            width={plotArea.w}
+            height={plotArea.h}
+          />
+        </clipPath>
+      </defs>
 
       {/* Y grid + tick labels (TVD, ft) */}
       {yTicks.map((t) => (
@@ -473,6 +552,8 @@ export function GunBarrel({
         </g>
       ))}
 
+      {/* Circles clipped to the plot rect (see clipPath above). */}
+      <g clipPath={`url(#${clipId})`}>
       {/* Context wells — greyed neighbors (any formation, filters
           ignored) projected into the staged frame. Display-only: no
           toggle, no box-select, no halo, no selection count. Hover
@@ -554,6 +635,40 @@ export function GunBarrel({
           />
         );
       })}
+      </g>
+
+      {/* Y-axis zoom gutter: drag a TVD window to zoom, double-click to
+          reset. Sits over the tick labels left of the plot. */}
+      <rect
+        x={0}
+        y={plotArea.y}
+        width={plotArea.x}
+        height={plotArea.h}
+        fill="transparent"
+        style={{ cursor: "ns-resize" }}
+        onMouseDown={onAxisMouseDown}
+        onDoubleClick={() => setYZoom(null)}
+      >
+        <title>drag to zoom TVD · double-click to reset</title>
+      </rect>
+
+      {/* Live zoom-brush band while dragging on the axis. */}
+      {zoomBrush && (
+        <rect
+          x={plotArea.x}
+          y={Math.max(plotArea.y, Math.min(zoomBrush.y0, zoomBrush.y1))}
+          width={plotArea.w}
+          height={Math.min(
+            plotArea.y + plotArea.h,
+            Math.max(zoomBrush.y0, zoomBrush.y1),
+          ) - Math.max(plotArea.y, Math.min(zoomBrush.y0, zoomBrush.y1))}
+          fill="rgba(37,99,235,0.08)"
+          stroke="#2563eb"
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          pointerEvents="none"
+        />
+      )}
 
       {/* Axis labels */}
       <text

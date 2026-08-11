@@ -40,6 +40,10 @@ export interface InspectProductionChartsProps {
   // sibling component).
   hoveredApi10?: string | null;
   onHover?: (api10: string | null) => void;
+  // Per-chart pixel size, driven by the (resizable) inspect modal.
+  // Omitted → the OverlayChart defaults (430×240).
+  chartWidth?: number;
+  chartHeight?: number;
 }
 
 const PAD = { top: 24, right: 16, bottom: 36, left: 56 };
@@ -80,6 +84,8 @@ export function InspectProductionCharts({
   cohortApi10s,
   hoveredApi10 = null,
   onHover,
+  chartWidth,
+  chartHeight,
 }: InspectProductionChartsProps) {
   const [mode, setMode] = useState<PlotMode>("oil");
   const [normalize, setNormalize] = useState<boolean>(true);
@@ -268,6 +274,8 @@ export function InspectProductionCharts({
           cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
           onHover={onHover}
+          width={chartWidth}
+          height={chartHeight}
         />
         <OverlayChart
           title={
@@ -289,6 +297,8 @@ export function InspectProductionCharts({
           cohortApi10s={cohortApi10s}
           hoveredApi10={hoveredApi10}
           onHover={onHover}
+          width={chartWidth}
+          height={chartHeight}
         />
       </div>
     </div>
