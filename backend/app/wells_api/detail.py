@@ -1,20 +1,22 @@
 """Per-well detail + filter facets.
 
-GET /api/wells/{api10}                 → full attributes + geometry as GeoJSON
-GET /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
-GET /api/wells/filters/facets          → formation + status counts for the left rail
-GET /api/wells/wellsticks?api10s=...   → GeoJSON FeatureCollection for the review-tab map
+GET  /api/wells/{api10}                 → full attributes + geometry as GeoJSON
+GET  /api/wells/filters/operators?q=    → type-ahead for the operator multi-select
+GET  /api/wells/filters/facets          → formation + status counts for the left rail
+GET  /api/wells/wellsticks?api10s=...   → GeoJSON FeatureCollection for the review-tab map
+POST /api/wells/context                 → unfiltered neighbors of a staged set (gun-barrel)
 """
 
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import date, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
@@ -123,6 +125,49 @@ def wellsticks_geojson(
     return {"type": "FeatureCollection", "features": features}
 
 
+# Column list + row mapping shared by /details and /context so the two
+# WellDetailLite producers can't drift.
+_LITE_COLUMNS = (
+    Well.api10,
+    Well.name,
+    Well.formation,
+    Well.formation_blueox,
+    Well.basin_blueox,
+    Well.operator,
+    Well.lateral_ft,
+    Well.tvd_ft,
+    func.ST_Y(Well.sh_geom).label("sh_lat"),
+    func.ST_X(Well.sh_geom).label("sh_lon"),
+    func.ST_Y(Well.bh_geom).label("bh_lat"),
+    func.ST_X(Well.bh_geom).label("bh_lon"),
+    Well.first_prod_date,
+    Well.vintage_year,
+    Well.county,
+    Well.novi_oil_eur,
+)
+
+
+def _row_to_lite(r: Any) -> WellDetailLite:
+    return WellDetailLite(
+        api10=r.api10,
+        name=r.name,
+        formation=r.formation,
+        formation_blueox=r.formation_blueox,
+        basin_blueox=r.basin_blueox,
+        operator=r.operator,
+        lateral_ft=float(r.lateral_ft) if r.lateral_ft is not None else None,
+        tvd_ft=float(r.tvd_ft) if r.tvd_ft is not None else None,
+        sh_lat=r.sh_lat,
+        sh_lon=r.sh_lon,
+        bh_lat=r.bh_lat,
+        bh_lon=r.bh_lon,
+        first_prod_date=r.first_prod_date,
+        vintage_year=int(r.vintage_year) if r.vintage_year is not None else None,
+        county=r.county,
+        novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
+    )
+
+
 @router.get("/details", response_model=list[WellDetailLite])
 def well_details(
     api10s: str = Query(..., description="CSV of api10s to fetch detail bundles for"),
@@ -138,47 +183,58 @@ def well_details(
     ids = [a.strip() for a in api10s.split(",") if a.strip()]
     if not ids:
         return []
+    rows = session.execute(select(*_LITE_COLUMNS).where(Well.api10.in_(ids))).all()
+    return [_row_to_lite(r) for r in rows]
+
+
+class ContextWellsRequest(BaseModel):
+    """Neighborhood query for the gun-barrel's greyed context wells."""
+
+    api10s: list[str] = Field(min_length=1, max_length=600)
+    radius_ft: float = Field(default=3000, gt=0, le=15_000)
+    limit: int = Field(default=300, ge=1, le=500)
+
+
+# Rough ft-per-degree at Permian latitude (~32°N): latitude is ~364,000
+# ft/deg everywhere; longitude shrinks by cos(lat). We convert the ft
+# radius with the SMALLER (longitude) scale so the degree radius always
+# covers the requested feet in every direction — slight N-S overshoot is
+# fine for a display-only context query. Same inline trick as
+# GunBarrel.tsx / the retired synthetic client.
+_FT_PER_DEG_LAT = 364_000.0
+_FT_PER_DEG_LON_PERMIAN = _FT_PER_DEG_LAT * math.cos(math.radians(32.0))
+
+
+@router.post("/context", response_model=list[WellDetailLite])
+def context_wells(
+    req: ContextWellsRequest, session: Session = Depends(get_session)
+) -> list[WellDetailLite]:
+    """Wells NEAR the given set, deliberately unfiltered.
+
+    The inspect modal's gun-barrel shows these greyed and non-selectable
+    so the engineer can judge co-development (e.g. a BS2_C bench right
+    above the BS2_S candidates) without the map filters hiding them and
+    without polluting the staged selection. Any formation, any status,
+    no FilterSpec — that's the point. Display-only: context wells never
+    stage, never persist, never enter provenance.
+    """
+    candidate = func.coalesce(Well.wellstick, Well.sh_geom)
+    anchor = (
+        select(func.ST_Collect(func.coalesce(Well.wellstick, Well.sh_geom)).label("g"))
+        .where(Well.api10.in_(req.api10s))
+        .scalar_subquery()
+    )
+    radius_deg = req.radius_ft / _FT_PER_DEG_LON_PERMIAN
     rows = session.execute(
-        select(
-            Well.api10,
-            Well.name,
-            Well.formation,
-            Well.formation_blueox,
-            Well.basin_blueox,
-            Well.operator,
-            Well.lateral_ft,
-            Well.tvd_ft,
-            func.ST_Y(Well.sh_geom).label("sh_lat"),
-            func.ST_X(Well.sh_geom).label("sh_lon"),
-            func.ST_Y(Well.bh_geom).label("bh_lat"),
-            func.ST_X(Well.bh_geom).label("bh_lon"),
-            Well.first_prod_date,
-            Well.vintage_year,
-            Well.county,
-            Well.novi_oil_eur,
-        ).where(Well.api10.in_(ids))
-    ).all()
-    return [
-        WellDetailLite(
-            api10=r.api10,
-            name=r.name,
-            formation=r.formation,
-            formation_blueox=r.formation_blueox,
-            basin_blueox=r.basin_blueox,
-            operator=r.operator,
-            lateral_ft=float(r.lateral_ft) if r.lateral_ft is not None else None,
-            tvd_ft=float(r.tvd_ft) if r.tvd_ft is not None else None,
-            sh_lat=r.sh_lat,
-            sh_lon=r.sh_lon,
-            bh_lat=r.bh_lat,
-            bh_lon=r.bh_lon,
-            first_prod_date=r.first_prod_date,
-            vintage_year=int(r.vintage_year) if r.vintage_year is not None else None,
-            county=r.county,
-            novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
+        select(*_LITE_COLUMNS)
+        .where(
+            Well.api10.not_in(req.api10s),
+            func.ST_DWithin(candidate, anchor, radius_deg),
         )
-        for r in rows
-    ]
+        .order_by(func.ST_Distance(candidate, anchor))
+        .limit(req.limit)
+    ).all()
+    return [_row_to_lite(r) for r in rows]
 
 
 @router.get("/{api10}", response_model=WellDetail)

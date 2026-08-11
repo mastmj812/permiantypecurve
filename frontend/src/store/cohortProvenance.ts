@@ -19,7 +19,7 @@
 //   * click_add events are logged for FRESH wells only — re-clicking
 //     members carries no AOI value and would just spam the narrative.
 
-import type { LastDraw, SelectionEvent } from "../api/types";
+import type { ExclusionEntry, LastDraw, SelectionEvent } from "../api/types";
 
 export interface CohortProvenance {
   version: 1;
@@ -90,4 +90,29 @@ export function appendEvents(
     truncated = true;
   }
   return { version: 1, events: next, ...(truncated ? { truncated } : {}) };
+}
+
+// Distill the event narrative into the CURRENT coded manual exclusions:
+// a manual_remove with a reason records the code for each removed well;
+// any later event that puts the well back (polygon / bbox / click_add
+// containing it) clears the record — re-adding forgives, so a stale
+// exclusion can never label a well that's a member again. Last reason
+// wins when a well is removed twice. Uncoded manual_removes clear any
+// prior record too (the removal superseded the earlier story) but
+// record nothing themselves.
+export function manualExclusionsFromEvents(
+  events: SelectionEvent[],
+): Record<string, ExclusionEntry> {
+  const out = new Map<string, ExclusionEntry>();
+  for (const ev of events) {
+    if (ev.kind === "polygon" || ev.kind === "bbox" || ev.kind === "click_add") {
+      for (const a of ev.api10s) out.delete(a);
+    } else if (ev.kind === "manual_remove" || ev.kind === "click_remove") {
+      for (const a of ev.api10s) {
+        if (ev.reason) out.set(a, ev.reason);
+        else out.delete(a);
+      }
+    }
+  }
+  return Object.fromEntries(out);
 }

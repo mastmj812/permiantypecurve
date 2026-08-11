@@ -93,6 +93,10 @@ export interface SelectionEvent {
   api10s: string[];
   polygon?: GeoJsonPolygon | null;
   filters: FilterSpec | Record<string, never>;
+  // v2: manual_remove events may carry the coded reason given at removal
+  // time. Optional/additive — pre-v2 events simply lack it, so no
+  // cohortStore persist-version bump.
+  reason?: ExclusionEntry | null;
 }
 
 // Assembled by the Review page's Aggregate button; consumed by the
@@ -106,6 +110,53 @@ export interface ProvenanceDraft {
   } | null;
   exclusions: Record<string, ExclusionEntry>;
   filter_snapshot: FilterSpec;
+  // v2: coded map-curation removals distilled from the event narrative
+  // (manualExclusionsFromEvents) — they attribute the not_selected stage.
+  manual_exclusions: Record<string, ExclusionEntry>;
+  // v2: the filter panel's formation scope at draw time (universe scope,
+  // recorded but never a cull stage). Null → server infers from the
+  // final included wells, as before.
+  formations: string[] | null;
+}
+
+// ---------------- live build-up preview (Buildup drawer) ----------------
+// Mirrors BuildupPreview* in app/api/type_curves.py.
+
+export interface BuildupWaterfallRow {
+  stage: string;
+  description: string;
+  culled: number;
+  remaining: number;
+}
+
+export interface BuildupPreviewRow {
+  api10: string;
+  name: string | null;
+  operator: string | null;
+  formation: string | null;
+  first_prod_date: string | null;
+  lateral_ft: number | null;
+  status: string | null;
+  lateral_closer_xy_ft: number | null;
+  disposition: string;
+  reason_code: string | null;
+  reason_label: string | null;
+  note: string | null;
+}
+
+export interface BuildupPreview {
+  universe_count: number;
+  universe_truncated: boolean;
+  computed_at: string | null;
+  formations: string[];
+  aoi_polygon_count: number;
+  aoi_total_area_sq_mi: number | null;
+  waterfall: BuildupWaterfallRow[];
+  rows: BuildupPreviewRow[];
+  included_count: number;
+  reconciles: boolean;
+  notes: string[];
+  no_aoi: boolean;
 }
 
 export interface SelectionSummary {

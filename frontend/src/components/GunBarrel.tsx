@@ -20,6 +20,12 @@ import { COHORT_HALO_COLOR } from "../map/wellsLayers";
 
 export interface GunBarrelProps {
   wells: WellDetailLite[];
+  // Nearby wells rendered greyed + non-selectable for co-development
+  // context (e.g. a BS2_C bench right above BS2_S candidates). They
+  // project into the STAGED wells' frame — they never shift the
+  // centroid/azimuth, never respond to clicks or box-select, and never
+  // enter the staged selection. Hover tooltip only.
+  contextWells?: WellDetailLite[];
   // api10s of wells that will be added when the user commits. The
   // unchecked wells render at lowered opacity. Toggle via onToggle.
   selectedApi10s: Set<string>;
@@ -65,24 +71,34 @@ interface Projected {
   well: WellDetailLite;
 }
 
-function projectWells(wells: WellDetailLite[]): {
-  projected: Projected[];
-  // Compass bearing (deg from N) of the +X axis BEFORE any user flip.
-  // The component turns this into a label and mirrors it when flipped.
+// The projection frame: centroid + perpendicular axis + scaling, all
+// derived from the STAGED wells only. Context wells project INTO this
+// frame (projectIntoFrame) so toggling them on can never move a staged
+// well's offset — the frame is the staged cohort's story.
+interface Frame {
+  cLon: number;
+  cLat: number;
+  perpX: number;
+  perpY: number;
+  ftPerDegLon: number;
+  meanTvd: number;
   axisBearingDeg: number;
-} {
+}
+
+function usableWells(wells: WellDetailLite[]): WellDetailLite[] {
   // Wells with no surface OR no bottomhole coordinates are dropped
   // entirely — we can't place them on the cross-section without a
   // lateral vector. (TVD missing is OK; we estimate. Coords missing
   // is not.)
-  const usable = wells.filter(
+  return wells.filter(
     (w) =>
       w.sh_lat != null && w.sh_lon != null &&
       w.bh_lat != null && w.bh_lon != null,
   );
-  if (usable.length === 0) {
-    return { projected: [], axisBearingDeg: 90 };
-  }
+}
+
+function computeFrame(usable: WellDetailLite[]): Frame | null {
+  if (usable.length === 0) return null;
 
   // Cohort centroid in lon/lat (mean of lateral midpoints).
   let cLon = 0, cLat = 0;
@@ -136,30 +152,53 @@ function projectWells(wells: WellDetailLite[]): {
       ? knownTvds.reduce((a, b) => a + b, 0) / knownTvds.length
       : 10_000;
 
-  const projected: Projected[] = usable.map((w) => {
+  // Compass bearing for +X. Convert perpendicular unit vector to
+  // bearing degrees from north (0 = N, 90 = E).
+  const bearingRad = Math.atan2(perpX, perpY);
+  const axisBearingDeg = ((bearingRad * 180) / Math.PI + 360) % 360;
+
+  return { cLon, cLat, perpX, perpY, ftPerDegLon, meanTvd, axisBearingDeg };
+}
+
+function projectIntoFrame(
+  wells: WellDetailLite[],
+  frame: Frame,
+): Projected[] {
+  return usableWells(wells).map((w) => {
     const midLon = (w.sh_lon! + w.bh_lon!) / 2;
     const midLat = (w.sh_lat! + w.bh_lat!) / 2;
     // Offset vector from cohort centroid, in feet.
-    const dxFt = (midLon - cLon) * ftPerDegLon;
-    const dyFt = (midLat - cLat) * FT_PER_DEG_LAT;
+    const dxFt = (midLon - frame.cLon) * frame.ftPerDegLon;
+    const dyFt = (midLat - frame.cLat) * FT_PER_DEG_LAT;
     // Signed projection onto the perpendicular axis.
-    const offsetFt = dxFt * perpX + dyFt * perpY;
+    const offsetFt = dxFt * frame.perpX + dyFt * frame.perpY;
     const tvdKnown = w.tvd_ft != null && Number.isFinite(w.tvd_ft);
     return {
       api10: w.api10,
       offsetFt,
-      tvd: tvdKnown ? w.tvd_ft! : meanTvd,
+      tvd: tvdKnown ? w.tvd_ft! : frame.meanTvd,
       tvdEstimated: !tvdKnown,
       well: w,
     };
   });
+}
 
-  // Compass bearing for +X. Convert perpendicular unit vector to
-  // bearing degrees from north (0 = N, 90 = E).
-  const bearingRad = Math.atan2(perpX, perpY);
-  const bearingDeg = ((bearingRad * 180) / Math.PI + 360) % 360;
-
-  return { projected, axisBearingDeg: bearingDeg };
+function projectWells(wells: WellDetailLite[]): {
+  projected: Projected[];
+  // Compass bearing (deg from N) of the +X axis BEFORE any user flip.
+  // The component turns this into a label and mirrors it when flipped.
+  axisBearingDeg: number;
+  frame: Frame | null;
+} {
+  const frame = computeFrame(usableWells(wells));
+  if (frame === null) {
+    return { projected: [], axisBearingDeg: 90, frame: null };
+  }
+  return {
+    projected: projectIntoFrame(wells, frame),
+    axisBearingDeg: frame.axisBearingDeg,
+    frame,
+  };
 }
 
 function compassLabel(deg: number): string {
@@ -175,8 +214,12 @@ function compassLabel(deg: number): string {
 
 // ---------------- component ----------------
 
+const CONTEXT_COLOR = "#9ca3af";
+const CONTEXT_RADIUS = 5;
+
 export function GunBarrel({
   wells,
+  contextWells,
   selectedApi10s,
   cohortApi10s,
   onToggle,
@@ -186,10 +229,29 @@ export function GunBarrel({
   width = 880,
   height = 320,
 }: GunBarrelProps) {
-  const { projected, axisBearingDeg } = useMemo(
+  const { projected, axisBearingDeg, frame } = useMemo(
     () => projectWells(wells),
     [wells],
   );
+
+  // Context wells project into the STAGED frame — never into their own.
+  // Staged duplicates are dropped defensively (the endpoint already
+  // excludes the inputs), as are context wells with no real TVD: a
+  // neighbor plotted at the staged cohort's mean depth would invent
+  // exactly the above/below relationship this view exists to show.
+  const contextProjected = useMemo(() => {
+    if (!frame || !contextWells || contextWells.length === 0) return [];
+    const stagedSet = new Set(wells.map((w) => w.api10));
+    return projectIntoFrame(
+      contextWells.filter(
+        (w) =>
+          !stagedSet.has(w.api10) &&
+          w.tvd_ft != null &&
+          Number.isFinite(w.tvd_ft),
+      ),
+      frame,
+    );
+  }, [contextWells, frame, wells]);
   // Local hover keeps the projected x/y for tooltip positioning. The
   // *which-well-is-hovered* truth lives at hoveredApi10 (the lifted
   // prop) so the production charts can react to the same hover.
@@ -252,8 +314,11 @@ export function GunBarrel({
   // Plot in display space: sgn folds the orientation flip into the
   // offset up front so the auto-fit range, ticks, and circle positions
   // all mirror together. Raw p.offsetFt stays canonical for tooltips.
-  const offsets = projected.map((p) => sgn * p.offsetFt);
-  const tvds = projected.map((p) => p.tvd);
+  // Context wells join the auto-fit so an adjacent bench above/below is
+  // actually visible — the frame itself stays staged-only.
+  const fitPoints = [...projected, ...contextProjected];
+  const offsets = fitPoints.map((p) => sgn * p.offsetFt);
+  const tvds = fitPoints.map((p) => p.tvd);
   const xMin0 = Math.min(...offsets);
   const xMax0 = Math.max(...offsets);
   // Always give the chart at least 1000 ft of x range so a tight pad
@@ -406,6 +471,29 @@ export function GunBarrel({
             {Math.round(t).toLocaleString()}
           </text>
         </g>
+      ))}
+
+      {/* Context wells — greyed neighbors (any formation, filters
+          ignored) projected into the staged frame. Display-only: no
+          toggle, no box-select, no halo, no selection count. Hover
+          shows the standard tooltip — formation + TVD is the value
+          ("is there a BS2_C right above these?"). Drawn first so the
+          staged circles always paint on top. */}
+      {contextProjected.map((p) => (
+        <circle
+          key={`ctx-${p.api10}`}
+          cx={xScale(sgn * p.offsetFt)}
+          cy={yScale(p.tvd)}
+          r={CONTEXT_RADIUS}
+          fill={CONTEXT_COLOR}
+          stroke={CONTEXT_COLOR}
+          strokeWidth={1}
+          opacity={0.35}
+          onMouseEnter={() => setHover(p)}
+          onMouseLeave={() =>
+            setHover((h) => (h?.api10 === p.api10 ? null : h))
+          }
+        />
       ))}
 
       {/* Cohort-membership halos — sky-blue disc under any well already

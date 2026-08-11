@@ -50,6 +50,8 @@ from app.type_curves.aggregate import (
 from app.type_curves.aggregate import (
     NormalizationBasis as AggBasis,
 )
+from app.type_curves.buildup import Buildup, reason_label
+from app.type_curves.live_buildup import compute_draft_buildup, draft_provenance
 from app.type_curves.loader import (
     cohort_ramp_anchors,
     load_well_series,
@@ -143,6 +145,10 @@ class SelectionEventIn(BaseModel):
     api10s: list[str] = Field(default_factory=list, max_length=600)
     polygon: dict[str, Any] | None = None
     filters: dict[str, Any] = Field(default_factory=dict)
+    # v2: manual_remove events may carry the coded reason the engineer
+    # gave at removal time. Narrative color only — the waterfall reads
+    # the aggregated ``manual_exclusions`` map, not per-event reasons.
+    reason: ExclusionEntryIn | None = None
 
     @field_validator("polygon")
     @classmethod
@@ -162,11 +168,21 @@ class ProvenanceIn(BaseModel):
 
     ``filter_snapshot`` is NOT here — it rides ``SaveRequest.filter_spec``
     (single source; the server copies it into the stored provenance).
+
+    v2 additions (both optional — older clients keep working):
+      * ``formations``: the formation scope from the filter panel at DRAW
+        time. Preferred for the universe over inference from the final
+        included wells (``formations_source: "draw"`` vs ``"inferred"``).
+        Recorded scope only — deliberately NOT a cull stage.
+      * ``manual_exclusions``: coded map-curation removals keyed by api10;
+        they attribute the ``not_selected`` stage in the waterfall.
     """
 
     selection_events: list[SelectionEventIn] = Field(default_factory=list, max_length=200)
     partition: PartitionIn | None = None
     exclusions: dict[str, ExclusionEntryIn] = Field(default_factory=dict)
+    formations: list[str] | None = Field(default=None, max_length=50)
+    manual_exclusions: dict[str, ExclusionEntryIn] = Field(default_factory=dict)
 
 
 class SaveRequest(BaseModel):
@@ -193,6 +209,71 @@ class SaveRequest(BaseModel):
     # "inherit the parent's provenance" (old-workflow version saves);
     # None on plain create stores {} (provenance not recorded).
     provenance: ProvenanceIn | None = None
+
+
+class BuildupPreviewRequest(BaseModel):
+    """Draft inputs for the live build-up drawer — no persistence.
+
+    ``filter_spec`` is the CURRENT FilterSpec (same JSON shape as
+    ``SaveRequest.filter_spec``); ``aoi_polygons`` are raw GeoJSON
+    Polygons from the cohort's stamped draw events.
+    """
+
+    aoi_polygons: list[dict[str, Any]] = Field(default_factory=list, max_length=50)
+    formations: list[str] = Field(default_factory=list, max_length=50)
+    filter_spec: dict[str, Any] = Field(default_factory=dict)
+    cohort_api10s: list[str] = Field(default_factory=list, max_length=600)
+    manual_exclusions: dict[str, ExclusionEntryIn] = Field(default_factory=dict)
+
+    @field_validator("aoi_polygons")
+    @classmethod
+    def _vertex_cap(cls, v: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # Same defensive cap as SelectionEventIn.polygon.
+        for p in v:
+            coords = p.get("coordinates") or []
+            n = sum(len(ring) for ring in coords if isinstance(ring, list))
+            if n > 2000:
+                raise ValueError(f"polygon has {n} vertices; max 2000")
+        return v
+
+
+class BuildupPreviewWaterfallRow(BaseModel):
+    stage: str
+    description: str
+    culled: int
+    remaining: int
+
+
+class BuildupPreviewRow(BaseModel):
+    api10: str
+    name: str | None
+    operator: str | None
+    formation: str | None
+    first_prod_date: str | None
+    lateral_ft: float | None
+    status: str | None
+    lateral_closer_xy_ft: float | None
+    disposition: str
+    reason_code: str | None
+    reason_label: str | None
+    note: str | None
+
+
+class BuildupPreviewResponse(BaseModel):
+    universe_count: int
+    universe_truncated: bool
+    computed_at: str | None
+    formations: list[str]
+    aoi_polygon_count: int
+    aoi_total_area_sq_mi: float | None
+    waterfall: list[BuildupPreviewWaterfallRow]
+    rows: list[BuildupPreviewRow]
+    included_count: int
+    reconciles: bool
+    notes: list[str]
+    # True when no AOI polygons were provided — the drawer renders its
+    # amber "stamp an AOI first" empty state instead of a table.
+    no_aoi: bool
 
 
 class TypeCurvePreviewRequest(BaseModel):
@@ -722,6 +803,85 @@ def preview_type_curve_fit(req: TypeCurvePreviewRequest) -> TypeCurvePreviewResp
     )
 
 
+# ============================ build-up preview ============================
+
+
+def _buildup_to_response(
+    b: Buildup, *, formations: list[str], no_aoi: bool
+) -> BuildupPreviewResponse:
+    """Serialize a Buildup for the drawer. Pure — shared with tests."""
+    h = b.header
+    return BuildupPreviewResponse(
+        universe_count=h.universe_count if h else 0,
+        universe_truncated=bool(h.universe_truncated) if h else False,
+        computed_at=h.universe_computed_at if h else None,
+        formations=formations,
+        aoi_polygon_count=h.aoi_polygon_count if h else 0,
+        aoi_total_area_sq_mi=h.aoi_total_area_sq_mi if h else None,
+        waterfall=[
+            BuildupPreviewWaterfallRow(
+                stage=w.stage,
+                description=w.description,
+                culled=w.culled,
+                remaining=w.remaining,
+            )
+            for w in b.waterfall
+        ],
+        rows=[
+            BuildupPreviewRow(
+                api10=r.api10,
+                name=r.name,
+                operator=r.operator,
+                formation=r.formation,
+                first_prod_date=r.first_prod_date,
+                lateral_ft=r.lateral_ft,
+                status=r.status,
+                lateral_closer_xy_ft=r.lateral_closer_xy_ft,
+                disposition=r.disposition,
+                reason_code=r.reason_code,
+                reason_label=reason_label(r.reason_code),
+                note=r.note,
+            )
+            for r in b.rows
+        ],
+        included_count=b.included_count,
+        reconciles=b.reconciles,
+        notes=b.notes,
+        no_aoi=no_aoi,
+    )
+
+
+@router.post("/buildup/preview", response_model=BuildupPreviewResponse)
+def buildup_preview(
+    req: BuildupPreviewRequest, session: Session = Depends(get_session)
+) -> BuildupPreviewResponse:
+    """Live cull waterfall for the Map tab's Buildup drawer.
+
+    Computes the universe fresh (AOI ∩ formations, uncapped up to the
+    10k sanity ceiling) and attributes every universe well via the same
+    engine the export sheet uses. Nothing persists — the save path
+    snapshots its own universe.
+    """
+    universe = compute_universe(session, req.aoi_polygons, req.formations)
+    areas = [polygon_area_sq_mi(session, p) for p in req.aoi_polygons]
+    prov = draft_provenance(
+        aoi_polygons=req.aoi_polygons,
+        formations=req.formations,
+        filter_snapshot=req.filter_spec,
+        universe=universe,
+        manual_exclusions={
+            api10: {"code": e.code, "note": e.note} for api10, e in req.manual_exclusions.items()
+        },
+        polygon_areas_sq_mi=areas,
+    )
+    b = compute_draft_buildup(cohort_api10s=req.cohort_api10s, provenance=prov)
+    return _buildup_to_response(
+        b,
+        formations=sorted({str(f) for f in req.formations}),
+        no_aoi=len(req.aoi_polygons) == 0,
+    )
+
+
 # ============================ save ============================
 
 
@@ -731,9 +891,12 @@ def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
     Server-side additions on top of the verbatim client payload:
       * AOI polygons extracted from polygon-bearing selection events,
         each with a geodesic area for the sheet's header block;
-      * ``formations`` = distinct formation_blueox of the FINAL included
-        wells (robust when the map formation filter was left empty; the
-        filter's own formation list is still visible in filter_snapshot);
+      * ``formations``: the client's draw-time formation scope when
+        provided (``formations_source: "draw"`` — matches what the live
+        Buildup drawer showed during curation), else the distinct
+        formation_blueox of the FINAL included wells
+        (``formations_source: "inferred"`` — robust fallback when the
+        map formation filter was left empty);
       * the universe snapshot (formation + AOI only, uncapped).
 
     Returns {} when the client sent no provenance — "not recorded" is an
@@ -756,23 +919,31 @@ def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
                 }
             )
 
-    formations = sorted(
-        {
-            f
-            for f in session.execute(
-                select(Well.formation_blueox).where(Well.api10.in_(req.included_api10s)).distinct()
-            ).scalars()
-            if f
-        }
-    )
+    if p.formations:
+        formations = sorted({str(f) for f in p.formations})
+        formations_source = "draw"
+    else:
+        formations = sorted(
+            {
+                f
+                for f in session.execute(
+                    select(Well.formation_blueox)
+                    .where(Well.api10.in_(req.included_api10s))
+                    .distinct()
+                ).scalars()
+                if f
+            }
+        )
+        formations_source = "inferred"
 
     universe = compute_universe(session, [entry["geometry"] for entry in aoi_polygons], formations)
 
     return {
-        "version": 1,
+        "version": 2,
         "recorded_at": now,
         "aoi": {"polygons": aoi_polygons},
         "formations": formations,
+        "formations_source": formations_source,
         # Single source: SaveRequest.filter_spec (also stored on its own
         # column) — duplicated here so provenance is self-contained.
         "filter_snapshot": req.filter_spec,
@@ -781,6 +952,10 @@ def _build_provenance(session: Session, req: SaveRequest) -> dict[str, Any]:
         "partition": p.partition.model_dump() if p.partition else None,
         "exclusions": {
             api10: {"code": e.code, "note": e.note, "at": now} for api10, e in p.exclusions.items()
+        },
+        "manual_exclusions": {
+            api10: {"code": e.code, "note": e.note, "at": now}
+            for api10, e in p.manual_exclusions.items()
         },
         "post_save_removals": [],
         "post_save_additions": [],

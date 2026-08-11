@@ -29,7 +29,11 @@ Stage order (each universe well takes the FIRST stage that removes it):
                       or unbounded (NULL / 2800-sentinel) while the
                       include-unbounded toggle was off
   4. filters_other    status / operator / explicit api10 allow-list
-  5. not_selected     survived the filters but never entered the cohort
+  5. not_selected     survived the filters but never entered the cohort.
+                      When the engineer removed the well WITH a coded
+                      reason (``manual_exclusions``, v2 provenance), the
+                      code + note ride this stage — same bucket, now
+                      attributable instead of anonymous.
   6. no_peak          forecast batch found no production peak
   7. short_history    < cutoff months post-peak AND not cohort-transferred
   8. review_excluded  engineer un-ticked on Review (code + note)
@@ -242,6 +246,9 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     uni_wells: list[dict[str, Any]] = universe.get("wells") or []
     partition: dict[str, Any] = prov.get("partition") or {}
     exclusions: dict[str, Any] = prov.get("exclusions") or {}
+    # v2: coded map-curation removals ({api10: {code, note, at}}). Absent
+    # on v1 curves — .get keeps them reading identically.
+    manual_exclusions: dict[str, Any] = prov.get("manual_exclusions") or {}
     removals: list[dict[str, Any]] = prov.get("post_save_removals") or []
     events: list[dict[str, Any]] = prov.get("selection_events") or []
     aoi_polygons: list[dict[str, Any]] = (prov.get("aoi") or {}).get("polygons") or []
@@ -346,6 +353,12 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
         if allowlist and api10 not in allowlist:
             return "filters_other", None, None
         if api10 not in cohort:
+            # A coded manual removal attributes the cull; a later re-add
+            # puts the well back in `cohort`, so a stale exclusion record
+            # never fires on a re-added well.
+            m = manual_exclusions.get(api10)
+            if m:
+                return "not_selected", m.get("code"), m.get("note")
             return "not_selected", None, None
         if api10 in no_peak:
             return "no_peak", None, None

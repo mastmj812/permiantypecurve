@@ -411,6 +411,8 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               selection_events: draft.selection_events,
               partition: draft.partition,
               exclusions: draft.exclusions,
+              manual_exclusions: draft.manual_exclusions,
+              formations: draft.formations,
             }
           : null,
       });
@@ -1971,7 +1973,9 @@ function BuildupStatusLine({ versionOf }: { versionOf: string | null }) {
   const aoiCount = draft.selection_events.filter(
     (e) => (e.kind === "polygon" || e.kind === "bbox") && e.polygon,
   ).length;
-  const nExcl = Object.keys(draft.exclusions).length;
+  const nExcl =
+    Object.keys(draft.exclusions).length +
+    Object.keys(draft.manual_exclusions ?? {}).length;
   if (aoiCount === 0) {
     return (
       <div

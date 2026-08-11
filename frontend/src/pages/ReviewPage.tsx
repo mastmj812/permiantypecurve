@@ -36,6 +36,7 @@ import {
 import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
 import { ReviewMap } from "../components/ReviewMap";
 import type { ProvenanceDraft, SelectionEvent } from "../api/types";
+import { manualExclusionsFromEvents } from "../store/cohortProvenance";
 import { activeCohort as activeCohortSel, useCohortStore } from "../store/cohortStore";
 import { useMapStore } from "../store/mapStore";
 
@@ -819,6 +820,24 @@ export function ReviewPage() {
                     },
                   ]
                 : [];
+            // v2: distill coded manual removals from the narrative, and
+            // carry the draw-time formation scope (latest polygon/bbox
+            // event's filter formations) so the saved universe matches
+            // what the Buildup drawer showed. Empty → null → the server
+            // infers from final membership as before.
+            const manualExclusions = manualExclusionsFromEvents(events);
+            let drawFormations: string[] | null = null;
+            for (let i = events.length - 1; i >= 0; i--) {
+              const ev = events[i]!;
+              if (
+                (ev.kind === "polygon" || ev.kind === "bbox") &&
+                "formations" in ev.filters &&
+                ev.filters.formations.length > 0
+              ) {
+                drawFormations = ev.filters.formations;
+                break;
+              }
+            }
             const draft: ProvenanceDraft = {
               selection_events: events,
               partition: partition
@@ -830,6 +849,8 @@ export function ReviewPage() {
                 : null,
               exclusions: Object.fromEntries(exclusions),
               filter_snapshot: st.filters,
+              manual_exclusions: manualExclusions,
+              formations: drawFormations,
             };
             st.setBuildupDraft(draft);
             // One-shot trigger — TypeCurvePage consumes this to fire
