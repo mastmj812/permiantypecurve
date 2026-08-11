@@ -43,6 +43,41 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   // the manual_remove event into the build-up narrative.
   const [showRemoveDialog, setShowRemoveDialog] = useState(false);
 
+  // Chart sizing driven by the modal's actual box — the modal is
+  // CSS-resizable (bottom-right grip), and the SVGs re-scale with it
+  // instead of just gaining scroll room. Body content box observed so
+  // padding/scrollbar are already excluded.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [bodySize, setBodySize] = useState<{ w: number; h: number } | null>(
+    null,
+  );
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const box = entry.contentBoxSize?.[0];
+        if (box) setBodySize({ w: box.inlineSize, h: box.blockSize });
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  // Gun-barrel fills the body width; height scales with the box but
+  // never shrinks below the pre-resize default. Production charts split
+  // the width two-up.
+  const gbWidth = bodySize ? Math.max(600, Math.floor(bodySize.w) - 8) : 880;
+  const gbHeight = bodySize
+    ? Math.max(320, Math.round(bodySize.h * 0.42))
+    : 320;
+  const chartWidth = bodySize
+    ? Math.max(380, Math.floor((bodySize.w - 24) / 2))
+    : 430;
+  const chartHeight = bodySize
+    ? Math.max(240, Math.round(bodySize.h * 0.34))
+    : 240;
+
   // All wells start checked — engineer un-ticks the ones to drop.
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(api10s),
@@ -292,7 +327,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
           </button>
         </div>
 
-        <div className="inspect-modal-body">
+        <div className="inspect-modal-body" ref={bodyRef}>
           {loading && (
             <div className="inspect-modal-loading">Loading wells…</div>
           )}
@@ -311,6 +346,8 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                   onHover={setHoveredApi10}
                   onToggle={toggle}
                   onBoxSelect={boxSelect}
+                  width={gbWidth}
+                  height={gbHeight}
                 />
                 <label
                   className="muted"
@@ -333,6 +370,8 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                   cohortApi10s={cohortApi10s}
                   hoveredApi10={hoveredApi10}
                   onHover={setHoveredApi10}
+                  chartWidth={chartWidth}
+                  chartHeight={chartHeight}
                 />
               </div>
             </>
