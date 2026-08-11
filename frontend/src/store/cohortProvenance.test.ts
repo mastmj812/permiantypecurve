@@ -10,6 +10,7 @@ import {
   MAX_EVENTS_PER_COHORT,
   appendEvents,
   buildStagedEvents,
+  manualExclusionsFromEvents,
 } from "./cohortProvenance";
 
 const SQUARE = {
@@ -137,5 +138,78 @@ describe("appendEvents", () => {
   it("no-op append keeps the object untouched", () => {
     const prov = { version: 1 as const, events: [] };
     expect(appendEvents(prov, [])).toBe(prov);
+  });
+});
+
+describe("manualExclusionsFromEvents", () => {
+  const remove = (
+    api10s: string[],
+    reason: { code: "outlier_profile" | "parent_child_spacing"; note: string } | null,
+    at = "2026-08-10T00:00:00Z",
+  ): SelectionEvent => ({
+    kind: "manual_remove",
+    at,
+    api10s,
+    polygon: null,
+    filters: {},
+    ...(reason ? { reason } : {}),
+  });
+  const add = (api10s: string[]): SelectionEvent => ({
+    kind: "click_add",
+    at: "2026-08-10T01:00:00Z",
+    api10s,
+    polygon: null,
+    filters: {},
+  });
+
+  it("records the coded reason per removed well", () => {
+    const out = manualExclusionsFromEvents([
+      remove(["A", "B"], { code: "parent_child_spacing", note: "standalone parent" }),
+    ]);
+    expect(out).toEqual({
+      A: { code: "parent_child_spacing", note: "standalone parent" },
+      B: { code: "parent_child_spacing", note: "standalone parent" },
+    });
+  });
+
+  it("re-adding a well clears its record (re-add forgives)", () => {
+    const out = manualExclusionsFromEvents([
+      remove(["A", "B"], { code: "outlier_profile", note: "" }),
+      add(["A"]),
+    ]);
+    expect(out).toEqual({ B: { code: "outlier_profile", note: "" } });
+  });
+
+  it("last reason wins on a re-removal", () => {
+    const out = manualExclusionsFromEvents([
+      remove(["A"], { code: "outlier_profile", note: "first" }),
+      add(["A"]),
+      remove(["A"], { code: "parent_child_spacing", note: "second" }, "2026-08-10T02:00:00Z"),
+    ]);
+    expect(out).toEqual({ A: { code: "parent_child_spacing", note: "second" } });
+  });
+
+  it("uncoded (pre-v2) removals record nothing and clear stale records", () => {
+    const out = manualExclusionsFromEvents([
+      remove(["A"], { code: "outlier_profile", note: "" }),
+      add(["A"]),
+      remove(["A"], null),
+    ]);
+    expect(out).toEqual({});
+  });
+
+  it("polygon events also clear records (re-lasso re-adds members)", () => {
+    const polygonEvent: SelectionEvent = {
+      kind: "polygon",
+      at: "2026-08-10T03:00:00Z",
+      api10s: ["A"],
+      polygon: SQUARE,
+      filters: {},
+    };
+    const out = manualExclusionsFromEvents([
+      remove(["A"], { code: "outlier_profile", note: "" }),
+      polygonEvent,
+    ]);
+    expect(out).toEqual({});
   });
 });

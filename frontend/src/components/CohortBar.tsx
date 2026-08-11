@@ -30,6 +30,7 @@ import {
   type Cohort,
 } from "../store/cohortStore";
 import { useMapStore } from "../store/mapStore";
+import { ReasonDialog } from "./ReasonDialog";
 
 export function CohortBar() {
   const cohorts = useCohortStore((s) => s.cohorts);
@@ -55,6 +56,9 @@ export function CohortBar() {
   const [showNewModal, setShowNewModal] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [showOverflow, setShowOverflow] = useState(false);
+  // Bulk "Remove staged" goes through the reason dialog — one code for
+  // the batch; it attributes the build-up's not_selected stage.
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
 
   // Memoize the staged api10 array — cohort mutations care about the
   // values, not the Set identity. Avoids rebuilding identical arrays on
@@ -88,6 +92,14 @@ export function CohortBar() {
         detail: { api10s: stagedArray },
       }),
     );
+  };
+
+  // Buildup drawer lives in MapPage (same pattern as the inspect
+  // modal); it reads the active cohort + filters itself, so the event
+  // carries no payload.
+  const openBuildup = () => {
+    if (!active) return;
+    window.dispatchEvent(new CustomEvent("cohort:open-buildup"));
   };
 
   const handleForecast = () => {
@@ -266,9 +278,9 @@ export function CohortBar() {
             title={
               stagedInCohort === 0
                 ? "None of the staged wells are in this cohort"
-                : `Remove ${stagedInCohort} staged well${stagedInCohort === 1 ? "" : "s"} from the cohort`
+                : `Remove ${stagedInCohort} staged well${stagedInCohort === 1 ? "" : "s"} from the cohort (with a coded reason)`
             }
-            onClick={() => removeApi10s(active.id, stagedArray)}
+            onClick={() => setShowRemoveDialog(true)}
           >
             Remove staged ({stagedInCohort})
           </button>
@@ -284,6 +296,14 @@ export function CohortBar() {
             onClick={openInspect}
           >
             Inspect ({stagedCount})
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            title="Live build-up table: every well in the stamped AOI with its current disposition (included / vintage / lateral / spacing / …)"
+            onClick={openBuildup}
+          >
+            Buildup ({active.api10s.length})
           </button>
           <button
             type="button"
@@ -329,6 +349,18 @@ export function CohortBar() {
         <NewCohortModal
           initialStagedApi10s={stagedArray}
           onClose={() => setShowNewModal(false)}
+        />
+      )}
+      {showRemoveDialog && (
+        <ReasonDialog
+          title={`Remove ${stagedInCohort} staged well${stagedInCohort === 1 ? "" : "s"} from ${active.name}`}
+          detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
+          confirmLabel={`Remove ${stagedInCohort}`}
+          onConfirm={(reason) => {
+            removeApi10s(active.id, stagedArray, reason);
+            setShowRemoveDialog(false);
+          }}
+          onCancel={() => setShowRemoveDialog(false)}
         />
       )}
     </>

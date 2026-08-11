@@ -377,3 +377,52 @@ def test_buildup_csv_shape() -> None:
     assert any("added outside AOI/universe" in line for line in roster)
     # Included rows sort first.
     assert roster[0].startswith("W01")
+
+
+# ---------------- v2: coded manual exclusions ----------------
+
+
+def test_manual_exclusion_attributes_not_selected() -> None:
+    """A coded map-curation removal rides the not_selected stage."""
+    prov, included = _full_provenance()
+    prov = dict(prov)
+    prov["version"] = 2
+    prov["manual_exclusions"] = {
+        "W10": {
+            "code": "parent_child_spacing",
+            "note": "standalone parent — not representative",
+            "at": "2026-08-06T00:00:00Z",
+        }
+    }
+    b = compute_buildup(_tc(prov, included))
+    w10 = next(r for r in b.rows if r.api10 == "W10")
+    assert w10.disposition == "not_selected"
+    assert w10.reason_code == "parent_child_spacing"
+    assert w10.note == "standalone parent — not representative"
+
+
+def test_manual_exclusion_stale_record_ignored_on_readded_well() -> None:
+    """A well re-added after a coded removal is included — the stale
+    exclusion record never fires (membership wins over history)."""
+    prov, included = _full_provenance()
+    prov = dict(prov)
+    prov["version"] = 2
+    prov["manual_exclusions"] = {
+        "W01": {"code": "outlier_profile", "note": "old removal", "at": "2026-08-05T00:00:00Z"}
+    }
+    b = compute_buildup(_tc(prov, included))
+    w01 = next(r for r in b.rows if r.api10 == "W01")
+    assert w01.disposition == "included"
+    assert w01.reason_code is None
+
+
+def test_v1_provenance_without_manual_exclusions_unchanged() -> None:
+    """v1 rows (no manual_exclusions key) attribute not_selected with no
+    code — byte-identical to the pre-v2 behavior."""
+    prov, included = _full_provenance()
+    assert "manual_exclusions" not in prov
+    b = compute_buildup(_tc(prov, included))
+    w10 = next(r for r in b.rows if r.api10 == "W10")
+    assert w10.disposition == "not_selected"
+    assert w10.reason_code is None
+    assert w10.note is None

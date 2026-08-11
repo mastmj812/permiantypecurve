@@ -1698,3 +1698,97 @@ input[type="date"], input[type="number"], input[type="search"] {
   }
 }
 
+
+/* ---------- build-up drawer (Map tab) ----------
+   Right-docked live cull-waterfall table. Sits inside .map-stage-canvas
+   (position: relative ancestor) so it overlays the map, not the page. */
+.buildup-drawer {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  bottom: 8px;
+  width: 560px;
+  max-width: 65%;
+  background: rgba(255, 255, 255, 0.97);
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  display: flex;
+  flex-direction: column;
+  z-index: 30;
+  padding: 10px 12px;
+  gap: 6px;
+  font-size: 12px;
+}
+.buildup-drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.buildup-drawer-scope {
+  font-size: 11px;
+}
+.buildup-drawer-empty {
+  font-size: 12px;
+  padding: 12px 4px;
+}
+.buildup-waterfall {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+  font-size: 11px;
+}
+.buildup-waterfall-chip {
+  border-radius: 10px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.buildup-note {
+  font-size: 10px;
+}
+.buildup-table-wrap {
+  overflow: auto;
+  flex: 1;
+  border-top: 1px solid #f3f4f6;
+}
+.buildup-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+}
+.buildup-table th {
+  position: sticky;
+  top: 0;
+  background: #fff;
+  text-align: left;
+  padding: 4px 6px;
+  border-bottom: 1px solid #e5e7eb;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.buildup-table th.buildup-sorted {
+  text-decoration: underline;
+}
+.buildup-table td {
+  padding: 3px 6px;
+  border-bottom: 1px solid #f8fafc;
+  white-space: nowrap;
+}
+.buildup-table td.num {
+  text-align: right;
+}
+.buildup-table td.mono {
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+}
+.buildup-badge {
+  border-radius: 8px;
+  padding: 0 6px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.buildup-tone-ok { background: #dcfce7; color: #166534; }
+.buildup-tone-cull { background: #fee2e2; color: #991b1b; }
+.buildup-tone-manual { background: #fef3c7; color: #92400e; }
+.buildup-tone-warn { background: #fde68a; color: #78350f; }

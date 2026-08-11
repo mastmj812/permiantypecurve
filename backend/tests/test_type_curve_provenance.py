@@ -185,8 +185,11 @@ def test_build_provenance_assembles_v1_shape() -> None:
     )
     prov = _build_provenance(session, req)
 
-    assert prov["version"] == 1
+    assert prov["version"] == 2
+    # No client formations → inferred from the final included wells.
     assert prov["formations"] == ["WOLFCAMP A"]  # None dropped, sorted
+    assert prov["formations_source"] == "inferred"
+    assert prov["manual_exclusions"] == {}
     # One AOI entry (the click event carries no polygon), area attached.
     polys = prov["aoi"]["polygons"]
     assert len(polys) == 1
@@ -206,6 +209,51 @@ def test_build_provenance_assembles_v1_shape() -> None:
     exc = prov["exclusions"]["4200000009"]
     assert exc["code"] == "outlier_profile" and exc["note"] == "hi GOR" and exc["at"]
     assert prov["post_save_removals"] == [] and prov["post_save_additions"] == []
+
+
+def test_build_provenance_prefers_draw_time_formations() -> None:
+    """v2: client-sent formations (the filter panel at draw time) scope
+    the universe — no inference query runs — and manual exclusions are
+    stamped with a timestamp."""
+    req = SaveRequest(
+        name="tc",
+        included_api10s=["4200000001"],
+        provenance=ProvenanceIn(
+            selection_events=[
+                SelectionEventIn(
+                    kind="polygon",
+                    at="2026-08-06T00:00:00Z",
+                    polygon=SQUARE,
+                    api10s=["4200000001"],
+                )
+            ],
+            formations=["BS2_S", "BS2_C", "BS2_S"],
+            manual_exclusions={
+                "4200000008": ExclusionEntryIn(
+                    code="parent_child_spacing", note="standalone parent"
+                )
+            },
+        ),
+    )
+    # Call order without the inference query: ST_Area, then the universe
+    # select — a formations query would fall off the side_effect list and
+    # raise StopIteration, so this mock doubles as the "no inference" assert.
+    area_result = MagicMock()
+    area_result.scalar_one.return_value = 2_589_988.110336
+    universe_result = MagicMock()
+    universe_result.all.return_value = [_universe_row("4200000001")]
+    session = MagicMock()
+    session.execute.side_effect = [area_result, universe_result]
+
+    prov = _build_provenance(session, req)
+
+    assert prov["version"] == 2
+    assert prov["formations"] == ["BS2_C", "BS2_S"]  # sorted, deduped
+    assert prov["formations_source"] == "draw"
+    m = prov["manual_exclusions"]["4200000008"]
+    assert m["code"] == "parent_child_spacing"
+    assert m["note"] == "standalone parent"
+    assert m["at"]
 
 
 # ---------------- post-save membership ledger ----------------

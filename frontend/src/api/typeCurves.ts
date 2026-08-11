@@ -1,7 +1,13 @@
 // Type curve API client. Mirrors app/api/type_curves.py.
 
 import { apiFetch } from "./auth";
-import type { ExclusionEntry, ProvenanceDraft } from "./types";
+import type {
+  BuildupPreview,
+  ExclusionEntry,
+  FilterSpec,
+  GeoJsonPolygon,
+  ProvenanceDraft,
+} from "./types";
 
 // Wire shape of SaveRequest.provenance (ProvenanceIn server-side).
 // filter_snapshot is NOT here — it rides SaveRequest.filter_spec and
@@ -10,6 +16,28 @@ export interface ProvenanceBody {
   selection_events: ProvenanceDraft["selection_events"];
   partition: ProvenanceDraft["partition"];
   exclusions: Record<string, ExclusionEntry>;
+  // v2 (both optional server-side; always sent by current clients):
+  manual_exclusions: Record<string, ExclusionEntry>;
+  formations: string[] | null;
+}
+
+// Live build-up preview for the Map tab's Buildup drawer. Stateless —
+// the server recomputes the universe from AOI ∩ formations and runs the
+// same waterfall engine the export sheet uses.
+export async function fetchBuildupPreview(args: {
+  aoi_polygons: GeoJsonPolygon[];
+  formations: string[];
+  filter_spec: FilterSpec;
+  cohort_api10s: string[];
+  manual_exclusions: Record<string, ExclusionEntry>;
+}): Promise<BuildupPreview> {
+  const r = await apiFetch("/api/type-curves/buildup/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) throw new Error(`buildup preview failed: ${r.status} ${await r.text()}`);
+  return (await r.json()) as BuildupPreview;
 }
 
 export type NormalizationBasis = "per_lateral_ft" | "per_proppant_lb" | "per_well";

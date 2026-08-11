@@ -128,6 +128,27 @@ export async function fetchWellDetails(api10s: string[]): Promise<WellDetailLite
   return (await r.json()) as WellDetailLite[];
 }
 
+// Unfiltered neighbors of a staged set — the gun-barrel's greyed context
+// wells (any formation, any status; the map filters deliberately don't
+// apply). Display-only: context wells never stage, never persist.
+export async function fetchContextWells(
+  api10s: string[],
+  opts?: { radiusFt?: number; limit?: number },
+): Promise<WellDetailLite[]> {
+  if (api10s.length === 0) return [];
+  const r = await apiFetch("/api/wells/context", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      api10s,
+      radius_ft: opts?.radiusFt ?? 3000,
+      limit: opts?.limit ?? 300,
+    }),
+  });
+  if (!r.ok) throw new Error(`context wells fetch failed: ${r.status}`);
+  return (await r.json()) as WellDetailLite[];
+}
+
 export async function fetchFacets(spec?: FilterSpec): Promise<FilterFacets> {
   // Pass the current filters so the backend can compute per-facet counts
   // under "all filters except this facet's own column". The endpoint

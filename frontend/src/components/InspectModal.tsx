@@ -6,11 +6,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { fetchWellDetails, type WellDetailLite } from "../api/wells";
+import type { ExclusionEntry } from "../api/types";
+import {
+  fetchContextWells,
+  fetchWellDetails,
+  type WellDetailLite,
+} from "../api/wells";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
 import { useMapStore } from "../store/mapStore";
 import { GunBarrel } from "./GunBarrel";
 import { InspectProductionCharts } from "./InspectProductionCharts";
+import { ReasonDialog } from "./ReasonDialog";
 
 export interface InspectModalProps {
   api10s: string[];
@@ -25,6 +31,17 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
   const [wells, setWells] = useState<WellDetailLite[] | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Greyed gun-barrel context: unfiltered neighbors of the staged set
+  // (any formation/status), so co-development reads at a glance without
+  // lassoing with filters off. Default on; failures degrade silently —
+  // context is additive, never load-bearing.
+  const [showContext, setShowContext] = useState<boolean>(true);
+  const [contextWells, setContextWells] = useState<WellDetailLite[]>([]);
+
+  // Reason dialog for "Remove N from cohort" — the coded reason rides
+  // the manual_remove event into the build-up narrative.
+  const [showRemoveDialog, setShowRemoveDialog] = useState(false);
 
   // All wells start checked — engineer un-ticks the ones to drop.
   const [selected, setSelected] = useState<Set<string>>(
@@ -129,6 +146,28 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     };
   }, [api10s]);
 
+  // Context fetch — once per staged set, independent of the detail
+  // fetch so a slow neighbor query never delays the staged circles.
+  useEffect(() => {
+    let cancelled = false;
+    if (api10s.length === 0) {
+      setContextWells([]);
+      return () => {
+        cancelled = true;
+      };
+    }
+    fetchContextWells(api10s)
+      .then((rows) => {
+        if (!cancelled) setContextWells(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setContextWells([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [api10s]);
+
   const wellsByApi10 = useMemo(() => {
     const m = new Map<string, WellDetailLite>();
     for (const w of wells ?? []) m.set(w.api10, w);
@@ -195,9 +234,10 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     return Array.from(selected).filter((a) => members.has(a));
   }, [cohort, selected]);
 
-  function removeFromCohort() {
+  function removeFromCohort(reason: ExclusionEntry) {
     if (!cohort || selectedInCohort.length === 0) return;
-    removeApi10s(cohort.id, selectedInCohort);
+    removeApi10s(cohort.id, selectedInCohort, reason);
+    setShowRemoveDialog(false);
     onClose();
   }
 
@@ -251,6 +291,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
               <div className="inspect-modal-section">
                 <GunBarrel
                   wells={wells}
+                  contextWells={showContext ? contextWells : undefined}
                   selectedApi10s={selected}
                   cohortApi10s={cohortApi10s}
                   hoveredApi10={hoveredApi10}
@@ -258,6 +299,18 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                   onToggle={toggle}
                   onBoxSelect={boxSelect}
                 />
+                <label
+                  className="muted"
+                  style={{ fontSize: 11, display: "inline-flex", gap: 4 }}
+                  title="Nearby wells of ANY formation/status (map filters ignored) — greyed, display-only, never staged"
+                >
+                  <input
+                    type="checkbox"
+                    checked={showContext}
+                    onChange={(e) => setShowContext(e.target.checked)}
+                  />
+                  context wells (grey = nearby, any formation, display-only)
+                </label>
               </div>
               <div className="inspect-modal-section">
                 <InspectProductionCharts
@@ -308,7 +361,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
               type="button"
               className="btn btn-danger"
               disabled={!hasCohort || removeCount === 0}
-              onClick={removeFromCohort}
+              onClick={() => setShowRemoveDialog(true)}
               title={
                 !hasCohort
                   ? "Create a cohort first"
@@ -339,6 +392,15 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
           </div>
         </div>
       </div>
+      {showRemoveDialog && cohort && (
+        <ReasonDialog
+          title={`Remove ${removeCount} well${removeCount === 1 ? "" : "s"} from ${cohort.name}`}
+          detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
+          confirmLabel={`Remove ${removeCount}`}
+          onConfirm={removeFromCohort}
+          onCancel={() => setShowRemoveDialog(false)}
+        />
+      )}
     </div>
   );
 }

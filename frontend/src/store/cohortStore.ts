@@ -11,7 +11,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import type { LastDraw } from "../api/types";
+import type { ExclusionEntry, LastDraw } from "../api/types";
 // Selection-event narrative for the type-well build-up. Supporting
 // narrative only: the build-up waterfall is computed server-side from
 // the universe snapshot + filter snapshot + final membership, so an
@@ -65,7 +65,13 @@ export interface CohortState {
   addStaged: (id: string, api10s: string[], lastDraw: LastDraw | null) => void;
   // Subtractive — removes any matching api10s from the cohort and logs
   // a manual_remove event (build-up narrative for the culled wells).
-  removeApi10s: (id: string, api10s: string[]) => void;
+  // The optional coded reason rides the event and surfaces on the
+  // build-up sheet's not_selected stage (v2 provenance).
+  removeApi10s: (
+    id: string,
+    api10s: string[],
+    reason?: ExclusionEntry | null,
+  ) => void;
   // Destructive — replaces the cohort's api10s wholesale. Currently
   // unused by the cohort bar but available for future "replace cohort
   // with current staged" UX if we want it.
@@ -160,7 +166,7 @@ export const useCohortStore = create<CohortState>()(
           }),
         })),
 
-      removeApi10s: (id, api10s) => {
+      removeApi10s: (id, api10s, reason = null) => {
         const drop = new Set(api10s);
         const now = new Date().toISOString();
         set((s) => ({
@@ -179,6 +185,7 @@ export const useCohortStore = create<CohortState>()(
                         api10s: removed,
                         polygon: null,
                         filters: {},
+                        ...(reason ? { reason } : {}),
                       },
                     ])
                   : c.provenance,
