@@ -89,6 +89,7 @@ from app.warehouse_client.narvi import (
     NarviInventoryWell,
     NarviScenario,
     derive_handoff_category,
+    fetch_narvi_deal_sticks,
     fetch_narvi_dsu_frames,
     fetch_narvi_inventory,
     fetch_narvi_scenario_detail,
@@ -1650,6 +1651,52 @@ def get_narvi_scenario_detail(deal_id: str, scenario_id: str) -> NarviScenarioDe
                 gunbarrel_xs=list(w.gunbarrel_xs),
             )
             for w in detail.wells
+        ],
+    )
+
+
+class NarviDealStickOut(BaseModel):
+    scenario_id: str
+    scenario_name: str | None
+    well_name: str
+    formation: str | None  # RAW formation_blueox bench code, may carry _b
+    category: str  # PUD / UPSIDE (PDP excluded server-side)
+    well_type: str  # single / uturn
+    legs_geojson: str | None  # MultiLineString, WGS84
+    turn_geojson: str | None  # LineString (U-turn arc), WGS84
+
+
+class NarviDealSticksOut(BaseModel):
+    deal_id: str
+    wells: list[NarviDealStickOut]
+
+
+@narvi_router.get("/deal-sticks", response_model=NarviDealSticksOut)
+def get_narvi_deal_sticks(deal_id: str) -> NarviDealSticksOut:
+    """All planned (non-PDP) sticks across every scenario of one narvi
+    deal — the main map's dashed planned-stick overlay. PDP context
+    comes from the map's own wells layers, never from narvi."""
+    try:
+        with contextmanager(get_warehouse_session)() as wh:
+            sticks = fetch_narvi_deal_sticks(wh, deal_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"narvi deal sticks failed: {exc}") from exc
+    if sticks is None:
+        raise HTTPException(status_code=404, detail=f"narvi deal {deal_id} not found")
+    return NarviDealSticksOut(
+        deal_id=deal_id,
+        wells=[
+            NarviDealStickOut(
+                scenario_id=s.scenario_id,
+                scenario_name=s.scenario_name,
+                well_name=s.well_name,
+                formation=s.formation,
+                category=s.category,
+                well_type=s.well_type,
+                legs_geojson=s.legs_geojson,
+                turn_geojson=s.turn_geojson,
+            )
+            for s in sticks
         ],
     )
 

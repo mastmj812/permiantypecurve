@@ -40,3 +40,30 @@ export async function fetchNarviScenarioDetail(
   }
   return (await r.json()) as NarviScenarioDetail;
 }
+
+export interface NarviDealStickWell {
+  scenario_id: string;
+  scenario_name: string | null;
+  well_name: string;
+  formation: string | null; // RAW formation_blueox bench code, may carry _b
+  category: string; // PUD / UPSIDE (PDP excluded server-side)
+  well_type: string; // single / uturn
+  legs_geojson: string | null; // MultiLineString, WGS84
+  turn_geojson: string | null; // LineString (U-turn arc), WGS84
+}
+
+export interface NarviDealSticks {
+  deal_id: string;
+  wells: NarviDealStickWell[];
+}
+
+// All planned (non-PDP) sticks across every scenario of one narvi deal —
+// the main map's dashed planned-stick overlay.
+export async function fetchNarviDealSticks(dealId: string): Promise<NarviDealSticks> {
+  const qs = new URLSearchParams({ deal_id: dealId });
+  const r = await apiFetch(`/api/narvi/deal-sticks?${qs}`);
+  if (!r.ok) {
+    throw new Error(`narvi deal sticks failed: ${r.status}`);
+  }
+  return (await r.json()) as NarviDealSticks;
+}

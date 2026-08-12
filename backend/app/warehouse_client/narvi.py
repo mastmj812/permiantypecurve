@@ -368,6 +368,81 @@ def fetch_narvi_scenario_detail(
 
 
 @dataclass(frozen=True)
+class NarviDealStick:
+    """One planned inventory well of a narvi deal — the main map's
+    stick-overlay grain. PDP producers are excluded before this level:
+    the map already renders them from anduin's own wells layers."""
+
+    scenario_id: str
+    scenario_name: str | None
+    well_name: str
+    formation: str | None  # RAW formation_blueox bench code, may carry _b
+    category: str  # resolved handoff class: PUD / UPSIDE
+    well_type: str  # single / uturn
+    legs_geojson: str | None  # MultiLineString, WGS84
+    turn_geojson: str | None  # LineString (U-turn arc), WGS84
+
+
+_DEAL_EXISTS_SQL = text(
+    """
+    SELECT 1 FROM narvi.scenario WHERE deal_id = :deal_id LIMIT 1
+    """
+)
+
+_DEAL_STICKS_SQL = text(
+    """
+    SELECT w.scenario_id, s.name AS scenario_name, w.well_name,
+           w.formation, w.well_type,
+           ST_AsGeoJSON(w.legs_geom) AS legs_geojson,
+           ST_AsGeoJSON(w.turn_geom) AS turn_geojson,
+           detail->>'category' AS category,
+           NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
+           detail->>'handoff_category' AS handoff_category
+    FROM narvi.inventory_well w
+    JOIN narvi.scenario s
+      ON s.deal_id = w.deal_id AND s.scenario_id = w.scenario_id
+    WHERE w.deal_id = :deal_id
+    ORDER BY w.scenario_id, w.well_name
+    """
+)
+
+
+def fetch_narvi_deal_sticks(wh: Session, deal_id: str) -> list[NarviDealStick] | None:
+    """All planned (non-PDP) inventory sticks across every scenario of
+    one narvi deal — the main map's dashed-stick overlay.
+
+    Returns None when the deal_id matches no scenario (typo -> 404),
+    vs [] for a real deal whose wells all resolved to PDP.
+    """
+    exists = wh.execute(_DEAL_EXISTS_SQL, {"deal_id": deal_id}).one_or_none()
+    if exists is None:
+        return None
+    rows = wh.execute(_DEAL_STICKS_SQL, {"deal_id": deal_id}).all()
+    out: list[NarviDealStick] = []
+    for r in rows:
+        cat = derive_handoff_category(
+            r.handoff_category,
+            r.category,
+            r.pdp_count_3mi is not None and r.pdp_count_3mi >= 3,
+        )
+        if cat == "PDP":
+            continue
+        out.append(
+            NarviDealStick(
+                scenario_id=r.scenario_id,
+                scenario_name=r.scenario_name,
+                well_name=r.well_name,
+                formation=r.formation,
+                category=cat,
+                well_type=r.well_type,
+                legs_geojson=r.legs_geojson,
+                turn_geojson=r.turn_geojson,
+            )
+        )
+    return out
+
+
+@dataclass(frozen=True)
 class NarviDsuFrame:
     """The gunbarrel projection frame of one DSU/scenario — everything
     needed to reproduce narvi's cross-section offsets externally:

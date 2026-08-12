@@ -8,6 +8,7 @@
 import { create } from "zustand";
 
 import type { DealPolygonGeoJSON } from "../api/dealPolygons";
+import type { NarviDealSticks } from "../api/narvi";
 import type { AggregatePayload } from "../api/typeCurves";
 import {
   DEFAULT_FILTER_SPEC,
@@ -181,6 +182,21 @@ export interface MapState {
   dealVisibility: Record<string, boolean>;
   setDealVisibility: (sourceFile: string, visible: boolean) => void;
 
+  // ---- narvi planned-stick overlay ----
+  // Dashed planned sticks for one narvi deal (all its scenarios),
+  // fetched from /api/narvi/deal-sticks. PDP never rides along — the
+  // map's own wells layers are the PDP context.
+  showNarviSticks: boolean; // master on/off
+  setShowNarviSticks: (v: boolean) => void;
+  narviDealId: string | null; // narvi deal_id (free text, e.g. "vault")
+  setNarviDealId: (id: string | null) => void;
+  narviSticks: NarviDealSticks | null; // fetched payload; null = not loaded
+  setNarviSticks: (p: NarviDealSticks | null) => void;
+  // Per-bench visibility keyed by benchKey(formation) (_b stripped).
+  // Absent or true = visible.
+  narviBenchVisibility: Record<string, boolean>;
+  setNarviBenchVisibility: (key: string, visible: boolean) => void;
+
   // ---- TC add-wells mode ----
   // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
   // route. Replaces the cohort bar's normal "Add staged → cohort" flow
@@ -323,6 +339,21 @@ export const useMapStore = create<MapState>((set) => ({
   setDealVisibility: (sourceFile, visible) =>
     set((s) => ({
       dealVisibility: { ...s.dealVisibility, [sourceFile]: visible },
+    })),
+
+  showNarviSticks: false,
+  setShowNarviSticks: (showNarviSticks) => set({ showNarviSticks }),
+  narviDealId: null,
+  // Switching deals resets the payload and bench toggles so a stale
+  // deal's features/benches never leak into the next one.
+  setNarviDealId: (narviDealId) =>
+    set({ narviDealId, narviSticks: null, narviBenchVisibility: {} }),
+  narviSticks: null,
+  setNarviSticks: (narviSticks) => set({ narviSticks }),
+  narviBenchVisibility: {},
+  setNarviBenchVisibility: (key, visible) =>
+    set((s) => ({
+      narviBenchVisibility: { ...s.narviBenchVisibility, [key]: visible },
     })),
 
   tcAddWellsMode: null,

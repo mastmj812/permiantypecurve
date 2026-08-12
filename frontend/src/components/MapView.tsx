@@ -13,10 +13,18 @@ import "maplibre-gl/dist/maplibre-gl.css";
 
 import { getStoredToken } from "../api/auth";
 import { ACREAGE_COLOR, fetchDealPolygonGeoJSON } from "../api/dealPolygons";
+import { fetchNarviDealSticks } from "../api/narvi";
 import type { GeoJsonPolygon, LastDraw } from "../api/types";
 import { selectWellsSpatial, summaryForApi10s, tileUrlTemplate } from "../api/wells";
 import { dealVisibilityFilter } from "../map/dealVisibility";
 import { DrawingController } from "../map/drawing";
+import {
+  NARVI_STICKS_LINE_LAYER,
+  NARVI_STICKS_SOURCE_ID,
+  benchKeysFor,
+  buildNarviStickFeatures,
+  narviBenchFilter,
+} from "../map/narviSticks";
 import { latestWins } from "../map/sequenced";
 import {
   WELLS_INTERACTIVE_LAYERS,
@@ -162,6 +170,7 @@ export function MapView() {
   const [sectionsError, setSectionsError] = useState<string | null>(null);
   const [basementFaultsError, setBasementFaultsError] = useState<string | null>(null);
   const [snfFaultsError, setSnfFaultsError] = useState<string | null>(null);
+  const [narviError, setNarviError] = useState<string | null>(null);
   // Style is loaded async; secondary effects that touch sources/layers
   // must wait for this to flip true (or MapLibre throws
   // "Style is not done loading").
@@ -176,6 +185,10 @@ export function MapView() {
   const showWellsticks = useMapStore((s) => s.showWellsticks);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const dealVisibility = useMapStore((s) => s.dealVisibility);
+  const showNarviSticks = useMapStore((s) => s.showNarviSticks);
+  const narviDealId = useMapStore((s) => s.narviDealId);
+  const narviSticks = useMapStore((s) => s.narviSticks);
+  const narviBenchVisibility = useMapStore((s) => s.narviBenchVisibility);
   const selectedApi10s = useMapStore((s) => s.selectedApi10s);
   const setSelection = useMapStore((s) => s.setSelection);
   const toggleApi10 = useMapStore((s) => s.toggleApi10);
@@ -758,6 +771,105 @@ export function MapView() {
     map.setFilter(DEALS_LINE_LAYER, filter);
   }, [dealVisibility, dealPolygons, styleLoaded]);
 
+  // -------------- Narvi planned-stick overlay --------------
+  // Fetch once per deal when the overlay is enabled. On failure surface
+  // the banner and flip the toggle back off (Blocks 404 pattern) so the
+  // checkbox never lies about what's on screen.
+  useEffect(() => {
+    if (!showNarviSticks || !narviDealId) return;
+    if (useMapStore.getState().narviSticks?.deal_id === narviDealId) return;
+    let cancelled = false;
+    fetchNarviDealSticks(narviDealId)
+      .then((sticks) => {
+        if (cancelled) return;
+        setNarviError(null);
+        useMapStore.getState().setNarviSticks(sticks);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.error("narvi deal sticks fetch failed", e);
+        setNarviError(String(e));
+        useMapStore.getState().setShowNarviSticks(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showNarviSticks, narviDealId]);
+
+  // Source + dashed line layer. setData on every payload change so a
+  // deal switch re-renders without remounting the map. Added lazily on
+  // first load, so the layer naturally paints above the solid PDP
+  // wellsticks. Re-apply filter + visibility after a (re-)add so the
+  // layer always lands consistent with the store.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (!narviSticks) return;
+    const fc = buildNarviStickFeatures(narviSticks);
+    const existing = map.getSource<maplibregl.GeoJSONSource>(NARVI_STICKS_SOURCE_ID);
+    if (existing) {
+      existing.setData(fc);
+    } else {
+      map.addSource(NARVI_STICKS_SOURCE_ID, { type: "geojson", data: fc });
+      map.addLayer({
+        id: NARVI_STICKS_LINE_LAYER,
+        type: "line",
+        source: NARVI_STICKS_SOURCE_ID,
+        // Default butt caps keep the [2,2] dash legible — round caps
+        // visually fuse the gaps.
+        paint: {
+          "line-color": ["get", "color"] as unknown as ExpressionSpecification,
+          "line-dasharray": [2, 2],
+          // ["zoom"] interpolate must stay the OUTERMOST expression.
+          "line-width": [
+            "interpolate", ["linear"], ["zoom"],
+            8, 1.2,
+            11, 2.6,
+            14, 4.5,
+          ] as unknown as ExpressionSpecification,
+          "line-opacity": 0.95,
+        },
+      });
+    }
+    const state = useMapStore.getState();
+    map.setFilter(
+      NARVI_STICKS_LINE_LAYER,
+      narviBenchFilter(benchKeysFor(narviSticks), state.narviBenchVisibility),
+    );
+    map.setLayoutProperty(
+      NARVI_STICKS_LINE_LAYER,
+      "visibility",
+      state.showNarviSticks ? "visible" : "none",
+    );
+  }, [narviSticks, styleLoaded]);
+
+  // Master toggle — pure visibility flip, no refetch.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (!map.getLayer(NARVI_STICKS_LINE_LAYER)) return;
+    map.setLayoutProperty(
+      NARVI_STICKS_LINE_LAYER,
+      "visibility",
+      showNarviSticks ? "visible" : "none",
+    );
+  }, [showNarviSticks, styleLoaded]);
+
+  // Per-bench filter — sticks only; the PDP wells layers are untouched.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    if (!narviSticks) return;
+    if (!map.getLayer(NARVI_STICKS_LINE_LAYER)) return;
+    map.setFilter(
+      NARVI_STICKS_LINE_LAYER,
+      narviBenchFilter(benchKeysFor(narviSticks), narviBenchVisibility),
+    );
+  }, [narviBenchVisibility, narviSticks, styleLoaded]);
+
   return (
     <div className="map-root">
       <div ref={containerRef} className="map-root" />
@@ -785,6 +897,11 @@ export function MapView() {
       {snfFaultsError && (
         <div className="map-warning" style={{ top: 376 }}>
           <strong>SNF overlay:</strong> {snfFaultsError}
+        </div>
+      )}
+      {narviError && (
+        <div className="map-warning" style={{ top: 480 }}>
+          <strong>Narvi sticks overlay:</strong> {narviError}
         </div>
       )}
     </div>
