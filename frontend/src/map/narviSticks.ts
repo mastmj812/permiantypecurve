@@ -31,6 +31,7 @@ interface StickProperties {
   formation_key: string; // benchKey(formation) — toggle/filter key
   category: string; // PUD / UPSIDE
   well_name: string;
+  deal_id: string; // narvi deal_id = one DSU in practice
   scenario_id: string;
   scenario_name: string | null;
   kind: "legs" | "turn";
@@ -62,6 +63,7 @@ export function buildNarviStickFeatures(
       formation_key: key,
       category: w.category,
       well_name: w.well_name,
+      deal_id: w.deal_id,
       scenario_id: w.scenario_id,
       scenario_name: w.scenario_name,
     };

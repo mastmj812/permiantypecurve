@@ -22,9 +22,9 @@ import re
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -1656,6 +1656,7 @@ def get_narvi_scenario_detail(deal_id: str, scenario_id: str) -> NarviScenarioDe
 
 
 class NarviDealStickOut(BaseModel):
+    deal_id: str
     scenario_id: str
     scenario_name: str | None
     well_name: str
@@ -1667,26 +1668,37 @@ class NarviDealStickOut(BaseModel):
 
 
 class NarviDealSticksOut(BaseModel):
-    deal_id: str
+    deal_ids: list[str]  # requested ids that matched a scenario
+    missing_deal_ids: list[str]  # requested ids that matched nothing
     wells: list[NarviDealStickOut]
 
 
 @narvi_router.get("/deal-sticks", response_model=NarviDealSticksOut)
-def get_narvi_deal_sticks(deal_id: str) -> NarviDealSticksOut:
-    """All planned (non-PDP) sticks across every scenario of one narvi
-    deal — the main map's dashed planned-stick overlay. PDP context
-    comes from the map's own wells layers, never from narvi."""
+def get_narvi_deal_sticks(
+    deal_id: Annotated[list[str], Query(min_length=1)],
+) -> NarviDealSticksOut:
+    """All planned (non-PDP) sticks across every scenario of the
+    selected narvi deals (repeat ?deal_id= per deal — narvi deal_ids
+    are per-DSU, so an engineer's "deal" is a set of them). PDP context
+    comes from the map's own wells layers, never from narvi. 404 only
+    when NO requested id exists; partial misses are reported in
+    missing_deal_ids."""
     try:
         with contextmanager(get_warehouse_session)() as wh:
-            sticks = fetch_narvi_deal_sticks(wh, deal_id)
+            result = fetch_narvi_deal_sticks(wh, deal_id)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"narvi deal sticks failed: {exc}") from exc
-    if sticks is None:
-        raise HTTPException(status_code=404, detail=f"narvi deal {deal_id} not found")
+    if not result.found_deal_ids:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no narvi deal found among: {', '.join(deal_id)}",
+        )
     return NarviDealSticksOut(
-        deal_id=deal_id,
+        deal_ids=list(result.found_deal_ids),
+        missing_deal_ids=list(result.missing_deal_ids),
         wells=[
             NarviDealStickOut(
+                deal_id=s.deal_id,
                 scenario_id=s.scenario_id,
                 scenario_name=s.scenario_name,
                 well_name=s.well_name,
@@ -1696,7 +1708,7 @@ def get_narvi_deal_sticks(deal_id: str) -> NarviDealSticksOut:
                 legs_geojson=s.legs_geojson,
                 turn_geojson=s.turn_geojson,
             )
-            for s in sticks
+            for s in result.sticks
         ],
     )
 

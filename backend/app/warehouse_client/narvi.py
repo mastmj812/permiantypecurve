@@ -373,6 +373,7 @@ class NarviDealStick:
     stick-overlay grain. PDP producers are excluded before this level:
     the map already renders them from anduin's own wells layers."""
 
+    deal_id: str
     scenario_id: str
     scenario_name: str | None
     well_name: str
@@ -383,15 +384,28 @@ class NarviDealStick:
     turn_geojson: str | None  # LineString (U-turn arc), WGS84
 
 
+@dataclass(frozen=True)
+class NarviDealSticksResult:
+    """Sticks for a multi-deal selection. narvi deal_ids are per-DSU in
+    practice (one engineer-named deal spans many deal_id rows, e.g.
+    vault_dsu_*), so the overlay selects a SET of deal_ids and the
+    per-id resolution is reported honestly: a typo'd id lands in
+    missing_deal_ids instead of silently shrinking the stick count."""
+
+    found_deal_ids: tuple[str, ...]
+    missing_deal_ids: tuple[str, ...]
+    sticks: tuple[NarviDealStick, ...]
+
+
 _DEAL_EXISTS_SQL = text(
     """
-    SELECT 1 FROM narvi.scenario WHERE deal_id = :deal_id LIMIT 1
+    SELECT DISTINCT deal_id FROM narvi.scenario WHERE deal_id IN :deal_ids
     """
-)
+).bindparams(bindparam("deal_ids", expanding=True))
 
 _DEAL_STICKS_SQL = text(
     """
-    SELECT w.scenario_id, s.name AS scenario_name, w.well_name,
+    SELECT w.deal_id, w.scenario_id, s.name AS scenario_name, w.well_name,
            w.formation, w.well_type,
            ST_AsGeoJSON(w.legs_geom) AS legs_geojson,
            ST_AsGeoJSON(w.turn_geom) AS turn_geojson,
@@ -401,24 +415,33 @@ _DEAL_STICKS_SQL = text(
     FROM narvi.inventory_well w
     JOIN narvi.scenario s
       ON s.deal_id = w.deal_id AND s.scenario_id = w.scenario_id
-    WHERE w.deal_id = :deal_id
-    ORDER BY w.scenario_id, w.well_name
+    WHERE w.deal_id IN :deal_ids
+    ORDER BY w.deal_id, w.scenario_id, w.well_name
     """
-)
+).bindparams(bindparam("deal_ids", expanding=True))
 
 
-def fetch_narvi_deal_sticks(wh: Session, deal_id: str) -> list[NarviDealStick] | None:
+def fetch_narvi_deal_sticks(
+    wh: Session, deal_ids: Sequence[str]
+) -> NarviDealSticksResult:
     """All planned (non-PDP) inventory sticks across every scenario of
-    one narvi deal — the main map's dashed-stick overlay.
+    the selected narvi deals — the main map's dashed-stick overlay.
 
-    Returns None when the deal_id matches no scenario (typo -> 404),
-    vs [] for a real deal whose wells all resolved to PDP.
+    An empty selection short-circuits to an empty result. Ids matching
+    no scenario are reported in missing_deal_ids; a found deal whose
+    wells all resolved to PDP simply contributes no sticks.
     """
-    exists = wh.execute(_DEAL_EXISTS_SQL, {"deal_id": deal_id}).one_or_none()
-    if exists is None:
-        return None
-    rows = wh.execute(_DEAL_STICKS_SQL, {"deal_id": deal_id}).all()
-    out: list[NarviDealStick] = []
+    requested = list(dict.fromkeys(deal_ids))  # de-dupe, keep order
+    if not requested:
+        return NarviDealSticksResult((), (), ())
+    found = {
+        r.deal_id for r in wh.execute(_DEAL_EXISTS_SQL, {"deal_ids": requested}).all()
+    }
+    missing = tuple(d for d in requested if d not in found)
+    if not found:
+        return NarviDealSticksResult((), missing, ())
+    rows = wh.execute(_DEAL_STICKS_SQL, {"deal_ids": requested}).all()
+    sticks: list[NarviDealStick] = []
     for r in rows:
         cat = derive_handoff_category(
             r.handoff_category,
@@ -427,8 +450,9 @@ def fetch_narvi_deal_sticks(wh: Session, deal_id: str) -> list[NarviDealStick] |
         )
         if cat == "PDP":
             continue
-        out.append(
+        sticks.append(
             NarviDealStick(
+                deal_id=r.deal_id,
                 scenario_id=r.scenario_id,
                 scenario_name=r.scenario_name,
                 well_name=r.well_name,
@@ -439,7 +463,11 @@ def fetch_narvi_deal_sticks(wh: Session, deal_id: str) -> list[NarviDealStick] |
                 turn_geojson=r.turn_geojson,
             )
         )
-    return out
+    return NarviDealSticksResult(
+        found_deal_ids=tuple(d for d in requested if d in found),
+        missing_deal_ids=missing,
+        sticks=tuple(sticks),
+    )
 
 
 @dataclass(frozen=True)

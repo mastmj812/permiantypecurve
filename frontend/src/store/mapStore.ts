@@ -183,13 +183,15 @@ export interface MapState {
   setDealVisibility: (sourceFile: string, visible: boolean) => void;
 
   // ---- narvi planned-stick overlay ----
-  // Dashed planned sticks for one narvi deal (all its scenarios),
-  // fetched from /api/narvi/deal-sticks. PDP never rides along — the
-  // map's own wells layers are the PDP context.
+  // Dashed planned sticks for a SET of narvi deal_ids, fetched from
+  // /api/narvi/deal-sticks. narvi deal_ids are per-DSU (vault_dsu_*),
+  // so an engineer's "deal" is many of them — bench toggles span the
+  // whole selection. PDP never rides along — the map's own wells
+  // layers are the PDP context.
   showNarviSticks: boolean; // master on/off
   setShowNarviSticks: (v: boolean) => void;
-  narviDealId: string | null; // narvi deal_id (free text, e.g. "vault")
-  setNarviDealId: (id: string | null) => void;
+  narviDealIds: string[]; // selected narvi deal_ids
+  setNarviDealIds: (ids: string[]) => void;
   narviSticks: NarviDealSticks | null; // fetched payload; null = not loaded
   setNarviSticks: (p: NarviDealSticks | null) => void;
   // Per-bench visibility keyed by benchKey(formation) (_b stripped).
@@ -343,11 +345,12 @@ export const useMapStore = create<MapState>((set) => ({
 
   showNarviSticks: false,
   setShowNarviSticks: (showNarviSticks) => set({ showNarviSticks }),
-  narviDealId: null,
-  // Switching deals resets the payload and bench toggles so a stale
-  // deal's features/benches never leak into the next one.
-  setNarviDealId: (narviDealId) =>
-    set({ narviDealId, narviSticks: null, narviBenchVisibility: {} }),
+  narviDealIds: [],
+  // Changing the selection drops the payload (MapView refetches the new
+  // set) but keeps the bench toggles — adding one more vault DSU
+  // shouldn't reset a carefully-set bench view. Bench keys absent from
+  // the new payload simply stop mattering.
+  setNarviDealIds: (narviDealIds) => set({ narviDealIds, narviSticks: null }),
   narviSticks: null,
   setNarviSticks: (narviSticks) => set({ narviSticks }),
   narviBenchVisibility: {},

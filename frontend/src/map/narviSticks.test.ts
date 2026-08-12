@@ -12,6 +12,7 @@ import {
 
 function well(overrides: Partial<NarviDealStickWell>): NarviDealStickWell {
   return {
+    deal_id: "vault_dsu_1_11",
     scenario_id: "plan_a",
     scenario_name: "Plan A",
     well_name: "W 1H",
@@ -25,7 +26,11 @@ function well(overrides: Partial<NarviDealStickWell>): NarviDealStickWell {
 }
 
 function sticks(wells: NarviDealStickWell[]): NarviDealSticks {
-  return { deal_id: "vault", wells };
+  return {
+    deal_ids: [...new Set(wells.map((w) => w.deal_id))],
+    missing_deal_ids: [],
+    wells,
+  };
 }
 
 describe("benchKey", () => {
@@ -104,6 +109,17 @@ describe("benchKeysFor", () => {
     );
     // CODE_DISPLAY_ORDER: BS3_C (Bone Spring) < WCA_1 (Wolfcamp) < WDFD (Other)
     expect(keys).toEqual(["BS3_C", "WCA_1", "WDFD", UNSET_BENCH]);
+  });
+
+  it("spans every selected deal — one toggle per bench, not per DSU", () => {
+    const keys = benchKeysFor(
+      sticks([
+        well({ deal_id: "vault_dsu_1_11", formation: "WCA_1" }),
+        well({ deal_id: "vault_dsu_14_23", formation: "WCA_1" }),
+        well({ deal_id: "vault_dsu_14_23", formation: "BS3_C" }),
+      ]),
+    );
+    expect(keys).toEqual(["BS3_C", "WCA_1"]); // deduped across deals
   });
 });
 

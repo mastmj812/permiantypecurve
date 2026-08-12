@@ -186,7 +186,7 @@ export function MapView() {
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const dealVisibility = useMapStore((s) => s.dealVisibility);
   const showNarviSticks = useMapStore((s) => s.showNarviSticks);
-  const narviDealId = useMapStore((s) => s.narviDealId);
+  const narviDealIds = useMapStore((s) => s.narviDealIds);
   const narviSticks = useMapStore((s) => s.narviSticks);
   const narviBenchVisibility = useMapStore((s) => s.narviBenchVisibility);
   const selectedApi10s = useMapStore((s) => s.selectedApi10s);
@@ -772,14 +772,16 @@ export function MapView() {
   }, [dealVisibility, dealPolygons, styleLoaded]);
 
   // -------------- Narvi planned-stick overlay --------------
-  // Fetch once per deal when the overlay is enabled. On failure surface
-  // the banner and flip the toggle back off (Blocks 404 pattern) so the
-  // checkbox never lies about what's on screen.
+  // Fetch once per deal selection when the overlay is enabled (the
+  // store nulls the payload on any selection change, so a stale set is
+  // never re-shown). On failure surface the banner and flip the toggle
+  // back off (Blocks 404 pattern) so the checkbox never lies about
+  // what's on screen.
   useEffect(() => {
-    if (!showNarviSticks || !narviDealId) return;
-    if (useMapStore.getState().narviSticks?.deal_id === narviDealId) return;
+    if (!showNarviSticks || narviDealIds.length === 0) return;
+    if (useMapStore.getState().narviSticks !== null) return;
     let cancelled = false;
-    fetchNarviDealSticks(narviDealId)
+    fetchNarviDealSticks(narviDealIds)
       .then((sticks) => {
         if (cancelled) return;
         setNarviError(null);
@@ -794,7 +796,7 @@ export function MapView() {
     return () => {
       cancelled = true;
     };
-  }, [showNarviSticks, narviDealId]);
+  }, [showNarviSticks, narviDealIds]);
 
   // Source + dashed line layer. setData on every payload change so a
   // deal switch re-renders without remounting the map. Added lazily on

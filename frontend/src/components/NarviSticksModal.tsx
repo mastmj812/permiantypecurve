@@ -1,12 +1,14 @@
-// Manage modal for the narvi planned-stick overlay. Pick a narvi deal
-// (all its saved scenarios render together), flip the master overlay
-// toggle, and show/hide individual benches. Bench visibility filters
+// Manage modal for the narvi planned-stick overlay. narvi deal_ids are
+// per-DSU in practice (an engineer's "deal" like vault spans many
+// deal_id rows: vault_dsu_*), so selection is a SET of deals — filter
+// the list (e.g. type "vault"), select all shown, and the bench
+// toggles below span the whole selection. Bench visibility filters
 // ONLY the dashed stick layer — the PDP formation filters in the
 // FilterPanel are deliberately independent.
 //
-// Overlay state (deal, payload, bench visibility, master toggle) lives
-// in mapStore; local useState here covers only the scenario-list fetch
-// lifecycle.
+// Overlay state (deal set, payload, bench visibility, master toggle)
+// lives in mapStore; local useState here covers only the scenario-list
+// fetch lifecycle and the filter text.
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -23,9 +25,10 @@ interface Props {
 export function NarviSticksModal({ onClose }: Props) {
   const [scenarios, setScenarios] = useState<NarviScenario[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [filter, setFilter] = useState("");
 
-  const narviDealId = useMapStore((s) => s.narviDealId);
-  const setNarviDealId = useMapStore((s) => s.setNarviDealId);
+  const narviDealIds = useMapStore((s) => s.narviDealIds);
+  const setNarviDealIds = useMapStore((s) => s.setNarviDealIds);
   const showNarviSticks = useMapStore((s) => s.showNarviSticks);
   const setShowNarviSticks = useMapStore((s) => s.setShowNarviSticks);
   const narviSticks = useMapStore((s) => s.narviSticks);
@@ -46,9 +49,8 @@ export function NarviSticksModal({ onClose }: Props) {
     };
   }, []);
 
-  // One pick-list entry per narvi deal_id (free text — narvi deal ids do
-  // not correspond to anduin deal names). Preserves the newest-first
-  // order of /api/narvi/scenarios.
+  // One row per narvi deal_id (free text — one per DSU in practice).
+  // Preserves the newest-first order of /api/narvi/scenarios.
   const deals = useMemo(() => {
     if (!scenarios) return [];
     const m = new Map<string, { scenarios: number; wells: number }>();
@@ -61,10 +63,24 @@ export function NarviSticksModal({ onClose }: Props) {
     return Array.from(m.entries()).map(([dealId, d]) => ({ dealId, ...d }));
   }, [scenarios]);
 
-  const dealScenarios = useMemo(
-    () => (scenarios ?? []).filter((s) => s.deal_id === narviDealId),
-    [scenarios, narviDealId],
-  );
+  const shown = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return deals;
+    return deals.filter((d) => d.dealId.toLowerCase().includes(q));
+  }, [deals, filter]);
+
+  const selected = useMemo(() => new Set(narviDealIds), [narviDealIds]);
+
+  function toggleDeal(dealId: string, on: boolean) {
+    if (on) setNarviDealIds([...narviDealIds, dealId]);
+    else setNarviDealIds(narviDealIds.filter((d) => d !== dealId));
+  }
+
+  function selectAllShown() {
+    setNarviDealIds([
+      ...new Set([...narviDealIds, ...shown.map((d) => d.dealId)]),
+    ]);
+  }
 
   const benchKeys = narviSticks ? benchKeysFor(narviSticks) : [];
 
@@ -73,7 +89,7 @@ export function NarviSticksModal({ onClose }: Props) {
       <div
         className="modal"
         onClick={(e) => e.stopPropagation()}
-        style={{ maxWidth: 640 }}
+        style={{ maxWidth: 720 }}
       >
         <header className="modal-header">
           <strong>Narvi planned sticks</strong>
@@ -91,52 +107,110 @@ export function NarviSticksModal({ onClose }: Props) {
 
           {scenarios && (
             <>
-              <div className="toolbar-group" style={{ marginBottom: 12 }}>
-                <span className="toolbar-label">Deal:</span>
-                <select
-                  value={narviDealId ?? ""}
-                  onChange={(e) => setNarviDealId(e.target.value || null)}
+              <div className="toolbar-group" style={{ marginBottom: 8 }}>
+                <span className="toolbar-label">Deals:</span>
+                <input
+                  type="text"
+                  placeholder="filter, e.g. vault"
+                  value={filter}
+                  onChange={(e) => setFilter(e.target.value)}
+                  style={{ width: 160 }}
+                />
+                <button
+                  type="button"
+                  className="tb-btn"
+                  onClick={selectAllShown}
+                  disabled={shown.length === 0}
+                  title="Select every deal matching the filter"
                 >
-                  <option value="">— pick a narvi deal —</option>
-                  {deals.map((d) => (
-                    <option key={d.dealId} value={d.dealId}>
-                      {d.dealId} ({d.scenarios} scenario{d.scenarios === 1 ? "" : "s"},{" "}
-                      {d.wells} wells)
-                    </option>
-                  ))}
-                </select>
+                  select all shown ({shown.length})
+                </button>
+                <button
+                  type="button"
+                  className="tb-btn"
+                  onClick={() => setNarviDealIds([])}
+                  disabled={narviDealIds.length === 0}
+                >
+                  clear
+                </button>
                 <label className="chk-inline" title="Show / hide the dashed planned sticks">
                   <input
                     type="checkbox"
                     checked={showNarviSticks}
-                    disabled={narviDealId === null}
+                    disabled={narviDealIds.length === 0}
                     onChange={(e) => setShowNarviSticks(e.target.checked)}
                   />
                   Show on map
                 </label>
               </div>
 
-              {narviDealId && (
+              <div
+                style={{
+                  maxHeight: 180,
+                  overflowY: "auto",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 6,
+                  padding: "6px 10px",
+                  marginBottom: 12,
+                }}
+              >
+                {shown.length === 0 && (
+                  <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+                    no narvi deals match “{filter}”
+                  </p>
+                )}
+                {shown.map((d) => (
+                  <label
+                    key={d.dealId}
+                    className="chk-inline"
+                    style={{ display: "flex", alignItems: "center", gap: 6 }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selected.has(d.dealId)}
+                      onChange={(e) => toggleDeal(d.dealId, e.target.checked)}
+                    />
+                    {d.dealId}
+                    <span className="muted" style={{ fontSize: 11 }}>
+                      {d.wells} wells
+                      {d.scenarios > 1 ? ` · ${d.scenarios} scenarios` : ""}
+                    </span>
+                  </label>
+                ))}
+              </div>
+
+              {narviDealIds.length > 0 && (
                 <>
                   <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
-                    Planned sticks only (PUD / UPSIDE) — existing producers are
-                    the map&apos;s own solid wellsticks. Bench toggles below
-                    affect the dashed sticks only, not the PDP formation
-                    filters.
+                    {narviDealIds.length} deal
+                    {narviDealIds.length === 1 ? "" : "s"} selected. Planned
+                    sticks only (PUD / UPSIDE) — existing producers are the
+                    map&apos;s own solid wellsticks. Bench toggles below span
+                    every selected deal and affect the dashed sticks only, not
+                    the PDP formation filters.
                   </p>
+                  {narviSticks && narviSticks.missing_deal_ids.length > 0 && (
+                    <div className="alert alert-error" style={{ marginBottom: 8 }}>
+                      not found in narvi:{" "}
+                      {narviSticks.missing_deal_ids.join(", ")}
+                    </div>
+                  )}
 
-                  <div style={{ marginBottom: 14 }}>
-                    <strong style={{ fontSize: 12 }}>Benches</strong>
+                  <div style={{ marginBottom: 8 }}>
+                    <strong style={{ fontSize: 12 }}>
+                      Benches
+                      {narviSticks ? ` (${narviSticks.wells.length} planned wells)` : ""}
+                    </strong>
                     {!narviSticks && (
                       <p className="muted" style={{ fontSize: 11 }}>
                         {showNarviSticks
                           ? "loading sticks…"
-                          : "enable “Show on map” to load the deal’s benches"}
+                          : "enable “Show on map” to load benches"}
                       </p>
                     )}
                     {narviSticks && benchKeys.length === 0 && (
                       <p className="muted" style={{ fontSize: 11 }}>
-                        no planned sticks in this deal
+                        no planned sticks in the selected deals
                       </p>
                     )}
                     {benchKeys.map((key) => {
@@ -152,7 +226,7 @@ export function NarviSticksModal({ onClose }: Props) {
                           key={key}
                           className="chk-inline"
                           style={{ display: "flex", alignItems: "center", gap: 6 }}
-                          title="Show / hide this bench's planned sticks"
+                          title="Show / hide this bench's planned sticks across all selected deals"
                         >
                           <input
                             type="checkbox"
@@ -175,28 +249,6 @@ export function NarviSticksModal({ onClose }: Props) {
                       );
                     })}
                   </div>
-
-                  <strong style={{ fontSize: 12 }}>Scenarios in this deal</strong>
-                  <table className="deal-polygon-table">
-                    <thead>
-                      <tr>
-                        <th>Scenario</th>
-                        <th>Type</th>
-                        <th>Wells</th>
-                        <th>Updated</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dealScenarios.map((s) => (
-                        <tr key={s.scenario_id}>
-                          <td>{s.name ?? s.scenario_id}</td>
-                          <td>{s.well_type}</td>
-                          <td>{s.total_wells ?? "—"}</td>
-                          <td>{s.updated_at.slice(0, 10)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
                 </>
               )}
             </>

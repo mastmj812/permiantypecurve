@@ -27,7 +27,7 @@ export function MapToolbar() {
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const showNarviSticks = useMapStore((s) => s.showNarviSticks);
   const setShowNarviSticks = useMapStore((s) => s.setShowNarviSticks);
-  const narviDealId = useMapStore((s) => s.narviDealId);
+  const narviDealIds = useMapStore((s) => s.narviDealIds);
   const narviSticks = useMapStore((s) => s.narviSticks);
   const [dealModalOpen, setDealModalOpen] = useState(false);
   const [narviModalOpen, setNarviModalOpen] = useState(false);
@@ -125,25 +125,25 @@ export function MapToolbar() {
         <label
           className="chk-inline"
           title={
-            narviDealId === null
-              ? "Pick a narvi deal first (Planned…)"
+            narviDealIds.length === 0
+              ? "Pick narvi deals first (Planned…)"
               : "Show / hide the dashed planned sticks"
           }
         >
           <input
             type="checkbox"
             checked={showNarviSticks}
-            disabled={narviDealId === null}
+            disabled={narviDealIds.length === 0}
             onChange={(e) => setShowNarviSticks(e.target.checked)}
           />
           Sticks
         </label>
         <span className="muted" style={{ fontSize: 11 }}>
-          {narviDealId === null
-            ? "no deal selected"
-            : narviSticks
-              ? `${narviDealId} · ${narviSticks.wells.length} wells`
-              : narviDealId}
+          {narviDealIds.length === 0
+            ? "no deals selected"
+            : `${narviDealIds.length} deal${narviDealIds.length === 1 ? "" : "s"}${
+                narviSticks ? ` · ${narviSticks.wells.length} wells` : ""
+              }`}
         </span>
         <button
           type="button"
