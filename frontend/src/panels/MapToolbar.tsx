@@ -1,6 +1,7 @@
 import { useState } from "react";
 
 import { DealPolygonsModal } from "../components/DealPolygonsModal";
+import { NarviSticksModal } from "../components/NarviSticksModal";
 import { useMapStore, type DrawMode } from "../store/mapStore";
 
 const MODES: { mode: DrawMode; label: string; hint: string }[] = [
@@ -24,7 +25,12 @@ export function MapToolbar() {
   const showSnfFaults = useMapStore((s) => s.showSnfFaults);
   const setShowSnfFaults = useMapStore((s) => s.setShowSnfFaults);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
+  const showNarviSticks = useMapStore((s) => s.showNarviSticks);
+  const setShowNarviSticks = useMapStore((s) => s.setShowNarviSticks);
+  const narviDealIds = useMapStore((s) => s.narviDealIds);
+  const narviSticks = useMapStore((s) => s.narviSticks);
   const [dealModalOpen, setDealModalOpen] = useState(false);
+  const [narviModalOpen, setNarviModalOpen] = useState(false);
 
   const polygonCount = dealPolygons?.features.length ?? 0;
 
@@ -114,8 +120,45 @@ export function MapToolbar() {
           Manage…
         </button>
       </div>
+      <div className="toolbar-group">
+        <span className="toolbar-label">Narvi:</span>
+        <label
+          className="chk-inline"
+          title={
+            narviDealIds.length === 0
+              ? "Pick narvi deals first (Planned…)"
+              : "Show / hide the dashed planned sticks"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={showNarviSticks}
+            disabled={narviDealIds.length === 0}
+            onChange={(e) => setShowNarviSticks(e.target.checked)}
+          />
+          Sticks
+        </label>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {narviDealIds.length === 0
+            ? "no deals selected"
+            : `${narviDealIds.length} deal${narviDealIds.length === 1 ? "" : "s"}${
+                narviSticks ? ` · ${narviSticks.wells.length} wells` : ""
+              }`}
+        </span>
+        <button
+          type="button"
+          className="tb-btn"
+          onClick={() => setNarviModalOpen(true)}
+          title="Pick a narvi deal and toggle its benches"
+        >
+          Planned…
+        </button>
+      </div>
       {dealModalOpen && (
         <DealPolygonsModal onClose={() => setDealModalOpen(false)} />
+      )}
+      {narviModalOpen && (
+        <NarviSticksModal onClose={() => setNarviModalOpen(false)} />
       )}
     </div>
   );

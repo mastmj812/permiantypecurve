@@ -8,6 +8,7 @@
 import { create } from "zustand";
 
 import type { DealPolygonGeoJSON } from "../api/dealPolygons";
+import type { NarviDealSticks } from "../api/narvi";
 import type { AggregatePayload } from "../api/typeCurves";
 import {
   DEFAULT_FILTER_SPEC,
@@ -181,6 +182,23 @@ export interface MapState {
   dealVisibility: Record<string, boolean>;
   setDealVisibility: (sourceFile: string, visible: boolean) => void;
 
+  // ---- narvi planned-stick overlay ----
+  // Dashed planned sticks for a SET of narvi deal_ids, fetched from
+  // /api/narvi/deal-sticks. narvi deal_ids are per-DSU (vault_dsu_*),
+  // so an engineer's "deal" is many of them — bench toggles span the
+  // whole selection. PDP never rides along — the map's own wells
+  // layers are the PDP context.
+  showNarviSticks: boolean; // master on/off
+  setShowNarviSticks: (v: boolean) => void;
+  narviDealIds: string[]; // selected narvi deal_ids
+  setNarviDealIds: (ids: string[]) => void;
+  narviSticks: NarviDealSticks | null; // fetched payload; null = not loaded
+  setNarviSticks: (p: NarviDealSticks | null) => void;
+  // Per-bench visibility keyed by benchKey(formation) (_b stripped).
+  // Absent or true = visible.
+  narviBenchVisibility: Record<string, boolean>;
+  setNarviBenchVisibility: (key: string, visible: boolean) => void;
+
   // ---- TC add-wells mode ----
   // Set when the user lands on MapPage via the `#/type-curves/{id}/add-wells`
   // route. Replaces the cohort bar's normal "Add staged → cohort" flow
@@ -323,6 +341,22 @@ export const useMapStore = create<MapState>((set) => ({
   setDealVisibility: (sourceFile, visible) =>
     set((s) => ({
       dealVisibility: { ...s.dealVisibility, [sourceFile]: visible },
+    })),
+
+  showNarviSticks: false,
+  setShowNarviSticks: (showNarviSticks) => set({ showNarviSticks }),
+  narviDealIds: [],
+  // Changing the selection drops the payload (MapView refetches the new
+  // set) but keeps the bench toggles — adding one more vault DSU
+  // shouldn't reset a carefully-set bench view. Bench keys absent from
+  // the new payload simply stop mattering.
+  setNarviDealIds: (narviDealIds) => set({ narviDealIds, narviSticks: null }),
+  narviSticks: null,
+  setNarviSticks: (narviSticks) => set({ narviSticks }),
+  narviBenchVisibility: {},
+  setNarviBenchVisibility: (key, visible) =>
+    set((s) => ({
+      narviBenchVisibility: { ...s.narviBenchVisibility, [key]: visible },
     })),
 
   tcAddWellsMode: null,

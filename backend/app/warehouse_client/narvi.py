@@ -368,6 +368,109 @@ def fetch_narvi_scenario_detail(
 
 
 @dataclass(frozen=True)
+class NarviDealStick:
+    """One planned inventory well of a narvi deal — the main map's
+    stick-overlay grain. PDP producers are excluded before this level:
+    the map already renders them from anduin's own wells layers."""
+
+    deal_id: str
+    scenario_id: str
+    scenario_name: str | None
+    well_name: str
+    formation: str | None  # RAW formation_blueox bench code, may carry _b
+    category: str  # resolved handoff class: PUD / UPSIDE
+    well_type: str  # single / uturn
+    legs_geojson: str | None  # MultiLineString, WGS84
+    turn_geojson: str | None  # LineString (U-turn arc), WGS84
+
+
+@dataclass(frozen=True)
+class NarviDealSticksResult:
+    """Sticks for a multi-deal selection. narvi deal_ids are per-DSU in
+    practice (one engineer-named deal spans many deal_id rows, e.g.
+    vault_dsu_*), so the overlay selects a SET of deal_ids and the
+    per-id resolution is reported honestly: a typo'd id lands in
+    missing_deal_ids instead of silently shrinking the stick count."""
+
+    found_deal_ids: tuple[str, ...]
+    missing_deal_ids: tuple[str, ...]
+    sticks: tuple[NarviDealStick, ...]
+
+
+_DEAL_EXISTS_SQL = text(
+    """
+    SELECT DISTINCT deal_id FROM narvi.scenario WHERE deal_id IN :deal_ids
+    """
+).bindparams(bindparam("deal_ids", expanding=True))
+
+_DEAL_STICKS_SQL = text(
+    """
+    SELECT w.deal_id, w.scenario_id, s.name AS scenario_name, w.well_name,
+           w.formation, w.well_type,
+           ST_AsGeoJSON(w.legs_geom) AS legs_geojson,
+           ST_AsGeoJSON(w.turn_geom) AS turn_geojson,
+           detail->>'category' AS category,
+           NULLIF(detail->>'pdp_count_3mi', '')::int AS pdp_count_3mi,
+           detail->>'handoff_category' AS handoff_category
+    FROM narvi.inventory_well w
+    JOIN narvi.scenario s
+      ON s.deal_id = w.deal_id AND s.scenario_id = w.scenario_id
+    WHERE w.deal_id IN :deal_ids
+    ORDER BY w.deal_id, w.scenario_id, w.well_name
+    """
+).bindparams(bindparam("deal_ids", expanding=True))
+
+
+def fetch_narvi_deal_sticks(
+    wh: Session, deal_ids: Sequence[str]
+) -> NarviDealSticksResult:
+    """All planned (non-PDP) inventory sticks across every scenario of
+    the selected narvi deals — the main map's dashed-stick overlay.
+
+    An empty selection short-circuits to an empty result. Ids matching
+    no scenario are reported in missing_deal_ids; a found deal whose
+    wells all resolved to PDP simply contributes no sticks.
+    """
+    requested = list(dict.fromkeys(deal_ids))  # de-dupe, keep order
+    if not requested:
+        return NarviDealSticksResult((), (), ())
+    found = {
+        r.deal_id for r in wh.execute(_DEAL_EXISTS_SQL, {"deal_ids": requested}).all()
+    }
+    missing = tuple(d for d in requested if d not in found)
+    if not found:
+        return NarviDealSticksResult((), missing, ())
+    rows = wh.execute(_DEAL_STICKS_SQL, {"deal_ids": requested}).all()
+    sticks: list[NarviDealStick] = []
+    for r in rows:
+        cat = derive_handoff_category(
+            r.handoff_category,
+            r.category,
+            r.pdp_count_3mi is not None and r.pdp_count_3mi >= 3,
+        )
+        if cat == "PDP":
+            continue
+        sticks.append(
+            NarviDealStick(
+                deal_id=r.deal_id,
+                scenario_id=r.scenario_id,
+                scenario_name=r.scenario_name,
+                well_name=r.well_name,
+                formation=r.formation,
+                category=cat,
+                well_type=r.well_type,
+                legs_geojson=r.legs_geojson,
+                turn_geojson=r.turn_geojson,
+            )
+        )
+    return NarviDealSticksResult(
+        found_deal_ids=tuple(d for d in requested if d in found),
+        missing_deal_ids=missing,
+        sticks=tuple(sticks),
+    )
+
+
+@dataclass(frozen=True)
 class NarviDsuFrame:
     """The gunbarrel projection frame of one DSU/scenario — everything
     needed to reproduce narvi's cross-section offsets externally:
