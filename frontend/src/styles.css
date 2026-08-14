@@ -121,6 +121,8 @@ body {
 .badge-warn { background: #fef3c7; color: #92400e; }
 .badge-err { background: #fee2e2; color: #991b1b; }
 .badge-info { background: #dbeafe; color: #1e40af; }
+/* Informational-but-quiet: a stream the fitter skipped (no peak). */
+.badge-muted { background: #f3f4f6; color: #6b7280; }
 .forecast-transfer-banner {
   display: flex;
   align-items: center;

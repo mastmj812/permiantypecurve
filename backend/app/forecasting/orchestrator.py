@@ -241,6 +241,40 @@ def _persist(
     return values.get("id") or existing.id  # type: ignore[union-attr]
 
 
+def _prune_stale_stream_forecast(session: Session, *, api10: str, stream: str) -> None:
+    """Delete a leftover forecast row for a stream today's data can't fit.
+
+    Fires from the no-peak skip branch: the well HAS production, but this
+    stream's peak window is all-zero — usually a vendor restatement
+    (Novi production-sharing re-allocation zeroing early water) that
+    rewrote history under a stored fit. A skip writes nothing, so
+    without this the stale row survives every refit and feeds the TC
+    band with a fit whose data basis no longer exists (UL 20 unit,
+    2026-08: three phantom ~2-3 MMbbl water EURs).
+
+    Machine rows only: ``locked`` rows are never touched (same contract
+    as ``_persist``), and ``manual_override`` rows are the engineer's
+    work — surfaced by the manual-override guard, not silently deleted.
+    """
+    existing = session.execute(
+        select(Forecast).where(Forecast.api10 == api10, Forecast.stream == Stream(stream))
+    ).scalar_one_or_none()
+    if existing is None:
+        return
+    if existing.locked or existing.manual_override:
+        log.info(
+            "stale_stream_forecast_kept",
+            api10=api10,
+            stream=stream,
+            locked=existing.locked,
+            manual_override=existing.manual_override,
+        )
+        return
+    session.delete(existing)
+    session.commit()
+    log.warning("stale_stream_forecast_deleted", api10=api10, stream=stream)
+
+
 def forecast_well(
     session: Session,
     api10: str,
@@ -300,6 +334,15 @@ def forecast_well(
         peak = peaks[stream]
         if peak is None:
             log.info("no_stream_production_skip", api10=api10, stream=stream)
+            # Data can't support this stream anymore — prune any leftover
+            # unlocked machine fit so it doesn't keep feeding the TC band.
+            # Deliberately NOT done in the all-streams-None / empty-frame
+            # branches above: a well with no usable production at all is
+            # more likely a sync hiccup than a per-stream restatement, and
+            # bulk-deleting every stream on a bad sync would be worse than
+            # a stale row.
+            if persist:
+                _prune_stale_stream_forecast(session, api10=api10, stream=stream)
             continue
         peak_index_abs = int(peak.peak_index)
         try:

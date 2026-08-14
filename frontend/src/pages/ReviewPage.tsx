@@ -648,6 +648,29 @@ export function ReviewPage() {
                       {r.manual_override && (
                         <span className="badge badge-warn">edited</span>
                       )}
+                      {/* A real fit exists for oil (non-stub row) but a
+                          sibling stream has no forecast: the fitter found
+                          no production peak in the detection window and
+                          skipped it (e.g. lease-allocated water credited
+                          only years after first prod). Surfaced so "no
+                          forecast" in the modal isn't a mystery. */}
+                      {!r.id.startsWith("stub-") &&
+                        (["gas", "water"] as const)
+                          .filter((st) => !fitsByWellStream.get(r.api10)?.get(st))
+                          .map((st) => (
+                            <span
+                              key={st}
+                              className="badge badge-muted"
+                              title={
+                                `No ${st} forecast — the stream had no production peak ` +
+                                `in the first 12 months, so the fit was skipped. The ` +
+                                `well contributes nothing to the type curve's ${st} band; ` +
+                                `oil and the other streams aggregate normally.`
+                              }
+                            >
+                              no {st} fit
+                            </span>
+                          ))}
                       {isExcluded && (
                         <>
                           <span className="badge badge-err">excluded</span>
