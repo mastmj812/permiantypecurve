@@ -28,6 +28,12 @@ const SOURCE_ID = "review-wellsticks";
 const LAYER_ID = "review-wellsticks-line";
 const PERMIAN_CENTER: [number, number] = [-102.5, 32.0];
 
+// Drag-resize bounds for the map panel. The default must match the
+// store's initial reviewMapHeight — double-click on the handle resets
+// to it.
+const MAP_MIN_HEIGHT = 180;
+const MAP_DEFAULT_HEIGHT = 420;
+
 // Block + Section overlay layers — same data + same zoom thresholds as
 // MapView's overlays. Kept as separate source IDs (review-blocks /
 // review-sections) so the two map components don't fight over a shared
@@ -151,6 +157,13 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
   // Per-shapefile acreage visibility set on the Map tab. The Review map
   // mirrors those toggles rather than always showing every shapefile.
   const dealVisibility = useMapStore((s) => s.dealVisibility);
+  // Panel height, adjustable by dragging the separator above the map.
+  // Store-backed so the chosen size survives tab navigation.
+  const mapHeight = useMapStore((s) => s.reviewMapHeight);
+  const setMapHeight = useMapStore((s) => s.setReviewMapHeight);
+  // Live drag bookkeeping — refs, not state: pointermove shouldn't
+  // re-render anything beyond the height write itself.
+  const dragRef = useRef<{ startY: number; startHeight: number } | null>(null);
   // Flips true once the acreage layers exist, so the visibility effect
   // knows it can call setFilter on them (they're added async post-fetch).
   const [dealsReady, setDealsReady] = useState(false);
@@ -635,10 +648,47 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
     fittedRef.current = false;
   }, [api10sKey]);
 
+  // MapLibre's trackResize observer picks up container size changes on
+  // its own, but an explicit resize() right after the height write keeps
+  // the canvas in lockstep with the drag instead of one observer tick
+  // behind.
+  useEffect(() => {
+    mapRef.current?.resize();
+  }, [mapHeight]);
+
+  function onResizePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = { startY: e.clientY, startHeight: mapHeight };
+  }
+  function onResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    const d = dragRef.current;
+    if (!d) return;
+    // The handle sits ABOVE the map, so dragging up grows it. Clamp so
+    // some of the table always stays reachable above the map.
+    const max = Math.max(MAP_MIN_HEIGHT, window.innerHeight - 160);
+    const next = Math.round(d.startHeight + (d.startY - e.clientY));
+    setMapHeight(Math.min(max, Math.max(MAP_MIN_HEIGHT, next)));
+  }
+  function onResizePointerUp(e: React.PointerEvent<HTMLDivElement>) {
+    dragRef.current = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  }
+
   if (!shouldRender) return null;
 
   return (
-    <section style={{ marginTop: 16 }}>
+    <section style={{ marginTop: 4, flexShrink: 0 }}>
+      <div
+        className="review-map-resizer"
+        title="Drag to resize the map — double-click to reset"
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={onResizePointerUp}
+        onDoubleClick={() => setMapHeight(MAP_DEFAULT_HEIGHT)}
+      />
       <header style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 6 }}>
         <strong>Map</strong>
         <span className="muted" style={{ fontSize: 11 }}>
@@ -660,7 +710,7 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
         style={{
           position: "relative",
           width: "100%",
-          height: 420,
+          height: mapHeight,
           border: "1px solid #e5e7eb",
           borderRadius: 4,
           overflow: "hidden",
