@@ -181,6 +181,8 @@ export interface MapState {
   // acreage features by it.
   dealVisibility: Record<string, boolean>;
   setDealVisibility: (sourceFile: string, visible: boolean) => void;
+  // Bulk show/hide for the modal's select-all / deselect-all controls.
+  setDealVisibilityAll: (sourceFiles: string[], visible: boolean) => void;
 
   // ---- narvi planned-stick overlay ----
   // Dashed planned sticks for a SET of narvi deal_ids, fetched from
@@ -341,6 +343,13 @@ export const useMapStore = create<MapState>((set) => ({
   setDealVisibility: (sourceFile, visible) =>
     set((s) => ({
       dealVisibility: { ...s.dealVisibility, [sourceFile]: visible },
+    })),
+  setDealVisibilityAll: (sourceFiles, visible) =>
+    set((s) => ({
+      dealVisibility: {
+        ...s.dealVisibility,
+        ...Object.fromEntries(sourceFiles.map((f) => [f, visible])),
+      },
     })),
 
   showNarviSticks: false,

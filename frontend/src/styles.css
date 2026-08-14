@@ -744,6 +744,11 @@ textarea {
   text-transform: none;
 }
 .link-btn:hover { text-decoration: underline; }
+.link-btn:disabled {
+  color: #9ca3af;
+  cursor: default;
+  text-decoration: none;
+}
 
 .filter-section { margin-bottom: 18px; }
 .filter-section h3 {

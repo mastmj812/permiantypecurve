@@ -37,6 +37,7 @@ export function DealPolygonsModal({ onClose }: Props) {
 
   const dealVisibility = useMapStore((s) => s.dealVisibility);
   const setDealVisibility = useMapStore((s) => s.setDealVisibility);
+  const setDealVisibilityAll = useMapStore((s) => s.setDealVisibilityAll);
 
   // Group polygons by their source shapefile so each upload gets one
   // visibility toggle. Preserves first-seen order.
@@ -50,6 +51,11 @@ export function DealPolygonsModal({ onClose }: Props) {
     }
     return Array.from(m.entries());
   }, [polygons]);
+
+  const sourceFiles = useMemo(() => groups.map(([f]) => f), [groups]);
+  const visibleCount = sourceFiles.filter(
+    (f) => dealVisibility[f] !== false,
+  ).length;
 
   const refreshStore = useCallback(async () => {
     // Push the latest GeoJSON into the store so MapView re-renders.
@@ -171,6 +177,39 @@ export function DealPolygonsModal({ onClose }: Props) {
             <p className="muted" style={{ textAlign: "center" }}>
               No polygons yet — upload a shapefile or GeoPackage to get started.
             </p>
+          )}
+
+          {groups.length > 1 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                marginBottom: 8,
+              }}
+            >
+              <span className="muted" style={{ fontSize: 11 }}>
+                {visibleCount} of {groups.length} shapefiles shown
+              </span>
+              <button
+                type="button"
+                className="link-btn"
+                disabled={visibleCount === groups.length}
+                onClick={() => setDealVisibilityAll(sourceFiles, true)}
+                title="Show every shapefile on the map"
+              >
+                select all
+              </button>
+              <button
+                type="button"
+                className="link-btn"
+                disabled={visibleCount === 0}
+                onClick={() => setDealVisibilityAll(sourceFiles, false)}
+                title="Hide every shapefile on the map"
+              >
+                deselect all
+              </button>
+            </div>
           )}
 
           {groups.map(([sourceFile, rows]) => {
