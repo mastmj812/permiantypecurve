@@ -441,6 +441,30 @@ body {
    so toggling include/exclude doesn't trigger the row-click modal. */
 .review-table tbody tr.row-clickable td:first-child { cursor: default; }
 
+/* Drag handle between the review table and the map panel. touch-action
+   none keeps trackpad/touch gestures from scrolling mid-drag; the grip
+   pill is the only visible part. */
+.review-map-resizer {
+  flex-shrink: 0;
+  height: 10px;
+  cursor: row-resize;
+  touch-action: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.review-map-resizer::after {
+  content: "";
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: #d1d5db;
+}
+.review-map-resizer:hover::after,
+.review-map-resizer:active::after {
+  background: #9ca3af;
+}
+
 .row-outlier td { background: #fef3c7; }
 .row-excluded td { background: #f3f4f6; opacity: 0.6; }
 .row-outlier.row-excluded td { background: #fde68a; }

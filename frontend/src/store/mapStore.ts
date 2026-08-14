@@ -87,6 +87,11 @@ export interface MapState {
   fitStatusNote: string;
   setFitStatus: (s: MapState["fitStatus"]) => void;
   setFitStatusNote: (n: string) => void;
+  // Review-tab map panel height in px, set by dragging the separator
+  // above the map. Lives here so the chosen size survives tab
+  // navigation. Clamping happens at the drag site.
+  reviewMapHeight: number;
+  setReviewMapHeight: (h: number) => void;
   // One-shot guard against the batch being kicked off twice (e.g.
   // StrictMode double-effect-run, or a click handler firing twice).
   // Set to the in-flight job_id when a batch starts; cleared when
@@ -249,6 +254,8 @@ export const useMapStore = create<MapState>((set) => ({
   fitStatusNote: "",
   setFitStatus: (fitStatus) => set({ fitStatus }),
   setFitStatusNote: (fitStatusNote) => set({ fitStatusNote }),
+  reviewMapHeight: 420,
+  setReviewMapHeight: (reviewMapHeight) => set({ reviewMapHeight }),
   fitJobId: null,
   setFitJobId: (fitJobId) => set({ fitJobId }),
   activeCohortName: null,
