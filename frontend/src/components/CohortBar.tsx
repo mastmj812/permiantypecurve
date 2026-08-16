@@ -354,7 +354,7 @@ export function CohortBar() {
       {showRemoveDialog && (
         <ReasonDialog
           title={`Remove ${stagedInCohort} staged well${stagedInCohort === 1 ? "" : "s"} from ${active.name}`}
-          detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
+          detail="One code for the batch — the build-up sheet shows it on not-selected unless a filter stage already explains the cull (nuance goes in the note)."
           confirmLabel={`Remove ${stagedInCohort}`}
           onConfirm={(reason) => {
             removeApi10s(active.id, stagedArray, reason);

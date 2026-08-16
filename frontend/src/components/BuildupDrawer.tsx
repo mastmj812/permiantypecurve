@@ -469,7 +469,7 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
       {removeTarget && (
         <ReasonDialog
           title={`Remove ${removeTarget.name ?? removeTarget.api10}`}
-          detail="The reason lands on the build-up sheet's not-selected stage."
+          detail="The reason rides the removal; the build-up sheet shows it on the not-selected stage unless a filter stage already explains the cull."
           confirmLabel="Remove well"
           onConfirm={confirmRemove}
           onCancel={() => setRemoveTarget(null)}
@@ -481,7 +481,7 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
           title={`Drop ${bulkTarget.length} off-filter well${
             bulkTarget.length === 1 ? "" : "s"
           }`}
-          detail="One code for the batch; the reason lands on the build-up sheet's not-selected stage."
+          detail="One code for the batch, recorded on each removal. The sheet will attribute these wells to the filter stage that culls them; your code surfaces on not-selected if the filters are later relaxed."
           confirmLabel={`Drop ${bulkTarget.length}`}
           onConfirm={confirmBulkRemove}
           onCancel={() => setBulkTarget(null)}
