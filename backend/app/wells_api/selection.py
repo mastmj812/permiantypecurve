@@ -57,10 +57,11 @@ class FilterSpecBody(BaseModel):
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
     # Same-zone spacing (Novi LateralCloserXY); see FilterSpec for the
-    # NULL / 2800-sentinel "unbounded" semantics.
+    # measured / no_neighbor / no_data class taxonomy.
     spacing_min_ft: float | None = None
     spacing_max_ft: float | None = None
-    spacing_include_unbounded: bool = False
+    spacing_include_no_neighbor: bool = True
+    spacing_include_no_data: bool = True
     # Case-insensitive well/lease-name substring (see FilterSpec).
     well_name_contains: str | None = None
     # Allow-list pasted in the FilterPanel. Must be honored here too so a
@@ -84,7 +85,8 @@ class FilterSpecBody(BaseModel):
             lateral_max_ft=self.lateral_max_ft,
             spacing_min_ft=self.spacing_min_ft,
             spacing_max_ft=self.spacing_max_ft,
-            spacing_include_unbounded=self.spacing_include_unbounded,
+            spacing_include_no_neighbor=self.spacing_include_no_neighbor,
+            spacing_include_no_data=self.spacing_include_no_data,
             well_name_contains=(self.well_name_contains or "").strip() or None,
             api10s=tuple(self.api10s),
         )

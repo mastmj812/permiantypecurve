@@ -28,14 +28,11 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.spacing_min_ft != null) params.set("spacing_min_ft", String(spec.spacing_min_ft));
   if (spec.spacing_max_ft != null) params.set("spacing_max_ft", String(spec.spacing_max_ft));
   if (spec.well_name_contains) params.set("well_name_contains", spec.well_name_contains);
-  // Only meaningful alongside a spacing bound; omitted otherwise to
-  // keep the tile-cache key compact.
-  if (
-    spec.spacing_include_unbounded &&
-    (spec.spacing_min_ft != null || spec.spacing_max_ft != null)
-  ) {
-    params.set("spacing_include_unbounded", "true");
-  }
+  // Both default to true server-side, so only an EXCLUSION goes on the
+  // wire — the unfiltered tile URL (and its ETag) stays as compact as
+  // it was before the class split.
+  if (!spec.spacing_include_no_neighbor) params.set("spacing_include_no_neighbor", "false");
+  if (!spec.spacing_include_no_data) params.set("spacing_include_no_data", "false");
   // api10 allow-list. 14 digits each — 500 of them = ~7.5 KB of query
   // string, still inside typical proxy buffer limits. Beyond that the
   // tile URL risks getting rejected; the FilterPanel input warns at

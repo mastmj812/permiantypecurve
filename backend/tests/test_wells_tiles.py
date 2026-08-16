@@ -91,8 +91,9 @@ _FIELD_SAMPLES: dict[str, object] = {
     "lateral_max_ft": 12000.0,
     "spacing_min_ft": 400.0,
     "spacing_max_ft": 1000.0,
-    # inert alone by design (only modifies an active spacing bound):
-    "spacing_include_unbounded": None,
+    # Sampled as False: both default True, so only an EXCLUSION filters.
+    "spacing_include_no_neighbor": False,
+    "spacing_include_no_data": False,
     "well_name_contains": "UNIVERSITY",
     "api10s": ("4200000001",),
 }
@@ -131,14 +132,35 @@ def test_every_orm_clause_has_a_tile_sql_mirror() -> None:
 
 
 def test_spacing_tile_sql_mirrors_orm_semantics() -> None:
+    # Range alone: measured gated, both no-spacing classes ride along.
     sql, params = _build_filter_sql(FilterSpec(spacing_min_ft=1500.0))
     assert "lateral_closer_xy_ft IS NOT NULL" in sql
     assert "!= :spacing_sentinel" in sql
     assert params["spacing_sentinel"] == 2800.0
-    assert " OR " not in sql  # unbounded excluded by default
+    assert "IS NULL" in sql and "= :spacing_sentinel" in sql
 
-    sql_ub, _ = _build_filter_sql(FilterSpec(spacing_min_ft=1500.0, spacing_include_unbounded=True))
-    assert "IS NULL" in sql_ub and "= :spacing_sentinel" in sql_ub
+    # Both classes excluded: measured gate only, nothing OR'd back.
+    sql_x, _ = _build_filter_sql(
+        FilterSpec(
+            spacing_min_ft=1500.0,
+            spacing_include_no_neighbor=False,
+            spacing_include_no_data=False,
+        )
+    )
+    assert " OR " not in sql_x
+
+    # Class flag live with NO range — the tile SQL must cull too, or the
+    # map keeps showing wells the selection endpoint drops.
+    sql_nr, params_nr = _build_filter_sql(FilterSpec(spacing_include_no_neighbor=False))
+    assert "!= :spacing_sentinel" in sql_nr
+    assert params_nr["spacing_sentinel"] == 2800.0
+    assert "spacing_min_ft" not in params_nr
+
+    # Fully unconstrained emits NO spacing fragment (only the default
+    # status clause), so the unfiltered tile URL and ETag are unchanged.
+    sql_base, params_base = _build_filter_sql(FilterSpec())
+    assert "lateral_closer_xy_ft" not in sql_base
+    assert "spacing_sentinel" not in params_base
 
 
 def test_well_name_tile_sql_escapes_metacharacters() -> None:

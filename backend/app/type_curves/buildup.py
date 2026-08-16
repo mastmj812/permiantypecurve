@@ -127,6 +127,26 @@ class Buildup:
     notes: list[str] = field(default_factory=list)
 
 
+def _resolve_spacing_classes(fs: dict[str, Any]) -> tuple[bool, bool]:
+    """Which no-spacing classes the snapshot admits: (no_neighbor, no_data).
+
+    Snapshots written before the class split carry a single
+    `spacing_include_unbounded` flag that covered both classes AND was
+    inert unless a range was set — a bare False meant "all wells pass".
+    Reproduce that exactly for those snapshots, or every historical
+    buildup would retro-attribute no-neighbor wells to the spacing stage
+    on a curve whose membership never changed.
+    """
+    if "spacing_include_no_neighbor" in fs or "spacing_include_no_data" in fs:
+        return (
+            bool(fs.get("spacing_include_no_neighbor", True)),
+            bool(fs.get("spacing_include_no_data", True)),
+        )
+    ranged = fs.get("spacing_min_ft") is not None or fs.get("spacing_max_ft") is not None
+    legacy = (not ranged) or bool(fs.get("spacing_include_unbounded"))
+    return legacy, legacy
+
+
 def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     start, end = fs.get("first_prod_start"), fs.get("first_prod_end")
@@ -144,22 +164,31 @@ def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
     elif lat_max is not None:
         out.append(("lateral_criterion", f"<= {lat_max:,.0f} ft"))
     sp_min, sp_max = fs.get("spacing_min_ft"), fs.get("spacing_max_ft")
-    if sp_min is not None or sp_max is not None:
+    inc_nn, inc_nd = _resolve_spacing_classes(fs)
+    # A class exclusion is a criterion on its own now — it no longer
+    # needs a range to be live, so the line must render without one.
+    if sp_min is not None or sp_max is not None or not inc_nn or not inc_nd:
         if sp_min is not None and sp_max is not None:
             rng = f"{sp_min:,.0f} - {sp_max:,.0f} ft"
         elif sp_min is not None:
             rng = f">= {sp_min:,.0f} ft"
-        else:
+        elif sp_max is not None:
             rng = f"<= {sp_max:,.0f} ft"
-        unbounded = (
-            "no-neighbor wells included"
-            if fs.get("spacing_include_unbounded")
-            else "no-neighbor wells excluded"
-        )
+        else:
+            rng = "any measured"
+        excluded = [
+            label
+            for label, keep in (
+                ("no-neighbor (2,800 ft cap)", inc_nn),
+                ("no spacing data", inc_nd),
+            )
+            if not keep
+        ]
+        classes = f"excludes {' and '.join(excluded)}" if excluded else "all classes included"
         out.append(
             (
                 "spacing_criterion",
-                f"{rng} same-zone offset at first prod ({unbounded})",
+                f"{rng} same-zone offset at first prod ({classes})",
             )
         )
     statuses = fs.get("statuses") or []
@@ -314,8 +343,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     lo_date, hi_date = fs.get("first_prod_start"), fs.get("first_prod_end")
     lo_lat, hi_lat = fs.get("lateral_min_ft"), fs.get("lateral_max_ft")
     sp_min, sp_max = fs.get("spacing_min_ft"), fs.get("spacing_max_ft")
-    sp_active = sp_min is not None or sp_max is not None
-    sp_include_unbounded = bool(fs.get("spacing_include_unbounded"))
+    sp_inc_no_neighbor, sp_inc_no_data = _resolve_spacing_classes(fs)
     statuses = {str(s) for s in (fs.get("statuses") or [])}
     operators = {str(o) for o in (fs.get("operators") or [])}
     name_sub = str(fs.get("well_name_contains") or "").casefold() or None
@@ -325,14 +353,14 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     # design decision; nothing to evaluate here.
 
     def _spacing_culled(w: dict[str, Any]) -> bool:
-        # Mirrors FilterSpec.to_sqlalchemy_clauses: bounds bind only on
-        # REAL spacing; NULL + the 2800 no-neighbor sentinel form the
-        # "unbounded" class admitted solely by the include toggle.
-        if not sp_active:
-            return False
+        # Mirrors FilterSpec.to_sqlalchemy_clauses: the range binds only
+        # the `measured` class; no_data (NULL) and no_neighbor (the 2800
+        # cap) are each admitted by their own flag, range or not.
         v = w.get("lateral_closer_xy_ft")
-        if v is None or v == SPACING_SENTINEL_FT:
-            return not sp_include_unbounded
+        if v is None:
+            return not sp_inc_no_data
+        if v == SPACING_SENTINEL_FT:
+            return not sp_inc_no_neighbor
         return _outside(v, sp_min, sp_max)
 
     def disposition_for(w: dict[str, Any]) -> tuple[str, str | None, str | None]:

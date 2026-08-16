@@ -22,9 +22,10 @@ export function FilterPanel() {
   const setVintageRange = useMapStore((s) => s.setVintageRange);
   const setLateralRange = useMapStore((s) => s.setLateralRange);
   const setSpacingRange = useMapStore((s) => s.setSpacingRange);
-  const setSpacingIncludeUnbounded = useMapStore(
-    (s) => s.setSpacingIncludeUnbounded,
+  const setSpacingIncludeNoNeighbor = useMapStore(
+    (s) => s.setSpacingIncludeNoNeighbor,
   );
+  const setSpacingIncludeNoData = useMapStore((s) => s.setSpacingIncludeNoData);
   const setWellNameContains = useMapStore((s) => s.setWellNameContains);
   const setApi10s = useMapStore((s) => s.setApi10s);
   const resetFilters = useMapStore((s) => s.resetFilters);
@@ -87,9 +88,11 @@ export function FilterPanel() {
       <SpacingSection
         min={filters.spacing_min_ft}
         max={filters.spacing_max_ft}
-        includeUnbounded={filters.spacing_include_unbounded}
+        includeNoNeighbor={filters.spacing_include_no_neighbor}
+        includeNoData={filters.spacing_include_no_data}
         onRangeChange={setSpacingRange}
-        onIncludeUnboundedChange={setSpacingIncludeUnbounded}
+        onIncludeNoNeighborChange={setSpacingIncludeNoNeighbor}
+        onIncludeNoDataChange={setSpacingIncludeNoData}
       />
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
@@ -519,27 +522,35 @@ function WellNameSection({
   );
 }
 
-// ---------------- Spacing (Novi LateralCloserXY, min/max + toggle) ----------------
+// ---------------- Spacing (Novi LateralCloserXY) ----------------
 // Same-zone lateral offset at FIRST PRODUCTION (not current spacing).
-// Bounds bind only on wells with real measured spacing; wells with no
-// same-zone neighbor (absent from Novi WellSpacing, or carrying the
-// 2800-ft sentinel cap) form a separate "no-neighbor" class that the
-// checkbox re-admits — so a wide-spacing floor can't silently sweep in
-// parent wells whose 2800 is a cap, not a measurement.
+// Two independent axes, deliberately NOT nested:
+//   * the min/max range, which binds ONLY wells with a real measured
+//     offset; and
+//   * two class checkboxes for the wells that have no measured offset —
+//     the 2800-ft cap (known standalone) and NULL (absent from Novi
+//     WellSpacing). Both are live with or without a range, so an
+//     unchecked box always removes wells from the map and from
+//     lasso/box selection. They used to be one checkbox gated on the
+//     range being set, which read as an active exclusion while doing
+//     nothing; that shipped standalone wells into cohorts.
 function SpacingSection({
   min,
   max,
-  includeUnbounded,
+  includeNoNeighbor,
+  includeNoData,
   onRangeChange,
-  onIncludeUnboundedChange,
+  onIncludeNoNeighborChange,
+  onIncludeNoDataChange,
 }: {
   min: number | null;
   max: number | null;
-  includeUnbounded: boolean;
+  includeNoNeighbor: boolean;
+  includeNoData: boolean;
   onRangeChange: (min: number | null, max: number | null) => void;
-  onIncludeUnboundedChange: (v: boolean) => void;
+  onIncludeNoNeighborChange: (v: boolean) => void;
+  onIncludeNoDataChange: (v: boolean) => void;
 }) {
-  const rangeActive = min != null || max != null;
   return (
     <section className="filter-section">
       <h3 title="Novi WellSpacing LateralCloserXY — same-zone lateral offset at first production">
@@ -570,22 +581,39 @@ function SpacingSection({
           }
         />
       </div>
+      <p className="filter-hint">
+        Range applies to wells with a measured offset. The two classes below have
+        none — they are kept or dropped on their own, with or without a range.
+      </p>
       <label
-        className="chk-inline"
+        className="chk-inline chk-stacked"
         title={
-          "Wells absent from Novi WellSpacing, or at the 2,800-ft " +
-          "no-neighbor cap, have no measured same-zone spacing. " +
-          "Check to include them alongside the range."
+          "LateralCloserXY at exactly 2,800 ft — Novi's no-neighbor cap, " +
+          "not a measurement. These are standalone wells. Uncheck to drop " +
+          "them from the map and from any lasso/box selection."
         }
-        style={{ opacity: rangeActive ? 1 : 0.5 }}
       >
         <input
           type="checkbox"
-          disabled={!rangeActive}
-          checked={includeUnbounded}
-          onChange={(e) => onIncludeUnboundedChange(e.target.checked)}
+          checked={includeNoNeighbor}
+          onChange={(e) => onIncludeNoNeighborChange(e.target.checked)}
         />
-        include no-neighbor / standalone wells
+        include no-neighbor / standalone (2,800 ft cap)
+      </label>
+      <label
+        className="chk-inline chk-stacked"
+        title={
+          "LateralCloserXY is NULL — the well is absent from Novi " +
+          "WellSpacing, so its spacing is unknown (not necessarily wide). " +
+          "Uncheck to drop them from the map and from any lasso/box selection."
+        }
+      >
+        <input
+          type="checkbox"
+          checked={includeNoData}
+          onChange={(e) => onIncludeNoDataChange(e.target.checked)}
+        />
+        include wells with no spacing data
       </label>
     </section>
   );

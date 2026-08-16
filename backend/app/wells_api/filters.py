@@ -26,12 +26,22 @@ DEFAULT_VINTAGE_YEARS_BACK = 10
 # Novi WellSpacing no-neighbor sentinel: LateralCloserXY is capped at
 # exactly 2800.0 when no same-zone neighbor existed at first production
 # (~12% of rows; also the column max). Confirmed with Novi 2026-07-14 —
-# see engineering_db sql/06_curated_derived.sql. The spacing filter
-# treats sentinel rows together with NULL (absent from WellSpacing) as
-# one "unbounded / no-neighbor" class behind an explicit include flag,
-# so a wide-spacing floor like ">= 1500 ft" can't silently sweep in
-# parent wells whose 2800 is a cap, not a measurement.
+# see engineering_db sql/06_curated_derived.sql. 2800 is a cap, not a
+# measurement, so a wide-spacing floor like ">= 1500 ft" must never
+# sweep it in as if it were a wide-spaced well.
 SPACING_SENTINEL_FT = 2800.0
+
+# Spacing splits the well population into three disjoint classes, and
+# the min/max range binds ONLY the first:
+#   measured     — real LateralCloserXY (non-null, != 2800)
+#   no_neighbor  — exactly the 2800 cap: known standalone
+#   no_data      — NULL: absent from Novi WellSpacing, unknown
+# The two no-spacing classes are independently admitted, and their
+# include flags are live WITH OR WITHOUT a range set — an unchecked box
+# always removes wells. (Before 2026-08 a single `include_unbounded`
+# flag covered both classes and was inert unless a bound was set, so an
+# unchecked box silently did nothing; buildup._resolve_spacing_classes
+# still reproduces that for snapshots persisted under the old scheme.)
 
 
 def _split_csv(s: str | None) -> list[str]:
@@ -59,14 +69,13 @@ class FilterSpec:
     lateral_min_ft: float | None = None
     lateral_max_ft: float | None = None
     # Same-zone spacing (Novi LateralCloserXY, ft, as-of-first-prod).
-    # Bounds apply ONLY to wells with REAL spacing (non-null and not the
-    # 2800 sentinel). When either bound is set, unbounded/no-neighbor
-    # wells (NULL or sentinel) drop out unless spacing_include_unbounded
-    # re-admits them. With no bounds set the flag is inert (all wells
-    # pass, today's behavior).
+    # Bounds apply ONLY to the `measured` class; the two no-spacing
+    # classes are admitted (or not) independently of any range — see the
+    # class taxonomy above SPACING_SENTINEL_FT.
     spacing_min_ft: float | None = None
     spacing_max_ft: float | None = None
-    spacing_include_unbounded: bool = False
+    spacing_include_no_neighbor: bool = True
+    spacing_include_no_data: bool = True
     # Case-insensitive substring match on the well/lease name (Novi/
     # Enverus free-form). Substring, not exact/multiselect — names vary
     # per wellbore ("UNIVERSITY 7-43 2H"), so "contains" is the only
@@ -101,21 +110,30 @@ class FilterSpec:
             clauses.append(Well.lateral_ft >= self.lateral_min_ft)
         if self.lateral_max_ft is not None:
             clauses.append(Well.lateral_ft <= self.lateral_max_ft)
-        if self.spacing_min_ft is not None or self.spacing_max_ft is not None:
+        # Spacing: OR together the admitted classes. Skipped entirely only
+        # when nothing is constrained (no range AND both classes in), which
+        # keeps the no-op tile URL and its ETag identical to before.
+        if (
+            self.spacing_min_ft is not None
+            or self.spacing_max_ft is not None
+            or not self.spacing_include_no_neighbor
+            or not self.spacing_include_no_data
+        ):
             col = Well.lateral_closer_xy_ft
-            bounded_parts: list[ColumnElement[bool]] = [
+            measured_parts: list[ColumnElement[bool]] = [
                 col.isnot(None),
                 col != SPACING_SENTINEL_FT,
             ]
             if self.spacing_min_ft is not None:
-                bounded_parts.append(col >= self.spacing_min_ft)
+                measured_parts.append(col >= self.spacing_min_ft)
             if self.spacing_max_ft is not None:
-                bounded_parts.append(col <= self.spacing_max_ft)
-            bounded = and_(*bounded_parts)
-            if self.spacing_include_unbounded:
-                clauses.append(or_(bounded, col.is_(None), col == SPACING_SENTINEL_FT))
-            else:
-                clauses.append(bounded)
+                measured_parts.append(col <= self.spacing_max_ft)
+            admitted: list[ColumnElement[bool]] = [and_(*measured_parts)]
+            if self.spacing_include_no_neighbor:
+                admitted.append(col == SPACING_SENTINEL_FT)
+            if self.spacing_include_no_data:
+                admitted.append(col.is_(None))
+            clauses.append(admitted[0] if len(admitted) == 1 else or_(*admitted))
         if self.well_name_contains:
             clauses.append(
                 Well.name.ilike(f"%{escape_like(self.well_name_contains)}%", escape="\\")
@@ -150,15 +168,24 @@ def parse_filter_query(
     lateral_max_ft: Annotated[float | None, Query(ge=0)] = None,
     spacing_min_ft: Annotated[float | None, Query(ge=0)] = None,
     spacing_max_ft: Annotated[float | None, Query(ge=0)] = None,
-    spacing_include_unbounded: Annotated[
+    spacing_include_no_neighbor: Annotated[
         bool,
         Query(
             description=(
-                "With a spacing bound set, also include wells with no "
-                "same-zone neighbor (NULL / 2800-sentinel LateralCloserXY)"
+                "Include known-standalone wells (LateralCloserXY at the "
+                "2800-ft no-neighbor cap). Live with or without a range."
             )
         ),
-    ] = False,
+    ] = True,
+    spacing_include_no_data: Annotated[
+        bool,
+        Query(
+            description=(
+                "Include wells with no spacing data (LateralCloserXY NULL "
+                "— absent from Novi WellSpacing). Live with or without a range."
+            )
+        ),
+    ] = True,
     well_name_contains: Annotated[
         str | None,
         Query(
@@ -190,7 +217,8 @@ def parse_filter_query(
         lateral_max_ft=lateral_max_ft,
         spacing_min_ft=spacing_min_ft,
         spacing_max_ft=spacing_max_ft,
-        spacing_include_unbounded=spacing_include_unbounded,
+        spacing_include_no_neighbor=spacing_include_no_neighbor,
+        spacing_include_no_data=spacing_include_no_data,
         well_name_contains=(well_name_contains or "").strip() or None,
         api10s=tuple(_split_csv(api10s)),
     )
@@ -210,7 +238,8 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "lateral_max_ft": spec.lateral_max_ft,
         "spacing_min_ft": spec.spacing_min_ft,
         "spacing_max_ft": spec.spacing_max_ft,
-        "spacing_include_unbounded": spec.spacing_include_unbounded,
+        "spacing_include_no_neighbor": spec.spacing_include_no_neighbor,
+        "spacing_include_no_data": spec.spacing_include_no_data,
         "well_name_contains": spec.well_name_contains,
         "api10s": list(spec.api10s),
     }

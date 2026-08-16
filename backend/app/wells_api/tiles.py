@@ -92,29 +92,35 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
     if spec.lateral_max_ft is not None:
         parts.append("w.lateral_ft <= :lateral_max_ft")
         params["lateral_max_ft"] = spec.lateral_max_ft
-    # Same-zone spacing — mirrors the ORM clause exactly: bounds bind
-    # only on REAL spacing (non-null, not the 2800 no-neighbor
-    # sentinel); the include flag re-admits the unbounded class.
-    if spec.spacing_min_ft is not None or spec.spacing_max_ft is not None:
-        bounded = [
+    # Same-zone spacing — mirrors the ORM clause exactly: the range binds
+    # only the `measured` class; the no_neighbor (2800 cap) and no_data
+    # (NULL) classes are OR'd back in per their own include flags, which
+    # are live with or without a range.
+    if (
+        spec.spacing_min_ft is not None
+        or spec.spacing_max_ft is not None
+        or not spec.spacing_include_no_neighbor
+        or not spec.spacing_include_no_data
+    ):
+        measured = [
             "w.lateral_closer_xy_ft IS NOT NULL",
             "w.lateral_closer_xy_ft != :spacing_sentinel",
         ]
         params["spacing_sentinel"] = SPACING_SENTINEL_FT
         if spec.spacing_min_ft is not None:
-            bounded.append("w.lateral_closer_xy_ft >= :spacing_min_ft")
+            measured.append("w.lateral_closer_xy_ft >= :spacing_min_ft")
             params["spacing_min_ft"] = spec.spacing_min_ft
         if spec.spacing_max_ft is not None:
-            bounded.append("w.lateral_closer_xy_ft <= :spacing_max_ft")
+            measured.append("w.lateral_closer_xy_ft <= :spacing_max_ft")
             params["spacing_max_ft"] = spec.spacing_max_ft
-        bounded_sql = "(" + " AND ".join(bounded) + ")"
-        if spec.spacing_include_unbounded:
-            parts.append(
-                f"({bounded_sql} OR w.lateral_closer_xy_ft IS NULL"
-                " OR w.lateral_closer_xy_ft = :spacing_sentinel)"
-            )
-        else:
-            parts.append(bounded_sql)
+        admitted = ["(" + " AND ".join(measured) + ")"]
+        if spec.spacing_include_no_neighbor:
+            admitted.append("w.lateral_closer_xy_ft = :spacing_sentinel")
+        if spec.spacing_include_no_data:
+            admitted.append("w.lateral_closer_xy_ft IS NULL")
+        parts.append(
+            admitted[0] if len(admitted) == 1 else "(" + " OR ".join(admitted) + ")"
+        )
     if spec.well_name_contains:
         parts.append("w.name ILIKE :well_name_pat ESCAPE '\\'")
         params["well_name_pat"] = f"%{escape_like(spec.well_name_contains)}%"

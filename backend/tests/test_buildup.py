@@ -278,22 +278,70 @@ def test_spacing_stage_culls_outside_range_and_unbounded() -> None:
     b = compute_buildup(_tc(prov, included))
     by = {r.api10: r for r in b.rows}
     assert by["W20"].disposition == "spacing"  # measured, out of range
-    assert by["W21"].disposition == "spacing"  # sentinel, toggle off
-    assert by["W22"].disposition == "spacing"  # NULL, toggle off
+    assert by["W21"].disposition == "spacing"  # sentinel, class off
+    assert by["W22"].disposition == "spacing"  # NULL, class off
     assert by["W23"].disposition == "not_selected"
     culled = {w.stage: w.culled for w in b.waterfall}
     assert culled["spacing"] == 3
     labels = dict(b.header.criteria) if b.header else {}
     assert "spacing_criterion" in labels
-    assert "no-neighbor wells excluded" in labels["spacing_criterion"]
+    assert "no-neighbor (2,800 ft cap)" in labels["spacing_criterion"]
+    assert "no spacing data" in labels["spacing_criterion"]
 
 
-def test_spacing_include_unbounded_keeps_sentinel_wells() -> None:
+def test_spacing_classes_are_independent() -> None:
+    # New-scheme snapshot: drop standalone wells, keep unknown-spacing
+    # ones. The two classes must not move together.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
+    prov["filter_snapshot"]["spacing_include_no_data"] = True
+    for w in prov["universe"]["wells"]:
+        w["lateral_closer_xy_ft"] = 800.0
+    for api10, spacing in (("W21", 2800.0), ("W22", None)):
+        w = _uni_well(api10)
+        w["lateral_closer_xy_ft"] = spacing
+        prov["universe"]["wells"].append(w)
+        prov["universe"]["well_count"] += 1
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    assert by["W21"].disposition == "spacing"  # sentinel dropped
+    assert by["W22"].disposition == "not_selected"  # NULL kept, never staged
+
+
+def test_spacing_class_culls_without_any_range() -> None:
+    # The whole point of the split: an unchecked class box culls even
+    # with no min/max set. Under the old single-flag scheme the stage
+    # was inert without a range and these wells sailed through.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
+    prov["filter_snapshot"]["spacing_include_no_data"] = False
+    for w in prov["universe"]["wells"]:
+        w["lateral_closer_xy_ft"] = 800.0
+    for api10, spacing in (("W21", 2800.0), ("W22", None)):
+        w = _uni_well(api10)
+        w["lateral_closer_xy_ft"] = spacing
+        prov["universe"]["wells"].append(w)
+        prov["universe"]["well_count"] += 1
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    assert by["W21"].disposition == "spacing"
+    assert by["W22"].disposition == "spacing"
+    labels = dict(b.header.criteria) if b.header else {}
+    # Range-free criterion still renders a line.
+    assert labels["spacing_criterion"].startswith("any measured")
+
+
+# ---- back-compat with snapshots persisted under the single flag ----
+# These pin the pre-split semantics so an existing curve's waterfall
+# never retro-changes: the old flag only bound when a range was set.
+
+
+def test_legacy_snapshot_flag_readmits_both_classes() -> None:
     prov, included = _full_provenance()
     prov["filter_snapshot"]["spacing_min_ft"] = 1500
     prov["filter_snapshot"]["spacing_include_unbounded"] = True
     w = _uni_well("W21")
-    w["lateral_closer_xy_ft"] = 2800.0  # sentinel — admitted by toggle
+    w["lateral_closer_xy_ft"] = 2800.0  # sentinel — admitted by the flag
     prov["universe"]["wells"].append(w)
     prov["universe"]["well_count"] += 1
     b = compute_buildup(_tc(prov, included))
@@ -301,11 +349,31 @@ def test_spacing_include_unbounded_keeps_sentinel_wells() -> None:
     # Survives spacing, then falls to not_selected (never staged).
     assert w21.disposition == "not_selected"
     labels = dict(b.header.criteria) if b.header else {}
-    assert "no-neighbor wells included" in labels["spacing_criterion"]
+    assert "all classes included" in labels["spacing_criterion"]
+
+
+def test_legacy_snapshot_flag_is_inert_without_a_range() -> None:
+    # A pre-split snapshot carrying include_unbounded=False and NO range
+    # meant "all wells pass". Reproduce it, or every historical buildup
+    # would suddenly attribute no-neighbor wells to the spacing stage on
+    # a curve whose membership never moved.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_include_unbounded"] = False
+    for api10, spacing in (("W21", 2800.0), ("W22", None)):
+        w = _uni_well(api10)
+        w["lateral_closer_xy_ft"] = spacing
+        prov["universe"]["wells"].append(w)
+        prov["universe"]["well_count"] += 1
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    assert by["W21"].disposition != "spacing"
+    assert by["W22"].disposition != "spacing"
+    labels = dict(b.header.criteria) if b.header else {}
+    assert "spacing_criterion" not in labels
 
 
 def test_no_spacing_filter_means_no_spacing_stage() -> None:
-    prov, included = _full_provenance()  # snapshot has no spacing bounds
+    prov, included = _full_provenance()  # snapshot has no spacing keys
     b = compute_buildup(_tc(prov, included))
     assert all(w.stage != "spacing" for w in b.waterfall) or (
         next(w for w in b.waterfall if w.stage == "spacing").culled == 0
