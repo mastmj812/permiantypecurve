@@ -460,7 +460,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
     {showRemoveDialog && cohort && (
       <ReasonDialog
         title={`Remove ${removeCount} well${removeCount === 1 ? "" : "s"} from ${cohort.name}`}
-        detail="One code for the batch — it lands on the build-up sheet's not-selected stage (nuance goes in the note)."
+        detail="One code for the batch — the build-up sheet shows it on not-selected unless a filter stage already explains the cull (nuance goes in the note)."
         confirmLabel={`Remove ${removeCount}`}
         onConfirm={removeFromCohort}
         onCancel={() => setShowRemoveDialog(false)}

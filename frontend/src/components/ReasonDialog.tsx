@@ -1,9 +1,12 @@
 // ReasonDialog — small modal capturing a coded reason + note for a
 // cohort removal during map curation. The reason rides the cohort's
 // manual_remove event and surfaces on the build-up sheet's not_selected
-// stage, so a parent-well cull reads "Parent-child / spacing" instead
-// of an anonymous "not carried into cohort". One code applies to the
-// whole batch — nuance goes in the note.
+// stage — unless a filter stage claims the well first (stage order is
+// first-stage-that-removes, so e.g. an off-filter drop attributes to
+// `spacing` while the code stays in the event record and resurfaces if
+// the filters are later relaxed). A parent-well cull thus reads
+// "Parent-child / spacing" instead of an anonymous "not carried into
+// cohort". One code applies to the whole batch — nuance goes in the note.
 //
 // Same modal-backdrop + ExclusionReasonControl pattern as the TC
 // workspace's post-save remove dialog (TypeCurveWellsPage).
