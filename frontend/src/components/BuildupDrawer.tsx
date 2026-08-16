@@ -368,8 +368,11 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
                           : "—"}
                       </td>
                       <td className="num">
+                        {/* Name both no-spacing classes. An em-dash here read
+                            as "nothing to see", hiding NULL-spacing wells
+                            that the filter treats exactly like no-nbr. */}
                         {r.lateral_closer_xy_ft == null
-                          ? "—"
+                          ? "no data"
                           : r.lateral_closer_xy_ft === SPACING_SENTINEL_FT
                             ? "no-nbr"
                             : Math.round(r.lateral_closer_xy_ft).toLocaleString()}

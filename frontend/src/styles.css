@@ -812,6 +812,22 @@ textarea {
   font-size: 12px;
 }
 
+/* Explanatory line under a filter heading (e.g. what the spacing range
+   binds vs. what the class checkboxes do). */
+.filter-hint {
+  margin: 6px 0 4px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: #6b7280;
+}
+/* Spacing's two class checkboxes stack rather than sitting inline —
+   each label is a full sentence and wraps badly side by side. */
+.filter-section .chk-inline.chk-stacked {
+  display: flex;
+  margin-right: 0;
+  margin-top: 3px;
+}
+
 .swatch {
   display: inline-block;
   width: 12px;

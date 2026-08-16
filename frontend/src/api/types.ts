@@ -18,11 +18,16 @@ export interface FilterSpec {
   lateral_min_ft: number | null;
   lateral_max_ft: number | null;
   // Same-zone spacing (Novi LateralCloserXY, ft, as-of-first-prod).
-  // Bounds apply only to wells with REAL spacing; NULL + the 2800
-  // sentinel form the "no-neighbor" class re-admitted by the toggle.
+  // Three disjoint classes; the range binds only the first:
+  //   measured     — real LateralCloserXY (non-null, != 2800)
+  //   no_neighbor  — exactly the 2800 cap: known standalone
+  //   no_data      — NULL: absent from Novi WellSpacing
+  // Both class flags are live with or without a range — unchecking one
+  // always removes wells from the map AND from lasso/box selection.
   spacing_min_ft: number | null;
   spacing_max_ft: number | null;
-  spacing_include_unbounded: boolean;
+  spacing_include_no_neighbor: boolean;
+  spacing_include_no_data: boolean;
   // Case-insensitive substring match on the well/lease name. Null/empty
   // = no filter. Metacharacters match literally (escaped server-side).
   well_name_contains: string | null;
@@ -43,7 +48,10 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   lateral_max_ft: null,
   spacing_min_ft: null,
   spacing_max_ft: null,
-  spacing_include_unbounded: false,
+  // Default INCLUDED — the unfiltered map shows every well, same as
+  // before the class split. Unchecking is what removes wells.
+  spacing_include_no_neighbor: true,
+  spacing_include_no_data: true,
   well_name_contains: null,
   api10s: [],
 };

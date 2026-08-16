@@ -56,11 +56,14 @@ def _sorted_roster(b: Buildup) -> list[BuildupRow]:
 
 def _roster_values(r: BuildupRow) -> list[Any]:
     disposition = r.annotation if r.annotation else r.disposition
-    # Sentinel disclosure: 2800.0 is Novi's no-neighbor cap, not a
-    # measured distance — print the class, not the misleading number.
+    # Class disclosure: 2800.0 is Novi's no-neighbor cap, not a measured
+    # distance, and NULL is "absent from WellSpacing" rather than zero.
+    # Name both classes — a blank cell reads as a data gap in the export.
     spacing: Any = r.lateral_closer_xy_ft
     if spacing == SPACING_SENTINEL_FT:
         spacing = "no neighbor (2800 cap)"
+    elif spacing is None:
+        spacing = "no spacing data"
     return [
         r.api10,
         r.name,

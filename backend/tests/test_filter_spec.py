@@ -95,29 +95,54 @@ def _compiled_clauses(spec: FilterSpec) -> str:
     return str(and_(*spec.to_sqlalchemy_clauses()).compile(compile_kwargs={"literal_binds": True}))
 
 
-def test_spacing_bounds_exclude_null_and_sentinel() -> None:
+def test_spacing_range_binds_measured_only_and_keeps_both_classes() -> None:
+    # A range constrains the `measured` class; the two no-spacing classes
+    # ride along on their own (default-on) flags rather than being swept
+    # out by the range.
     spec = FilterSpec(spacing_min_ft=400.0, spacing_max_ft=1000.0)
     sql = _compiled_clauses(spec)
-    # Real-spacing gate: NULL and the 2800 no-neighbor sentinel are out.
     assert "lateral_closer_xy_ft IS NOT NULL" in sql
     assert "lateral_closer_xy_ft != 2800.0" in sql
     assert "lateral_closer_xy_ft >= 400.0" in sql
     assert "lateral_closer_xy_ft <= 1000.0" in sql
-    assert " OR " not in sql  # no unbounded re-admission by default
-
-
-def test_spacing_include_unbounded_readmits_null_and_sentinel() -> None:
-    spec = FilterSpec(spacing_min_ft=1500.0, spacing_include_unbounded=True)
-    sql = _compiled_clauses(spec)
     assert "lateral_closer_xy_ft IS NULL" in sql
     assert "lateral_closer_xy_ft = 2800.0" in sql
-    assert " OR " in sql
 
 
-def test_spacing_inert_without_bounds() -> None:
-    # The toggle alone must not add a clause — with no range set, all
-    # wells pass (today's behavior).
-    spec = FilterSpec(spacing_include_unbounded=True)
+def test_spacing_classes_excluded_leaves_measured_gate_only() -> None:
+    spec = FilterSpec(
+        spacing_min_ft=400.0,
+        spacing_max_ft=1000.0,
+        spacing_include_no_neighbor=False,
+        spacing_include_no_data=False,
+    )
+    sql = _compiled_clauses(spec)
+    assert "lateral_closer_xy_ft IS NOT NULL" in sql
+    assert "lateral_closer_xy_ft != 2800.0" in sql
+    assert " OR " not in sql  # nothing re-admitted
+
+
+def test_spacing_classes_are_live_without_a_range() -> None:
+    # The regression this whole split exists for: an unchecked class box
+    # must remove wells even with no min/max set. Previously the flag was
+    # inert without a range, so the map showed — and the lasso staged —
+    # standalone wells the engineer believed were filtered out.
+    spec = FilterSpec(spacing_include_no_neighbor=False)
+    sql = _compiled_clauses(spec)
+    assert "lateral_closer_xy_ft != 2800.0" in sql
+    assert "lateral_closer_xy_ft IS NULL" in sql  # no_data still admitted
+    assert len(spec.to_sqlalchemy_clauses()) == 2  # statuses + spacing
+
+    spec_nd = FilterSpec(spacing_include_no_data=False)
+    sql_nd = _compiled_clauses(spec_nd)
+    assert "lateral_closer_xy_ft IS NOT NULL" in sql_nd
+    assert "lateral_closer_xy_ft = 2800.0" in sql_nd  # no_neighbor admitted
+
+
+def test_spacing_noop_when_unconstrained() -> None:
+    # Both classes in and no range = no clause at all, so the unfiltered
+    # tile URL and its ETag are unchanged by the class split.
+    spec = FilterSpec()
     assert len(spec.to_sqlalchemy_clauses()) == 1  # statuses only
 
 
@@ -182,12 +207,23 @@ def test_spacing_parse_and_dict_roundtrip() -> None:
         None,
         spacing_min_ft=600.0,
         spacing_max_ft=1200.0,
-        spacing_include_unbounded=True,
+        spacing_include_no_neighbor=False,
+        spacing_include_no_data=True,
     )
     assert spec.spacing_min_ft == 600.0
     assert spec.spacing_max_ft == 1200.0
-    assert spec.spacing_include_unbounded is True
+    assert spec.spacing_include_no_neighbor is False
+    assert spec.spacing_include_no_data is True
     d = filter_spec_dict(spec)
     assert d["spacing_min_ft"] == 600.0
     assert d["spacing_max_ft"] == 1200.0
-    assert d["spacing_include_unbounded"] is True
+    assert d["spacing_include_no_neighbor"] is False
+    assert d["spacing_include_no_data"] is True
+
+
+def test_spacing_classes_default_to_included() -> None:
+    # Unspecified query params must mean "show everything" — the default
+    # has to match the pre-split unfiltered map exactly.
+    spec = parse_filter_query(None, None, None, None, None, None, None, None)
+    assert spec.spacing_include_no_neighbor is True
+    assert spec.spacing_include_no_data is True

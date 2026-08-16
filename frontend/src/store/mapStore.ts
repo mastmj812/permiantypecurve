@@ -147,7 +147,8 @@ export interface MapState {
   setVintageRange: (start: string | null, end: string | null) => void;
   setLateralRange: (min: number | null, max: number | null) => void;
   setSpacingRange: (min: number | null, max: number | null) => void;
-  setSpacingIncludeUnbounded: (v: boolean) => void;
+  setSpacingIncludeNoNeighbor: (v: boolean) => void;
+  setSpacingIncludeNoData: (v: boolean) => void;
   setWellNameContains: (v: string | null) => void;
   setApi10s: (api10s: string[]) => void;
   resetFilters: () => void;
@@ -304,9 +305,13 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({
       filters: { ...s.filters, spacing_min_ft: min, spacing_max_ft: max },
     })),
-  setSpacingIncludeUnbounded: (spacing_include_unbounded) =>
+  setSpacingIncludeNoNeighbor: (spacing_include_no_neighbor) =>
     set((s) => ({
-      filters: { ...s.filters, spacing_include_unbounded },
+      filters: { ...s.filters, spacing_include_no_neighbor },
+    })),
+  setSpacingIncludeNoData: (spacing_include_no_data) =>
+    set((s) => ({
+      filters: { ...s.filters, spacing_include_no_data },
     })),
   setWellNameContains: (well_name_contains) =>
     set((s) => ({
