@@ -26,8 +26,7 @@ Stage order (each universe well takes the FIRST stage that removes it):
   1. vintage          first prod outside [first_prod_start, first_prod_end]
   2. lateral          lateral_ft outside [lateral_min_ft, lateral_max_ft]
   3. spacing          same-zone spacing (LateralCloserXY) outside range,
-                      or unbounded (NULL / 2800-sentinel) while the
-                      include-unbounded toggle was off
+                      or in a no-spacing class the filter excludes
   4. filters_other    status / operator / explicit api10 allow-list
   5. not_selected     survived the filters but never entered the cohort.
                       When the engineer removed the well WITH a coded
@@ -39,6 +38,18 @@ Stage order (each universe well takes the FIRST stage that removes it):
   8. review_excluded  engineer un-ticked on Review (code + note)
   9. post_save_removed removed from the saved curve later (code + note)
   → included          the final type-curve cohort
+
+Stages 1-4 apply ONLY to wells that never entered the cohort. The filter
+snapshot is evaluated LIVE (the drawer feeds it the current left-rail
+filters; a saved curve stores the spec as of Aggregate), so for a well
+that was already staged it is a counterfactual, not a history: the well
+demonstrably got past selection under whatever filter was in force at
+draw time. Claiming it at a cull stage produced the worst kind of wrong
+— a well wearing a ``spacing`` badge while sitting in the curve and
+contributing to the fit. Cohort wells therefore resolve on stages 6-9
+only, and a live-filter miss rides ``BuildupRow.off_filter_stage`` as an
+advisory (collected in ``Buildup.off_filter_api10s``) that names the
+stage without moving a single waterfall count.
 
 Wells in ``included_api10s`` but OUTSIDE the universe (add-wells flow,
 pasted lists, or membership drift on inherited-provenance versions) are
@@ -90,6 +101,10 @@ class BuildupRow:
     # Same-zone spacing (verbatim snapshot value; 2800.0 = no-neighbor
     # sentinel, None = absent from WellSpacing).
     lateral_closer_xy_ft: float | None = None
+    # Advisory, `included` rows only: the filter stage that WOULD cull
+    # this well under the live filter snapshot. The well is still in the
+    # curve — this names a divergence to act on, never a cull.
+    off_filter_stage: str | None = None
 
 
 @dataclass(frozen=True)
@@ -125,6 +140,10 @@ class Buildup:
     # remaining-after-last-stage + out-of-universe == included_count
     reconciles: bool = True
     notes: list[str] = field(default_factory=list)
+    # Curve members the LIVE filter snapshot would cull. Still counted in
+    # `included` and in every waterfall row — this is the drop-list the
+    # drawer's "drop off-filter wells" action operates on.
+    off_filter_api10s: list[str] = field(default_factory=list)
 
 
 def _resolve_spacing_classes(fs: dict[str, Any]) -> tuple[bool, bool]:
@@ -363,24 +382,37 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             return not sp_inc_no_neighbor
         return _outside(v, sp_min, sp_max)
 
-    def disposition_for(w: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    def _filter_stage(w: dict[str, Any]) -> str | None:
+        """Which filter stage the CURRENT snapshot puts this well outside.
+
+        Pure predicate over the snapshot — the caller decides whether
+        that is a cull (well never entered the cohort) or an advisory
+        (well is already in the curve).
+        """
         api10 = str(w.get("api10"))
         if _outside(w.get("first_prod_date"), lo_date, hi_date):
-            return "vintage", None, None
+            return "vintage"
         if _outside(w.get("lateral_ft"), lo_lat, hi_lat):
-            return "lateral", None, None
+            return "lateral"
         if _spacing_culled(w):
-            return "spacing", None, None
+            return "spacing"
         if statuses and str(w.get("status")) not in statuses:
-            return "filters_other", None, None
+            return "filters_other"
         if operators and str(w.get("operator")) not in operators:
-            return "filters_other", None, None
+            return "filters_other"
         # Mirrors the ILIKE %sub% clause (case-insensitive contains).
         if name_sub and name_sub not in str(w.get("name") or "").casefold():
-            return "filters_other", None, None
+            return "filters_other"
         if allowlist and api10 not in allowlist:
-            return "filters_other", None, None
+            return "filters_other"
+        return None
+
+    def disposition_for(w: dict[str, Any], fstage: str | None) -> tuple[str, str | None, str | None]:
+        api10 = str(w.get("api10"))
         if api10 not in cohort:
+            # Never staged — the filters are the honest explanation.
+            if fstage is not None:
+                return fstage, None, None
             # A coded manual removal attributes the cull; a later re-add
             # puts the well back in `cohort`, so a stale exclusion record
             # never fires on a re-added well.
@@ -388,6 +420,9 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             if m:
                 return "not_selected", m.get("code"), m.get("note")
             return "not_selected", None, None
+        # In the cohort: it already cleared selection, so the filter
+        # stages cannot claim it — only what happened downstream can.
+        # A live-filter miss surfaces as off_filter_stage instead.
         if api10 in no_peak:
             return "no_peak", None, None
         if api10 in short and api10 not in included:
@@ -409,8 +444,21 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     for w in uni_wells:
         api10 = str(w.get("api10"))
         universe_api10s.add(api10)
-        stage, code, note = disposition_for(w)
-        annotation = TRANSFERRED_ANNOTATION if stage == "included" and api10 in short else None
+        fstage = _filter_stage(w)
+        stage, code, note = disposition_for(w, fstage)
+        # Advisory on curve members only: elsewhere the filter verdict is
+        # either the disposition itself or moot (the well already dropped
+        # out downstream).
+        off_filter = fstage if stage == "included" else None
+        marks: list[str] = []
+        if stage == "included" and api10 in short:
+            marks.append("cohort-transferred params")
+        if off_filter:
+            marks.append(f"off-filter: {off_filter}")
+        # Same string shape as TRANSFERRED_ANNOTATION for the transferred-
+        # only case, so the roster cell is unchanged where nothing new
+        # applies.
+        annotation = f"{stage} ({'; '.join(marks)})" if marks else None
         rows.append(
             BuildupRow(
                 api10=api10,
@@ -425,6 +473,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
                 note=note,
                 annotation=annotation,
                 lateral_closer_xy_ft=w.get("lateral_closer_xy_ft"),
+                off_filter_stage=off_filter,
             )
         )
 
@@ -461,6 +510,20 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             "adds/removes is shortened"
         )
 
+    off_filter_api10s = sorted(r.api10 for r in rows if r.off_filter_stage)
+    if off_filter_api10s:
+        by_stage: dict[str, int] = {}
+        for r in rows:
+            if r.off_filter_stage:
+                by_stage[r.off_filter_stage] = by_stage.get(r.off_filter_stage, 0) + 1
+        breakdown = ", ".join(f"{v} {k}" for k, v in sorted(by_stage.items()))
+        notes.append(
+            f"{len(off_filter_api10s)} well(s) are IN the curve but fail the "
+            f"current filters ({breakdown}) — they were selected under a "
+            "different filter and every count above includes them; drop "
+            "them explicitly if that is not intended"
+        )
+
     return Buildup(
         degraded=False,
         header=header,
@@ -470,6 +533,7 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
         included_count=len(included_list),
         reconciles=reconciles,
         notes=notes,
+        off_filter_api10s=off_filter_api10s,
     )
 
 
