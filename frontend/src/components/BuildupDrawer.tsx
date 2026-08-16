@@ -12,6 +12,13 @@
 // export sheet uses (POST /type-curves/buildup/preview) — no TS mirror
 // of the stage semantics (spacing sentinel, NULL rules) to drift.
 //
+// The filter stages describe why a well never entered the cohort. A
+// well that IS a member cleared selection under whatever filter was in
+// force when it was drawn, so tightening a filter now cannot retro-cull
+// it — the server flags those as off_filter_stage instead, and the
+// amber banner offers to drop them in one coded batch. Without that,
+// a member could wear a "spacing" badge while sitting in the curve.
+//
 // Formation scope: the filter panel's formations at DRAW time (they
 // ride every polygon/bbox event). Empty → fall back to the distinct
 // formation_blueox of current members, labeled "inferred". Recorded
@@ -69,6 +76,9 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("disposition");
   const [removeTarget, setRemoveTarget] = useState<BuildupPreviewRow | null>(null);
+  // Bulk drop of the off-filter members. Same coded-reason path as a
+  // single removal — one code for the batch, nuance in the note.
+  const [bulkTarget, setBulkTarget] = useState<string[] | null>(null);
 
   // ---- inputs derived from the cohort narrative ---------------------
   const cohortEvents = cohort?.provenance.events;
@@ -185,6 +195,22 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
     removeApi10s(cohort.id, [removeTarget.api10], reason);
     setRemoveTarget(null);
   }
+
+  function confirmBulkRemove(reason: ExclusionEntry) {
+    if (!cohort || !bulkTarget) return;
+    removeApi10s(cohort.id, bulkTarget, reason);
+    setBulkTarget(null);
+  }
+
+  // Members the CURRENT filters would cull. They are in the cohort and
+  // in the curve — the server flags them rather than culling them,
+  // because they cleared selection under whatever filter was in force
+  // when they were drawn. Intersect with live membership: the preview
+  // is debounced, so its list can lag a just-removed well by 400 ms.
+  const offFilter = useMemo(() => {
+    const members = new Set(cohort?.api10s ?? []);
+    return (preview?.off_filter_api10s ?? []).filter((a) => members.has(a));
+  }, [preview, cohort?.api10s]);
 
   // ---- sorting ------------------------------------------------------
   const stageOrder = useMemo(() => {
@@ -317,6 +343,24 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
               {error}
             </div>
           )}
+          {offFilter.length > 0 && (
+            <div className="buildup-offfilter-banner">
+              <span>
+                <strong>{offFilter.length}</strong> cohort well
+                {offFilter.length === 1 ? "" : "s"} fail the current filters but{" "}
+                <strong>are still in the curve</strong> — they were selected
+                under a different filter, so nothing above culled them.
+              </span>
+              <button
+                type="button"
+                className="tb-btn"
+                title="Remove every off-filter well from the cohort, with one coded reason for the batch"
+                onClick={() => setBulkTarget(offFilter)}
+              >
+                drop {offFilter.length} off-filter
+              </button>
+            </div>
+          )}
           {preview?.notes.map((n) => (
             <div key={n} className="muted buildup-note">
               {n}
@@ -348,6 +392,21 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
                         <span className={`buildup-badge buildup-tone-${badge.tone}`}>
                           {badge.label}
                         </span>
+                        {r.off_filter_stage && (
+                          <span
+                            className="buildup-badge buildup-tone-warn"
+                            style={{ marginLeft: 4 }}
+                            title={
+                              "In the curve, but the CURRENT filters would " +
+                              `cull it at "${r.off_filter_stage}". It was ` +
+                              "selected under a different filter — nothing " +
+                              "removed it."
+                            }
+                          >
+                            off-filter: {STAGE_BADGES[r.off_filter_stage]?.label ??
+                              r.off_filter_stage}
+                          </span>
+                        )}
                         {r.reason_label && (
                           <span
                             className="muted"
@@ -414,6 +473,18 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
           confirmLabel="Remove well"
           onConfirm={confirmRemove}
           onCancel={() => setRemoveTarget(null)}
+        />
+      )}
+
+      {bulkTarget && (
+        <ReasonDialog
+          title={`Drop ${bulkTarget.length} off-filter well${
+            bulkTarget.length === 1 ? "" : "s"
+          }`}
+          detail="One code for the batch; the reason lands on the build-up sheet's not-selected stage."
+          confirmLabel={`Drop ${bulkTarget.length}`}
+          onConfirm={confirmBulkRemove}
+          onCancel={() => setBulkTarget(null)}
         />
       )}
     </div>

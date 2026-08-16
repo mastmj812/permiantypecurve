@@ -150,6 +150,10 @@ export interface BuildupPreviewRow {
   reason_code: string | null;
   reason_label: string | null;
   note: string | null;
+  // `included` rows only: the filter stage the CURRENT left-rail spec
+  // would cull this well at. The well IS in the cohort — advisory, not
+  // a cull, so it never moves a waterfall count.
+  off_filter_stage: string | null;
 }
 
 export interface BuildupPreview {
@@ -165,6 +169,9 @@ export interface BuildupPreview {
   reconciles: boolean;
   notes: string[];
   no_aoi: boolean;
+  // Cohort members the current filters would cull — the drop-list
+  // behind the drawer's "drop off-filter wells" action.
+  off_filter_api10s: string[];
 }
 
 export interface SelectionSummary {

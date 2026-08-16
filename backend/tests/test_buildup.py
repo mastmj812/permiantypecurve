@@ -372,6 +372,86 @@ def test_legacy_snapshot_flag_is_inert_without_a_range() -> None:
     assert "spacing_criterion" not in labels
 
 
+# ---- off-filter members: in the curve, outside the live filters ----
+
+
+def test_cohort_member_off_filter_is_included_not_culled() -> None:
+    # The defect this fixes: W01 is staged AND in included_api10s, but
+    # the current snapshot excludes standalone wells. It cleared
+    # selection under a different filter, so it must NOT wear a spacing
+    # cull badge while contributing to the fit.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
+    for w in prov["universe"]["wells"]:
+        w["lateral_closer_xy_ft"] = 800.0
+    next(w for w in prov["universe"]["wells"] if w["api10"] == "W01")[
+        "lateral_closer_xy_ft"
+    ] = 2800.0
+    b = compute_buildup(_tc(prov, included))
+    w01 = next(r for r in b.rows if r.api10 == "W01")
+    assert w01.disposition == "included"
+    assert w01.off_filter_stage == "spacing"
+    assert w01.annotation == "included (off-filter: spacing)"
+    # Advisory only — it moves no count, and reconciliation still holds.
+    culled = {w.stage: w.culled for w in b.waterfall}
+    assert culled["spacing"] == 0
+    assert b.included_count == len(included)
+    assert b.reconciles
+    assert b.off_filter_api10s == ["W01"]
+    assert any("still in the curve" in n or "IN the curve" in n for n in b.notes)
+
+
+def test_off_filter_advisory_stacks_with_transferred_annotation() -> None:
+    # W08 is short-history but cohort-transferred, so it is included with
+    # the transferred annotation. An off-filter miss must add to that
+    # rather than overwrite it.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
+    for w in prov["universe"]["wells"]:
+        w["lateral_closer_xy_ft"] = 800.0
+    next(w for w in prov["universe"]["wells"] if w["api10"] == "W08")[
+        "lateral_closer_xy_ft"
+    ] = 2800.0
+    b = compute_buildup(_tc(prov, included))
+    w08 = next(r for r in b.rows if r.api10 == "W08")
+    assert w08.disposition == "included"
+    assert w08.annotation == "included (cohort-transferred params; off-filter: spacing)"
+
+
+def test_transferred_annotation_unchanged_without_off_filter() -> None:
+    prov, included = _full_provenance()
+    b = compute_buildup(_tc(prov, included))
+    w08 = next(r for r in b.rows if r.api10 == "W08")
+    assert w08.annotation == TRANSFERRED_ANNOTATION
+    assert w08.off_filter_stage is None
+    assert b.off_filter_api10s == []
+
+
+def test_non_cohort_wells_still_cull_at_filter_stages() -> None:
+    # The counterpart guard: wells that never entered the cohort must
+    # still be attributed to the filter stage that explains them.
+    prov, included = _full_provenance()
+    b = compute_buildup(_tc(prov, included))
+    by = {r.api10: r for r in b.rows}
+    assert by["W03"].disposition == "vintage"
+    assert by["W04"].disposition == "lateral"
+    assert by["W05"].disposition == "filters_other"
+    assert all(r.off_filter_stage is None for r in b.rows)
+
+
+def test_downstream_stages_win_over_off_filter_for_non_members() -> None:
+    # W06 (no_peak) is in the cohort but not in the curve. It resolves on
+    # its downstream stage, and carries no off-filter advisory — the
+    # filter verdict is moot for a well that already dropped out.
+    prov, included = _full_provenance()
+    prov["filter_snapshot"]["lateral_min_ft"] = 9000
+    next(w for w in prov["universe"]["wells"] if w["api10"] == "W06")["lateral_ft"] = 6500.0
+    b = compute_buildup(_tc(prov, included))
+    w06 = next(r for r in b.rows if r.api10 == "W06")
+    assert w06.disposition == "no_peak"
+    assert w06.off_filter_stage is None
+
+
 def test_no_spacing_filter_means_no_spacing_stage() -> None:
     prov, included = _full_provenance()  # snapshot has no spacing keys
     b = compute_buildup(_tc(prov, included))
@@ -386,9 +466,14 @@ def test_well_name_filter_culls_at_filters_other() -> None:
     b = compute_buildup(_tc(prov, included))
     by = {r.api10: r for r in b.rows}
     # _uni_well names are "WELL <last2>" — "well 0" matches W01..W09
-    # case-insensitively; W10/W11 ("WELL 10"/"WELL 11") miss and cull.
+    # case-insensitively; W10/W11 ("WELL 10"/"WELL 11") miss the filter.
+    # W10 never entered the cohort, so the filter is its explanation.
     assert by["W10"].disposition == "filters_other"
-    assert by["W11"].disposition == "filters_other"
+    # W11 DID enter the cohort and was removed post-save with a coded
+    # reason. Filter stages don't claim cohort wells, so its real fate
+    # survives instead of being masked by a hypothetical name miss.
+    assert by["W11"].disposition == "post_save_removed"
+    assert by["W11"].reason_code is not None
     assert by["W01"].disposition == "included"
     labels = dict(b.header.criteria) if b.header else {}
     assert labels["well_name_criterion"] == "name contains 'well 0'"

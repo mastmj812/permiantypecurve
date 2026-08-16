@@ -257,6 +257,9 @@ class BuildupPreviewRow(BaseModel):
     reason_code: str | None
     reason_label: str | None
     note: str | None
+    # `included` rows only: the filter stage the CURRENT left-rail spec
+    # would cull this well at. The well IS in the cohort — advisory.
+    off_filter_stage: str | None = None
 
 
 class BuildupPreviewResponse(BaseModel):
@@ -274,6 +277,9 @@ class BuildupPreviewResponse(BaseModel):
     # True when no AOI polygons were provided — the drawer renders its
     # amber "stamp an AOI first" empty state instead of a table.
     no_aoi: bool
+    # Cohort members the current filters would cull — the drop-list
+    # behind the drawer's "drop off-filter wells" action.
+    off_filter_api10s: list[str] = Field(default_factory=list)
 
 
 class TypeCurvePreviewRequest(BaseModel):
@@ -841,6 +847,7 @@ def _buildup_to_response(
                 reason_code=r.reason_code,
                 reason_label=reason_label(r.reason_code),
                 note=r.note,
+                off_filter_stage=r.off_filter_stage,
             )
             for r in b.rows
         ],
@@ -848,6 +855,7 @@ def _buildup_to_response(
         reconciles=b.reconciles,
         notes=b.notes,
         no_aoi=no_aoi,
+        off_filter_api10s=b.off_filter_api10s,
     )
 
 
