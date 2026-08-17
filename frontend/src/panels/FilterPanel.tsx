@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
-import type { FacetCount, WellStatus } from "../api/types";
+import {
+  WATER_SOURCE_CLASSES,
+  WATER_SOURCE_LABELS,
+  type FacetCount,
+  type WaterSourceClass,
+  type WellStatus,
+} from "../api/types";
 import {
   type FormationGroup,
   GROUP_DISPLAY_ORDER,
@@ -28,6 +34,7 @@ export function FilterPanel() {
   const setSpacingIncludeNoData = useMapStore((s) => s.setSpacingIncludeNoData);
   const setWellNameContains = useMapStore((s) => s.setWellNameContains);
   const setApi10s = useMapStore((s) => s.setApi10s);
+  const setWaterSources = useMapStore((s) => s.setWaterSources);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
   // Refetch facets whenever filters change so per-facet counts respond
@@ -93,6 +100,11 @@ export function FilterPanel() {
         onRangeChange={setSpacingRange}
         onIncludeNoNeighborChange={setSpacingIncludeNoNeighbor}
         onIncludeNoDataChange={setSpacingIncludeNoData}
+      />
+
+      <WaterSourceSection
+        selected={filters.water_sources}
+        onChange={setWaterSources}
       />
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
@@ -615,6 +627,60 @@ function SpacingSection({
         />
         include wells with no spacing data
       </label>
+    </section>
+  );
+}
+
+// ---------------- Water source (provenance classes) ----------------
+// Flag-only convention of record (2026-08-17): the DEFAULT admits every
+// class (store value [] = nothing on the wire), and nothing is ever
+// auto-excluded from a fit or cohort — unchecking a box here is an
+// explicit engineer decision that removes wells from the map AND from
+// lasso/box selection. "calculated" is the caution class: TX public
+// water is mostly a vendor formula (static WOR x oil), so those wells'
+// water streams are fabricated, not measured.
+function WaterSourceSection({
+  selected,
+  onChange,
+}: {
+  selected: WaterSourceClass[];
+  onChange: (next: WaterSourceClass[]) => void;
+}) {
+  // [] = all classes admitted; a checkbox is checked when its class is
+  // admitted under that convention.
+  const isChecked = (c: WaterSourceClass) =>
+    selected.length === 0 || selected.includes(c);
+
+  function toggle(c: WaterSourceClass) {
+    const current = selected.length === 0 ? [...WATER_SOURCE_CLASSES] : selected;
+    const next = current.includes(c)
+      ? current.filter((x) => x !== c)
+      : [...current, c];
+    // Everything re-checked collapses back to the compact no-filter
+    // default so the tile URL / ETag return to their unfiltered form.
+    onChange(next.length === WATER_SOURCE_CLASSES.length ? [] : next);
+  }
+
+  return (
+    <section className="filter-section">
+      <h3 title="Provenance of the public water stream (curated.water_data_quality). Flag only — default shows ALL wells.">
+        Water source
+      </h3>
+      <p className="filter-hint">
+        Whether the water series is measured or a vendor formula (static WOR ×
+        oil). Default shows all — unchecking removes wells from the map and
+        from lasso/box selection.
+      </p>
+      {WATER_SOURCE_CLASSES.map((c) => (
+        <label key={c} className="chk-inline chk-stacked">
+          <input
+            type="checkbox"
+            checked={isChecked(c)}
+            onChange={() => toggle(c)}
+          />
+          {WATER_SOURCE_LABELS[c]}
+        </label>
+      ))}
     </section>
   );
 }

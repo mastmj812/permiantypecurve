@@ -35,6 +35,7 @@ import {
 } from "../forecasts/reviewTableHelpers";
 import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
 import { ReviewMap } from "../components/ReviewMap";
+import { WaterSourceBadge } from "../components/WaterSourceBadge";
 import type { ProvenanceDraft, SelectionEvent } from "../api/types";
 import { manualExclusionsFromEvents } from "../store/cohortProvenance";
 import { activeCohort as activeCohortSel, useCohortStore } from "../store/cohortStore";
@@ -648,6 +649,20 @@ export function ReviewPage() {
                       {r.manual_override && (
                         <span className="badge badge-warn">edited</span>
                       )}
+                      {/* Water-provenance caution — 'calculated' means
+                          the vendor water series is a static WOR x oil
+                          formula, so the water fit tracks a fabricated
+                          stream; indeterminate/insufficient are muted.
+                          'measured' stays quiet in the table (the
+                          detail modal shows the positive badge). Flag
+                          only — nothing is auto-excluded. */}
+                      {r.well_water_source != null &&
+                        r.well_water_source !== "measured" && (
+                          <WaterSourceBadge
+                            source={r.well_water_source}
+                            worCv={r.well_wor_cv}
+                          />
+                        )}
                       {/* A real fit exists for oil (non-stub row) but a
                           sibling stream has no forecast: the fitter found
                           no production peak in the detection window and
@@ -973,6 +988,8 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     well_first_prod_date: w.first_prod_date,
     well_county: w.county,
     well_novi_oil_eur: w.novi_oil_eur,
+    well_water_source: w.water_source,
+    well_wor_cv: null,
     actual_cum: null,
     eur_remaining: null,
     eur_displayed: null,

@@ -221,6 +221,54 @@ def test_spacing_parse_and_dict_roundtrip() -> None:
     assert d["spacing_include_no_data"] is True
 
 
+# ---------------- water provenance (water_source) ----------------
+
+
+def test_water_sources_default_is_all_no_clause() -> None:
+    # FLAG-ONLY rule: the default admits every class — no clause, so the
+    # unfiltered tile URL / ETag / cohort selection are unchanged.
+    spec = parse_filter_query(None, None, None, None, None, None, None, None)
+    assert spec.water_sources == ()
+    assert len(spec.to_sqlalchemy_clauses()) == 1  # statuses only
+
+
+def test_water_sources_filters_on_selected_classes() -> None:
+    spec = FilterSpec(water_sources=("measured", "calculated"))
+    sql = _compiled_clauses(spec)
+    assert "water_source IN ('measured', 'calculated')" in sql
+    assert "IS NULL" not in sql  # no_data not selected → NULLs culled
+
+
+def test_water_sources_no_data_admits_nulls() -> None:
+    spec = FilterSpec(water_sources=("measured", "no_data"))
+    sql = _compiled_clauses(spec)
+    assert "water_source IN ('measured')" in sql
+    assert "wells.water_source IS NULL" in sql
+
+
+def test_water_sources_no_data_alone() -> None:
+    spec = FilterSpec(water_sources=("no_data",))
+    sql = _compiled_clauses(spec)
+    assert "wells.water_source IS NULL" in sql
+    assert "water_source IN (" not in sql  # no empty IN-list emitted
+
+
+def test_water_sources_parse_drops_unknown_and_roundtrips() -> None:
+    spec = parse_filter_query(
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        water_sources="calculated, no_data, NONSENSE",
+    )
+    assert spec.water_sources == ("calculated", "no_data")
+    assert filter_spec_dict(spec)["water_sources"] == ["calculated", "no_data"]
+
+
 def test_spacing_classes_default_to_included() -> None:
     # Unspecified query params must mean "show everything" — the default
     # has to match the pre-split unfiltered map exactly.

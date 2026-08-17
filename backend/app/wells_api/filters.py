@@ -31,6 +31,19 @@ DEFAULT_VINTAGE_YEARS_BACK = 10
 # sweep it in as if it were a wide-spaced well.
 SPACING_SENTINEL_FT = 2800.0
 
+# Water-stream provenance classes (curated.water_data_quality.water_source
+# synced onto wells.water_source). The four real values plus 'no_data'
+# for NULL (well absent from the matview — no producing months). TX
+# public water is mostly vendor-CALCULATED (static WOR x oil), so
+# 'calculated' wells carry a fabricated water stream. FLAG ONLY by
+# convention of record (2026-08-17): the filter defaults to ALL classes
+# (empty tuple = no clause) and nothing is auto-excluded from any fit
+# or cohort.
+WATER_SOURCE_VALUES: frozenset[str] = frozenset(
+    {"measured", "calculated", "indeterminate", "insufficient"}
+)
+WATER_SOURCE_NO_DATA = "no_data"
+
 # Spacing splits the well population into three disjoint classes, and
 # the min/max range binds ONLY the first:
 #   measured     — real LateralCloserXY (non-null, != 2800)
@@ -85,6 +98,11 @@ class FilterSpec:
     # these api10s pass — pasted from an external tool's well-list so
     # the engineer can recreate the same selection here and forecast.
     api10s: tuple[str, ...] = ()
+    # Water-provenance classes to admit. Empty = ALL (no clause — the
+    # flag-only default; the no-op tile URL and its ETag are unchanged).
+    # Non-empty = only wells whose water_source is in the tuple;
+    # WATER_SOURCE_NO_DATA admits the NULLs.
+    water_sources: tuple[str, ...] = ()
 
     def to_sqlalchemy_clauses(self) -> list[ColumnElement[bool]]:
         """Compose into the AND chain that goes into WHERE. Returns a list so
@@ -140,6 +158,16 @@ class FilterSpec:
             )
         if self.api10s:
             clauses.append(Well.api10.in_(self.api10s))
+        # Water provenance: admit the selected classes; 'no_data' maps to
+        # NULL. Empty tuple = no clause (all classes admitted).
+        if self.water_sources:
+            real = [v for v in self.water_sources if v != WATER_SOURCE_NO_DATA]
+            admitted_ws: list[ColumnElement[bool]] = []
+            if real:
+                admitted_ws.append(Well.water_source.in_(real))
+            if WATER_SOURCE_NO_DATA in self.water_sources:
+                admitted_ws.append(Well.water_source.is_(None))
+            clauses.append(admitted_ws[0] if len(admitted_ws) == 1 else or_(*admitted_ws))
         return clauses
 
 
@@ -196,6 +224,16 @@ def parse_filter_query(
     api10s: Annotated[
         str | None, Query(description="CSV of 10-digit API numbers (allow-list)")
     ] = None,
+    water_sources: Annotated[
+        str | None,
+        Query(
+            description=(
+                "CSV of water-provenance classes to admit (measured, "
+                "calculated, indeterminate, insufficient, no_data). "
+                "Empty/absent = all classes (the flag-only default)."
+            )
+        ),
+    ] = None,
 ) -> FilterSpec:
     """FastAPI dependency — turns query params into a FilterSpec.
 
@@ -221,6 +259,13 @@ def parse_filter_query(
         spacing_include_no_data=spacing_include_no_data,
         well_name_contains=(well_name_contains or "").strip() or None,
         api10s=tuple(_split_csv(api10s)),
+        # Unknown class names are dropped silently (same tolerance as
+        # statuses) so a future class addition can't 400 an old client.
+        water_sources=tuple(
+            v
+            for v in _split_csv(water_sources)
+            if v in WATER_SOURCE_VALUES or v == WATER_SOURCE_NO_DATA
+        ),
     )
 
 
@@ -242,4 +287,5 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "spacing_include_no_data": spec.spacing_include_no_data,
         "well_name_contains": spec.well_name_contains,
         "api10s": list(spec.api10s),
+        "water_sources": list(spec.water_sources),
     }

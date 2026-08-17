@@ -32,6 +32,7 @@ import {
   listDeals,
 } from "../api/deals";
 import { BlueOxDropModal } from "../components/BlueOxDropModal";
+import { WaterSourceCompositionChip } from "../components/WaterSourceBadge";
 import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
@@ -847,6 +848,15 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               </button>
             ))}
           </div>
+          {/* Cohort water-provenance mix, shown while the water stream
+              is up — how much of this curve's water fit rests on
+              vendor-calculated (static WOR x oil) data. Flag only —
+              membership is untouched. */}
+          {stream === "water" && (
+            <WaterSourceCompositionChip
+              api10s={selectedSaved ? selectedSaved.included_api10s : included}
+            />
+          )}
           {computing && <span className="muted">computing…</span>}
         </header>
 

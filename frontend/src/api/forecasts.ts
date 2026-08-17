@@ -110,6 +110,14 @@ export interface ForecastRow {
   // curated.wells_enriched.eur_50yr_oil_bbl. Null when Novi hasn't
   // forecasted the well.
   well_novi_oil_eur: number | null;
+  // Water-stream provenance flag (wells.water_source): "measured" |
+  // "calculated" | "indeterminate" | "insufficient" | null (no data).
+  // "calculated" = the vendor water series is a formula (static WOR x
+  // oil), not measurement. FLAG ONLY — badge, never an auto-exclusion.
+  well_water_source: string | null;
+  // Monthly-WOR coefficient of variation (near-zero = dead-flat WOR,
+  // the calculated signature). Tooltip diagnostic only.
+  well_wor_cv: number | null;
   // Method-1 EUR triple, derived per request by the backend from
   // production aggregates. ``eur_displayed`` is the value to show in
   // user-facing surfaces: actual production to date + model's

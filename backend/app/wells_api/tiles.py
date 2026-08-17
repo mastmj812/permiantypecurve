@@ -31,6 +31,7 @@ from app.core.logging import get_logger
 from app.db.session import get_session
 from app.wells_api.filters import (
     SPACING_SENTINEL_FT,
+    WATER_SOURCE_NO_DATA,
     FilterSpec,
     escape_like,
     filter_spec_dict,
@@ -130,6 +131,20 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
         # same wells on the map and in /api/wells/select.
         parts.append("w.api10 = ANY((:api10s)::TEXT[])")
         params["api10s"] = list(spec.api10s)
+    # Water provenance — mirrors the ORM clause: admit the selected
+    # classes, with 'no_data' mapping to NULL. Empty = no fragment (the
+    # flag-only default keeps the no-op tile URL and ETag unchanged).
+    if spec.water_sources:
+        ws_real = [v for v in spec.water_sources if v != WATER_SOURCE_NO_DATA]
+        ws_admitted: list[str] = []
+        if ws_real:
+            ws_admitted.append("w.water_source = ANY((:water_sources)::TEXT[])")
+            params["water_sources"] = ws_real
+        if WATER_SOURCE_NO_DATA in spec.water_sources:
+            ws_admitted.append("w.water_source IS NULL")
+        parts.append(
+            ws_admitted[0] if len(ws_admitted) == 1 else "(" + " OR ".join(ws_admitted) + ")"
+        )
 
     if not parts:
         return "TRUE", params

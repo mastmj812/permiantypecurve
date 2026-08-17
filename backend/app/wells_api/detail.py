@@ -47,6 +47,11 @@ class WellDetail(BaseModel):
     sh_lon: float | None
     bh_lat: float | None
     bh_lon: float | None
+    # Water-stream provenance (wells.water_source / wells.wor_cv, synced
+    # from curated.water_data_quality). 'calculated' = vendor formula
+    # (static WOR x oil), not measurement. FLAG ONLY.
+    water_source: str | None = None
+    wor_cv: float | None = None
     last_synced_at: datetime | None
 
 
@@ -78,6 +83,10 @@ class WellDetailLite(BaseModel):
     vintage_year: int | None = None
     county: str | None = None
     novi_oil_eur: float | None = None
+    # Water-provenance flag — lets the Review tab's synthesized stub
+    # rows (short-history wells with no forecast yet) badge the water
+    # stream with the same field the forecast join carries.
+    water_source: str | None = None
 
 
 @router.get("/wellsticks")
@@ -145,6 +154,7 @@ _LITE_COLUMNS = (
     Well.vintage_year,
     Well.county,
     Well.novi_oil_eur,
+    Well.water_source,
 )
 
 
@@ -166,6 +176,7 @@ def _row_to_lite(r: Any) -> WellDetailLite:
         vintage_year=int(r.vintage_year) if r.vintage_year is not None else None,
         county=r.county,
         novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
+        water_source=r.water_source,
     )
 
 
@@ -186,6 +197,69 @@ def well_details(
         return []
     rows = session.execute(select(*_LITE_COLUMNS).where(Well.api10.in_(ids))).all()
     return [_row_to_lite(r) for r in rows]
+
+
+class WaterSourceCompositionRequest(BaseModel):
+    """Cohort membership whose water-provenance mix we want counted.
+
+    Bounded by the same 500-well cap as the forecast workflow plus
+    headroom for over-cap saved curves; POST (not GET) because 500
+    api10s overflow a comfortable query string.
+    """
+
+    api10s: list[str] = Field(min_length=0, max_length=1000)
+
+
+class WaterSourceComposition(BaseModel):
+    """Water-provenance counts over a cohort — "how much of the water
+    fit rests on calculated data". Keys mirror wells.water_source with
+    ``no_data`` for NULL / api10s not in the wells table. FLAG ONLY —
+    display, never a membership rule."""
+
+    measured: int = 0
+    calculated: int = 0
+    indeterminate: int = 0
+    insufficient: int = 0
+    no_data: int = 0
+    total: int = 0
+
+
+@router.post("/water-sources", response_model=WaterSourceComposition)
+def water_source_composition(
+    req: WaterSourceCompositionRequest, session: Session = Depends(get_session)
+) -> WaterSourceComposition:
+    """Count water-provenance classes over a set of api10s.
+
+    Used by the Type Curve page (header chip when the water stream is
+    up) and the TC workspace QC section, so the engineer sees at a
+    glance how much of a cohort's water fit rests on vendor-calculated
+    data. api10s missing from the wells table count as no_data — the
+    totals always reconcile with the membership size.
+    """
+    # De-dupe so a repeated api10 can't double-count; total = distinct
+    # membership so the chip's parts always sum to it.
+    unique_ids = list(dict.fromkeys(req.api10s))
+    counts = WaterSourceComposition(total=len(unique_ids))
+    if not unique_ids:
+        return counts
+    rows = session.execute(
+        select(Well.water_source, func.count())
+        .where(Well.api10.in_(unique_ids))
+        .group_by(Well.water_source)
+    ).all()
+    known_fields = {"measured", "calculated", "indeterminate", "insufficient"}
+    seen = 0
+    for source, n in rows:
+        seen += int(n)
+        if source in known_fields:
+            setattr(counts, source, int(n))
+        else:
+            # NULL water_source, or a future class the app doesn't know
+            # yet — both read as "no usable provenance signal".
+            counts.no_data += int(n)
+    # api10s not present in the wells table at all.
+    counts.no_data += len(unique_ids) - seen
+    return counts
 
 
 class ContextWellsRequest(BaseModel):
@@ -288,6 +362,8 @@ def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDeta
             func.ST_X(Well.sh_geom).label("sh_lon"),
             func.ST_Y(Well.bh_geom).label("bh_lat"),
             func.ST_X(Well.bh_geom).label("bh_lon"),
+            Well.water_source,
+            Well.wor_cv,
             Well.last_synced_at,
         ).where(Well.api10 == api10)
     ).first()
@@ -313,6 +389,8 @@ def well_detail(api10: str, session: Session = Depends(get_session)) -> WellDeta
         sh_lon=row.sh_lon,
         bh_lat=row.bh_lat,
         bh_lon=row.bh_lon,
+        water_source=row.water_source,
+        wor_cv=float(row.wor_cv) if row.wor_cv is not None else None,
         last_synced_at=row.last_synced_at,
     )
 

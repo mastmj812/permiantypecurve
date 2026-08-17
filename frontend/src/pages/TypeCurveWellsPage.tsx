@@ -28,6 +28,7 @@ import {
 } from "../api/typeCurves";
 import type { ReasonCode } from "../api/types";
 import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
+import { WaterSourceCompositionChip } from "../components/WaterSourceBadge";
 import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { Th, type SortDir } from "../forecasts/reviewTable";
 import { fmtDi, fmtInt, fmtVol } from "../forecasts/reviewTableHelpers";
@@ -127,6 +128,10 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
       well_first_prod_date: row.well_first_prod_date,
       well_county: row.well_county,
       well_novi_oil_eur: null,
+      // Well-level provenance flag rides along so the detail modal's
+      // water badge works when opened from the workspace.
+      well_water_source: row.well_water_source,
+      well_wor_cv: row.well_wor_cv,
       actual_cum: null,
       eur_remaining: null,
       eur_displayed: numFromPayload(p, "eur"),
@@ -538,6 +543,11 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
                 {s}
               </button>
             ))}
+            {/* Cohort water-provenance mix — how much of the water fit
+                rests on vendor-calculated data. Flag only. */}
+            {qcStream === "water" && (
+              <WaterSourceCompositionChip api10s={tc?.included_api10s ?? []} />
+            )}
           </h3>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
             <TypeCurveChart

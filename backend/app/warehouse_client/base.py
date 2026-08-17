@@ -88,6 +88,17 @@ class WellHeader:
     # no-neighbor sentinel (passed through verbatim — the app's filter
     # layer owns the sentinel semantics).
     lateral_closer_xy_ft: float | None = None
+    # Water-stream provenance flag (curated.water_data_quality.
+    # water_source): 'measured' | 'calculated' | 'indeterminate' |
+    # 'insufficient'. NULL = well absent from the matview (no producing
+    # months). 'calculated' means the public water series is a vendor
+    # formula (static WOR x oil), not measurement — FLAG ONLY by
+    # convention of record (2026-08-17); nothing auto-excludes on it.
+    water_source: str | None = None
+    # Monthly-WOR coefficient of variation over the well's history
+    # (curated.water_data_quality.wor_cv). Near-zero = dead-flat WOR,
+    # the calculated signature. Diagnostic display only.
+    wor_cv: float | None = None
 
 
 @dataclass(frozen=True)

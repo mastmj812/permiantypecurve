@@ -409,6 +409,12 @@ class WorkspaceWell(BaseModel):
     well_lateral_ft: float | None
     well_first_prod_date: date | None  # ISO from Well.first_prod_date
     well_county: str | None
+    # Water-stream provenance flag (wells.water_source): 'measured' |
+    # 'calculated' | 'indeterminate' | 'insufficient' | None. Drives the
+    # water badge + the workspace's water-source composition line. FLAG
+    # ONLY — never a membership rule.
+    well_water_source: str | None = None
+    well_wor_cv: float | None = None
     oil: WorkspaceStream
     gas: WorkspaceStream
     water: WorkspaceStream
@@ -1666,6 +1672,8 @@ def get_type_curve_workspace_wells(
             Well.lateral_ft,
             Well.first_prod_date,
             Well.county,
+            Well.water_source,
+            Well.wor_cv,
         ).where(Well.api10.in_(api10s))
     ).all()
     wells_by_api10 = {r.api10: r for r in well_rows}
@@ -1704,6 +1712,10 @@ def get_type_curve_workspace_wells(
                 ),
                 well_first_prod_date=well.first_prod_date if well else None,
                 well_county=well.county if well else None,
+                well_water_source=well.water_source if well else None,
+                well_wor_cv=(
+                    float(well.wor_cv) if well and well.wor_cv is not None else None
+                ),
                 oil=_stream(Stream.OIL),
                 gas=_stream(Stream.GAS),
                 water=_stream(Stream.WATER),

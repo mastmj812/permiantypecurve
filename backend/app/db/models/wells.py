@@ -80,6 +80,20 @@ class Well(Base):
     # "unbounded" (wells_api/filters.py::SPACING_SENTINEL_FT). Indexed
     # for the map filter predicate.
     lateral_closer_xy_ft: Mapped[float | None] = mapped_column(Float, index=True)
+    # Water-stream provenance flag (curated.water_data_quality.water_source):
+    # 'measured' | 'calculated' | 'indeterminate' | 'insufficient'. NULL =
+    # well absent from the warehouse matview (no producing months). TX
+    # public water is mostly vendor-CALCULATED (a static WOR x oil), so a
+    # water fit on a 'calculated' well inherits a fabricated stream.
+    # CONVENTION OF RECORD (2026-08-17): FLAG ONLY — badge + filter;
+    # nothing is auto-excluded from any fit or cohort. Indexed for the
+    # map/cohort filter predicate.
+    water_source: Mapped[str | None] = mapped_column(String(16), index=True)
+    # Coefficient of variation of the monthly WOR over the well's history
+    # (curated.water_data_quality.wor_cv). Near-zero = dead-flat WOR, the
+    # signature of a vendor-calculated water stream. Diagnostic display
+    # only — no app logic keys on it.
+    wor_cv: Mapped[float | None] = mapped_column(Float)
     proppant_lbs: Mapped[float | None] = mapped_column(Float)
     fluid_bbl: Mapped[float | None] = mapped_column(Float)
     tvd_ft: Mapped[float | None] = mapped_column(Float)

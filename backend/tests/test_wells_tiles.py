@@ -96,6 +96,7 @@ _FIELD_SAMPLES: dict[str, object] = {
     "spacing_include_no_data": False,
     "well_name_contains": "UNIVERSITY",
     "api10s": ("4200000001",),
+    "water_sources": ("calculated",),
 }
 
 
@@ -161,6 +162,30 @@ def test_spacing_tile_sql_mirrors_orm_semantics() -> None:
     sql_base, params_base = _build_filter_sql(FilterSpec())
     assert "lateral_closer_xy_ft" not in sql_base
     assert "spacing_sentinel" not in params_base
+
+
+def test_water_sources_tile_sql_mirrors_orm_semantics() -> None:
+    # Selected classes only: IN-list, no NULL re-admission.
+    sql, params = _build_filter_sql(FilterSpec(water_sources=("measured", "calculated")))
+    assert "w.water_source = ANY((:water_sources)::TEXT[])" in sql
+    assert params["water_sources"] == ["measured", "calculated"]
+    assert "w.water_source IS NULL" not in sql
+
+    # no_data selected: NULLs OR'd back in alongside the real classes.
+    sql_nd, params_nd = _build_filter_sql(FilterSpec(water_sources=("measured", "no_data")))
+    assert "w.water_source IS NULL" in sql_nd
+    assert params_nd["water_sources"] == ["measured"]
+
+    # no_data alone: just the NULL test, no dangling bind.
+    sql_only, params_only = _build_filter_sql(FilterSpec(water_sources=("no_data",)))
+    assert "w.water_source IS NULL" in sql_only
+    assert "water_sources" not in params_only
+
+    # Default (flag-only): NO fragment — unfiltered tile URL and ETag
+    # unchanged, nothing auto-excluded.
+    sql_base, params_base = _build_filter_sql(FilterSpec())
+    assert "water_source" not in sql_base
+    assert "water_sources" not in params_base
 
 
 def test_well_name_tile_sql_escapes_metacharacters() -> None:

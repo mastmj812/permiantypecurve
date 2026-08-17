@@ -8,6 +8,34 @@ export type WellStatus = "PDP" | "DUC" | "PA" | "SI" | "TA" | "INACTIVE" | "UNKN
 // measurement). Mirrors backend wells_api/filters.py.
 export const SPACING_SENTINEL_FT = 2800;
 
+// Water-stream provenance classes (wells.water_source, synced from
+// curated.water_data_quality) plus "no_data" for NULL (well absent
+// from the matview). 'calculated' = the vendor water series is a
+// formula (static WOR x oil), not measurement — the water fit
+// inherits a fabricated stream. FLAG ONLY by convention of record
+// (2026-08-17): badge + filter; nothing auto-excluded from any fit
+// or cohort. Mirrors backend wells_api/filters.py.
+export type WaterSourceClass =
+  | "measured"
+  | "calculated"
+  | "indeterminate"
+  | "insufficient"
+  | "no_data";
+export const WATER_SOURCE_CLASSES: WaterSourceClass[] = [
+  "measured",
+  "calculated",
+  "indeterminate",
+  "insufficient",
+  "no_data",
+];
+export const WATER_SOURCE_LABELS: Record<WaterSourceClass, string> = {
+  measured: "measured",
+  calculated: "calculated (vendor WOR formula)",
+  indeterminate: "indeterminate",
+  insufficient: "insufficient history",
+  no_data: "no water QC data",
+};
+
 export interface FilterSpec {
   formations: string[];
   operators: string[];
@@ -35,6 +63,10 @@ export interface FilterSpec {
   // that match one of these api10s are shown. Pasted from an external
   // tool's well-list workflow.
   api10s: string[];
+  // Water-provenance classes to admit. Empty = ALL classes (the
+  // flag-only default — no filter on the wire). Non-empty = only wells
+  // whose water_source is listed; "no_data" admits the NULLs.
+  water_sources: WaterSourceClass[];
 }
 
 export const DEFAULT_FILTER_SPEC: FilterSpec = {
@@ -54,6 +86,7 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   spacing_include_no_data: true,
   well_name_contains: null,
   api10s: [],
+  water_sources: [],
 };
 
 // GeoJSON Polygon geometry (NOT a Feature). Canonical home — wells.ts
@@ -230,5 +263,8 @@ export interface WellDetail {
   sh_lon: number | null;
   bh_lat: number | null;
   bh_lon: number | null;
+  // Water-stream provenance (wells.water_source / wor_cv). FLAG ONLY.
+  water_source: string | null;
+  wor_cv: number | null;
   last_synced_at: string | null;
 }
