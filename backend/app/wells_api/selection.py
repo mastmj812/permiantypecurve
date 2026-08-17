@@ -69,6 +69,10 @@ class FilterSpecBody(BaseModel):
     # well set doesn't reach back and pick up filtered-out wells inside
     # the same geometry.
     api10s: list[str] = Field(default_factory=list)
+    # Water-provenance classes to admit (see FilterSpec.water_sources).
+    # Empty = all classes — the flag-only default. Honored here so a
+    # lasso/box select agrees with the map about which wells exist.
+    water_sources: list[str] = Field(default_factory=list)
 
     def to_spec(self) -> FilterSpec:
         from app.db.models import WellStatus
@@ -89,6 +93,7 @@ class FilterSpecBody(BaseModel):
             spacing_include_no_data=self.spacing_include_no_data,
             well_name_contains=(self.well_name_contains or "").strip() or None,
             api10s=tuple(self.api10s),
+            water_sources=tuple(self.water_sources),
         )
 
 

@@ -228,6 +228,16 @@ class ForecastRow(BaseModel):
     # autoforecast EUR in the Review table. Sourced from
     # curated.wells_enriched.eur_50yr_oil_bbl during well sync.
     well_novi_oil_eur: float | None = None
+    # Water-stream provenance flag (wells.water_source, synced from
+    # curated.water_data_quality): 'measured' | 'calculated' |
+    # 'indeterminate' | 'insufficient' | None (no data). 'calculated'
+    # = the vendor water series is a formula (static WOR x oil), not
+    # measurement — the water fit inherits a fabricated stream. FLAG
+    # ONLY: badge in the UI, nothing auto-excluded.
+    well_water_source: str | None = None
+    # Monthly-WOR coefficient of variation (wells.wor_cv) — near-zero =
+    # dead-flat WOR, the calculated signature. Tooltip diagnostic only.
+    well_wor_cv: float | None = None
     # Method-1 EUR triple — derived per request from production
     # aggregates so we don't store stale snapshots. See
     # _compute_method_one_metrics for the math.
@@ -887,6 +897,8 @@ def list_forecasts(
             Well.first_prod_date,
             Well.county,
             Well.novi_oil_eur,
+            Well.water_source,
+            Well.wor_cv,
             prod_agg.c.oil_cum,
             prod_agg.c.gas_cum,
             prod_agg.c.water_cum,
@@ -909,6 +921,8 @@ def list_forecasts(
         first_prod_date,
         county,
         novi_oil_eur,
+        water_source,
+        wor_cv,
         oil_cum,
         gas_cum,
         water_cum,
@@ -924,6 +938,8 @@ def list_forecasts(
         row.well_first_prod_date = first_prod_date
         row.well_county = county
         row.well_novi_oil_eur = float(novi_oil_eur) if novi_oil_eur is not None else None
+        row.well_water_source = water_source
+        row.well_wor_cv = float(wor_cv) if wor_cv is not None else None
         cum_by_stream = {
             Stream.OIL: oil_cum,
             Stream.GAS: gas_cum,
@@ -966,6 +982,8 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         row.well_first_prod_date = well.first_prod_date
         row.well_county = well.county
         row.well_novi_oil_eur = float(well.novi_oil_eur) if well.novi_oil_eur is not None else None
+        row.well_water_source = well.water_source
+        row.well_wor_cv = float(well.wor_cv) if well.wor_cv is not None else None
     # Per-stream production aggregate for the Method-1 EUR computation.
     # One scalar SUM query; cheap on the indexed (api10, prod_date) PK.
     vol_attr = _STREAM_VOL_ATTR[f.stream]
