@@ -12,6 +12,7 @@ end (our p90 fit must feed the file's _p10 columns).
 from __future__ import annotations
 
 import io
+import math
 import uuid
 from datetime import UTC, date, datetime
 from typing import Any
@@ -20,8 +21,10 @@ import pytest
 from openpyxl import load_workbook
 
 from app.exports.blueox import (
+    FT_PER_M,
     LEVEL_TO_SPE_KEY,
     NGL_BASIS,
+    WORK_EPSG,
     BlueOxContractError,
     BlueOxExportData,
     DsuMetaRow,
@@ -31,6 +34,7 @@ from app.exports.blueox import (
     blueox_filename,
     build_blueox_workbook,
     monthly_volumes_from_rates,
+    presend_sweep,
 )
 
 _MONTHS = 24
@@ -1208,15 +1212,49 @@ def test_manifest_declares_scoped_zones_only() -> None:
 # ================= inventory gunbarrel geometry (2026-07-27) =================
 
 
+# §6-consistent fixture geometry: legs are CONSTRUCTED forward from the
+# frame (offset along the cross axis in narvi's UTM 13N work CRS, leg
+# laid along its bearing) so the sweep's inverse projection reproduces
+# each gunbarrel_offset_ft exactly. Defect fixtures then perturb one
+# value at a time.
+_FRAME_AZ = 105.3
+_ORIGIN_LONLAT = (-103.795, 31.9205)
+
+
+def _leg_lonlat(
+    offset_ft: float, length_ft: float, bearing_deg: float
+) -> tuple[float, float, float, float]:
+    """(heel_lon, heel_lat, toe_lon, toe_lat) of a leg whose §6 offset
+    from the fixture frame is exactly ``offset_ft``."""
+    from pyproj import Transformer
+
+    to_work = Transformer.from_crs(4326, WORK_EPSG, always_xy=True)
+    to_wgs = Transformer.from_crs(WORK_EPSG, 4326, always_xy=True)
+    ox, oy = to_work.transform(*_ORIGIN_LONLAT)
+    a = math.radians(_FRAME_AZ % 180.0)
+    px, py = math.cos(a), -math.sin(a)  # cross axis, 90° cw of folded azimuth
+    mx, my = ox + px * offset_ft / FT_PER_M, oy + py * offset_ft / FT_PER_M
+    b = math.radians(bearing_deg % 180.0)
+    ux, uy = math.sin(b), math.cos(b)  # along-lateral unit vector
+    half = (length_ft / 2.0) / FT_PER_M
+    heel = to_wgs.transform(mx - ux * half, my - uy * half)
+    toe = to_wgs.transform(mx + ux * half, my + uy * half)
+    return (heel[0], heel[1], toe[0], toe[1])
+
+
 def _geo_inv(
     name: str,
     category: str = "PUD",
     dsu: str = "1_4_9/plan_a",
     xs: tuple[float, ...] = (-660.0,),
-    legs: int = 1,
+    az: float = _FRAME_AZ,
+    producing: float = 10_000.0,
 ) -> InventoryRow:
+    leg_len = producing / len(xs)  # U-turn legs sum to the producing lateral
+    leg_a = _leg_lonlat(xs[0], leg_len, az)
+    leg_b = _leg_lonlat(xs[1], leg_len, az) if len(xs) > 1 else (None, None, None, None)
     return InventoryRow(
-        producing_lateral_ft=10_000.0,
+        producing_lateral_ft=producing,
         drilled_lateral_ft=12_000.0,
         well_name=name,
         category=category,
@@ -1225,24 +1263,24 @@ def _geo_inv(
         landing_tvd_ft=11_480.0,
         gunbarrel_offset_ft=xs[0],
         gunbarrel_offset_b_ft=xs[1] if len(xs) > 1 else None,
-        lateral_azimuth_deg=105.3,
-        heel_a_lon=-103.81,
-        heel_a_lat=31.92,
-        toe_a_lon=-103.78,
-        toe_a_lat=31.92,
-        heel_b_lon=-103.81 if legs > 1 else None,
-        heel_b_lat=31.921 if legs > 1 else None,
-        toe_b_lon=-103.78 if legs > 1 else None,
-        toe_b_lat=31.921 if legs > 1 else None,
+        lateral_azimuth_deg=az,
+        heel_a_lon=leg_a[0],
+        heel_a_lat=leg_a[1],
+        toe_a_lon=leg_a[2],
+        toe_a_lat=leg_a[3],
+        heel_b_lon=leg_b[0],
+        heel_b_lat=leg_b[1],
+        toe_b_lon=leg_b[2],
+        toe_b_lat=leg_b[3],
     )
 
 
 def _dsu_frame(dsu: str = "1_4_9/plan_a") -> DsuMetaRow:
     return DsuMetaRow(
         dsu_id=dsu,
-        azimuth_deg=105.3,
-        origin_lon=-103.795,
-        origin_lat=31.9205,
+        azimuth_deg=_FRAME_AZ,
+        origin_lon=_ORIGIN_LONLAT[0],
+        origin_lat=_ORIGIN_LONLAT[1],
     )
 
 
@@ -1252,8 +1290,10 @@ def test_inventory_geometry_columns_and_dsu_meta() -> None:
     z = _zone("WOLFCAMP A", ("4200000001",))
     inv = [
         _geo_inv("PLANNED 1"),
-        _geo_inv("PLANNED 2 UTURN", xs=(-660.0, 660.0), legs=2),
-        _geo_inv("4249533594", category="PDP"),
+        _geo_inv("PLANNED 2 UTURN", xs=(-660.0, 660.0)),
+        # PDP carries its OWN as-built bearing (rule 16 / §10) — the
+        # sweep's azimuth-spread check relies on that.
+        _geo_inv("4249533594", category="PDP", xs=(1320.0,), az=104.6),
     ]
     zz = ZoneData(**{**z.__dict__, "inventory": inv})
     data = _data(zones=[zz])
@@ -1291,7 +1331,7 @@ def test_inventory_geometry_columns_and_dsu_meta() -> None:
     assert single[col["gunbarrel_offset_b_ft"]] is None
     assert single[col["heel_b_lon"]] is None
     assert uturn[col["gunbarrel_offset_b_ft"]] == 660.0
-    assert uturn[col["toe_b_lat"]] == 31.921
+    assert uturn[col["toe_b_lat"]] == pytest.approx(inv[1].toe_b_lat)
     assert single[col["dsu_id"]] == "1_4_9/plan_a"
     assert single[col["landing_tvd_ft"]] == 11_480.0
 
@@ -1481,3 +1521,285 @@ def test_novi_comparison_vector_rules() -> None:
         build_blueox_workbook(
             _with_novi(data, (sneaky, _novi_zone("THIRD BONE SPRING", n_sticks=0)))
         )
+
+
+# ==================== pre-send value sweep (2026-08-17) ====================
+#
+# Each historical defect Blue Ox caught after a send has a fixture here
+# reproducing its mechanical signature; each check must fail on its
+# fixture and pass on the well-formed one.
+
+_SWEEP_CHECKS = {
+    "heel_toe_lateral_consistency",
+    "azimuth_spread",
+    "coordinate_order",
+    "offset_reproducibility",
+    "vector_sanity",
+}
+
+
+def _sweep_inv() -> list[InventoryRow]:
+    """A well-formed geometry-rich unit: two planned rows on the frame
+    azimuth (a single and a U-turn) plus two PDPs carrying their own
+    distinct as-built bearings."""
+    return [
+        _geo_inv("PLANNED 1"),
+        _geo_inv("PLANNED 2 UTURN", xs=(-660.0, 660.0)),
+        _geo_inv("4249533594", category="PDP", xs=(1320.0,), az=104.6),
+        _geo_inv("4249533595", category="PDP", xs=(1980.0,), az=106.1),
+    ]
+
+
+def _sweep_data(
+    inv: list[InventoryRow] | None = None,
+    dsu_meta: tuple[DsuMetaRow, ...] | None = None,
+) -> BlueOxExportData:
+    z = _zone("WOLFCAMP A", ("4200000001",))
+    zz = ZoneData(**{**z.__dict__, "inventory": inv if inv is not None else _sweep_inv()})
+    data = _data(zones=[zz])
+    return BlueOxExportData(
+        **{**data.__dict__, "dsu_meta": dsu_meta if dsu_meta is not None else (_dsu_frame(),)}
+    )
+
+
+def test_presend_sweep_passes_on_well_formed_workbook() -> None:
+    """Every check reports pass (not merely absent) on clean data, and
+    the build goes through."""
+    data = _sweep_data()
+    report = presend_sweep(data)
+    assert {f.check for f in report} == _SWEEP_CHECKS
+    assert [f.status for f in report] == ["pass"] * len(report)
+    # pass details carry the inspected-row counts (an empty check is visible)
+    by_check = {f.check: f.detail for f in report}
+    assert by_check["offset_reproducibility"].startswith("5 ")  # 4 A legs + 1 B leg
+    build_blueox_workbook(data)  # must not raise
+
+
+def test_sweep_mid_lateral_heel_blocks_build() -> None:
+    """bro_time signature: a heel at the mid-lateral point halves the
+    heel->toe span vs the stated lateral. Moving the heel ALONG the leg
+    leaves the section-6 offset intact, so only this check fires."""
+    row = _geo_inv("PLANNED 1")
+    assert row.heel_a_lon is not None and row.toe_a_lon is not None
+    assert row.heel_a_lat is not None and row.toe_a_lat is not None
+    bad = InventoryRow(
+        **{
+            **row.__dict__,
+            "heel_a_lon": (row.heel_a_lon + row.toe_a_lon) / 2.0,
+            "heel_a_lat": (row.heel_a_lat + row.toe_a_lat) / 2.0,
+        }
+    )
+    data = _sweep_data(inv=[bad, *_sweep_inv()[1:]])
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["heel_toe_lateral_consistency"]
+    with pytest.raises(BlueOxContractError, match="mid-lateral heel signature"):
+        build_blueox_workbook(data)
+
+
+_GEO_ANALOG_HEADERS = (
+    *_ANALOG_HEADERS,
+    "surface_lon",
+    "surface_lat",
+    "heel_lon",
+    "heel_lat",
+    "toe_lon",
+    "toe_lat",
+    "wellstick_wkt",
+)
+
+
+def _analog_geo_zone(heel_toe: tuple[float, float, float, float], lateral_ft: float) -> ZoneData:
+    z = _zone("WOLFCAMP A", ("4200000001",))
+    row = (
+        "4200000001",
+        "WELL 0 123H",
+        "OPERATOR X",
+        "WOLFCAMP A",
+        lateral_ft,
+        heel_toe[0],
+        heel_toe[1],
+        *heel_toe,
+        None,
+    )
+    return ZoneData(**{**z.__dict__, "analog_headers": _GEO_ANALOG_HEADERS, "analog_rows": [row]})
+
+
+def test_sweep_analog_mid_lateral_heel_blocks_build() -> None:
+    """The same signature on the analog (zone meta) geo block: a
+    heel->toe span of ~half the Lateral Length column fails; a
+    consistent one builds. Blank heel cells (non-4-vertex sticks) are
+    sanctioned and skipped."""
+    ok = _analog_geo_zone(_leg_lonlat(0.0, 9_800.0, _FRAME_AZ), 9_800.0)
+    build_blueox_workbook(_data(zones=[ok]))  # must not raise
+
+    bad = _analog_geo_zone(_leg_lonlat(0.0, 4_900.0, _FRAME_AZ), 9_800.0)
+    with pytest.raises(BlueOxContractError, match="mid-lateral heel signature"):
+        build_blueox_workbook(_data(zones=[bad]))
+
+    # heel blanked (3-vertex stick) -> nothing to check, builds fine.
+    z = _analog_geo_zone(_leg_lonlat(0.0, 4_900.0, _FRAME_AZ), 9_800.0)
+    blanked_row = list(z.analog_rows[0])
+    hi = _GEO_ANALOG_HEADERS.index("heel_lon")
+    blanked_row[hi] = None
+    blanked_row[hi + 1] = None
+    zz = ZoneData(**{**z.__dict__, "analog_rows": [tuple(blanked_row)]})
+    build_blueox_workbook(_data(zones=[zz]))
+
+
+def test_sweep_zero_spread_azimuth_blocks_build() -> None:
+    """toucan signature: >1 PDP row in a unit stamped with one identical
+    lateral_azimuth_deg (the frame value) instead of per-well as-built
+    bearings."""
+    inv = [
+        _geo_inv("PLANNED 1"),
+        _geo_inv("4249533594", category="PDP", xs=(1320.0,)),  # az defaults to frame
+        _geo_inv("4249533595", category="PDP", xs=(1980.0,)),
+    ]
+    data = _sweep_data(inv=inv)
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["azimuth_spread"]
+    with pytest.raises(BlueOxContractError, match="toucan signature"):
+        build_blueox_workbook(data)
+
+
+def test_sweep_azimuth_identity_is_axial() -> None:
+    """179.99 deg and 0.05 deg are the same axial bearing to within
+    0.1 deg — the fold must not hide a stamped value at the 0/180 seam."""
+    inv = [
+        _geo_inv("4249533594", category="PDP", xs=(1320.0,), az=179.99),
+        _geo_inv("4249533595", category="PDP", xs=(1980.0,), az=0.05),
+    ]
+    data = _sweep_data(inv=inv)
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["azimuth_spread"]
+
+
+def test_sweep_single_pdp_on_frame_azimuth_warns_only() -> None:
+    """One PDP matching every planned row is only a warning: the frame
+    azimuth can legitimately derive from a kept existing stick."""
+    inv = [
+        _geo_inv("PLANNED 1"),
+        _geo_inv("PLANNED 2 UTURN", xs=(-660.0, 660.0)),
+        _geo_inv("4249533594", category="PDP", xs=(1320.0,)),  # az = frame
+    ]
+    data = _sweep_data(inv=inv)
+    report = presend_sweep(data)
+    assert not [f for f in report if f.status == "fail"]
+    warns = [f for f in report if f.status == "warn"]
+    assert [f.check for f in warns] == ["azimuth_spread"]
+    build_blueox_workbook(data)  # warns never block
+
+
+def test_sweep_lat_lon_swap_blocks_build() -> None:
+    """Section-8 signature: a lat-first pair lands both values outside
+    the Permian lon/lat envelopes — on inventory legs, dsu_meta
+    origins, and analog geo columns."""
+    # inventory heel_a swapped
+    row = _geo_inv("PLANNED 1")
+    swapped = InventoryRow(
+        **{**row.__dict__, "heel_a_lon": row.heel_a_lat, "heel_a_lat": row.heel_a_lon}
+    )
+    data = _sweep_data(inv=[swapped, *_sweep_inv()[1:]])
+    assert "coordinate_order" in {f.check for f in presend_sweep(data) if f.status == "fail"}
+    with pytest.raises(BlueOxContractError, match="lon-first"):
+        build_blueox_workbook(data)
+
+    # dsu_meta origin swapped
+    frame = _dsu_frame()
+    bad_frame = DsuMetaRow(
+        dsu_id=frame.dsu_id,
+        azimuth_deg=frame.azimuth_deg,
+        origin_lon=frame.origin_lat,
+        origin_lat=frame.origin_lon,
+    )
+    data = _sweep_data(dsu_meta=(bad_frame,))
+    assert "coordinate_order" in {f.check for f in presend_sweep(data) if f.status == "fail"}
+
+    # analog surface pair swapped
+    leg = _leg_lonlat(0.0, 9_800.0, _FRAME_AZ)
+    z = _analog_geo_zone(leg, 9_800.0)
+    r = list(z.analog_rows[0])
+    si = _GEO_ANALOG_HEADERS.index("surface_lon")
+    r[si], r[si + 1] = r[si + 1], r[si]
+    zz = ZoneData(**{**z.__dict__, "analog_rows": [tuple(r)]})
+    with pytest.raises(BlueOxContractError, match="lon-first"):
+        build_blueox_workbook(_data(zones=[zz]))
+
+
+def test_sweep_offset_invariant_blocks_build() -> None:
+    """Section 6: an offset that does not reproduce from
+    dsu_meta.azimuth_deg + origin (signed projection onto the axis 90
+    deg clockwise of the folded azimuth) within ~1 ft is refused."""
+    row = _geo_inv("PLANNED 1")  # geometry says -660.0
+    drifted = InventoryRow(**{**row.__dict__, "gunbarrel_offset_ft": -585.0})
+    data = _sweep_data(inv=[drifted, *_sweep_inv()[1:]])
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["offset_reproducibility"]
+    assert "§6 projection" in fails[0].detail
+    with pytest.raises(BlueOxContractError, match="offset_reproducibility"):
+        build_blueox_workbook(data)
+
+    # the U-turn's _b offset is checked against its own leg too
+    uturn = _sweep_inv()[1]
+    drifted_b = InventoryRow(**{**uturn.__dict__, "gunbarrel_offset_b_ft": 735.0})
+    data = _sweep_data(inv=[_sweep_inv()[0], drifted_b, *_sweep_inv()[2:]])
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["offset_reproducibility"]
+    assert "gunbarrel_offset_b_ft" in fails[0].detail
+
+
+def test_sweep_incomplete_frame_warns_only() -> None:
+    """A frame with blank azimuth/origin makes section 6 unverifiable —
+    warn, never fail (absence of evidence is not a detected defect)."""
+    blank = DsuMetaRow(dsu_id="1_4_9/plan_a", azimuth_deg=None, origin_lon=None, origin_lat=None)
+    data = _sweep_data(dsu_meta=(blank,))
+    report = presend_sweep(data)
+    assert not [f for f in report if f.status == "fail"]
+    warns = [f for f in report if f.status == "warn"]
+    assert [f.check for f in warns] == ["offset_reproducibility"]
+    assert "incomplete" in warns[0].detail
+    build_blueox_workbook(data)
+
+
+def test_sweep_all_zero_stream_blocks_build() -> None:
+    """A delivered oil/gas vector that is all-zero is a broken zone, not
+    a curve. All-zero water only warns (optional column)."""
+    z = _zone("WOLFCAMP A", ("4200000001",), levels=())
+    vols = {lv: dict(streams) for lv, streams in z.volumes.items()}
+    vols["P50"] = dict(vols["P50"])
+    vols["P50"]["oil"] = [0.0] * _MONTHS
+    zz = ZoneData(**{**z.__dict__, "volumes": vols})
+    data = _data(zones=[zz], levels=())
+    fails = [f for f in presend_sweep(data) if f.status == "fail"]
+    assert [f.check for f in fails] == ["vector_sanity"]
+    with pytest.raises(BlueOxContractError, match="all-zero"):
+        build_blueox_workbook(data)
+
+    # water all-zero -> warn only
+    vols2 = {lv: dict(streams) for lv, streams in z.volumes.items()}
+    vols2["P50"] = dict(vols2["P50"])
+    vols2["P50"]["water"] = [0.0] * _MONTHS
+    zz2 = ZoneData(**{**z.__dict__, "volumes": vols2})
+    data2 = _data(zones=[zz2], levels=())
+    report = presend_sweep(data2)
+    assert not [f for f in report if f.status == "fail"]
+    assert [f.check for f in report if f.status == "warn"] == ["vector_sanity"]
+    build_blueox_workbook(data2)
+
+
+def test_sweep_magnitude_ceiling_warns_only() -> None:
+    """A per-1,000-ft sheet whose peak month looks pre-multiplied by the
+    lateral trips the loose ceiling as a WARNING — magnitudes are too
+    basin-dependent to hard-fail on."""
+    z = _zone("WOLFCAMP A", ("4200000001",), levels=())
+    vols = {lv: dict(streams) for lv, streams in z.volumes.items()}
+    vols["P50"] = dict(vols["P50"])
+    vols["P50"]["oil"] = [v * 1000.0 for v in vols["P50"]["oil"]]
+    zz = ZoneData(**{**z.__dict__, "volumes": vols})
+    data = _data(zones=[zz], levels=())
+    report = presend_sweep(data)
+    assert not [f for f in report if f.status == "fail"]
+    warns = [f for f in report if f.status == "warn"]
+    assert [f.check for f in warns] == ["vector_sanity"]
+    assert "normalization" in warns[0].detail
+    build_blueox_workbook(data)  # warns never block

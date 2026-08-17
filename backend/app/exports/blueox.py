@@ -35,7 +35,11 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any
+from functools import lru_cache
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from pyproj import Geod, Transformer
 
 from openpyxl import Workbook
 from openpyxl.styles import Font
@@ -574,6 +578,457 @@ def _api_col_index(headers: Sequence[str]) -> int:
     return 0
 
 
+# ======================== pre-send value sweep ========================
+#
+# ``_validate`` above enforces the contract's STRUCTURE (sheets,
+# triplets, monotonicity, tie-outs). The sweep below checks what the
+# NUMBERS look like. Each check encodes the mechanical signature of a
+# defect Blue Ox caught after a send — bro_time's mid-lateral heels
+# (2026-07-29), toucan's zero-spread azimuths (2026-08-03), the §8
+# lat-first coordinate swap — plus the §6 offset-reproducibility
+# invariant and basic zone-vector sanity. Assert-only: the sweep never
+# changes an emitted value, column name, or ordering. Any FAIL blocks
+# the build (same :class:`BlueOxContractError` path); WARNs ride along
+# on the :func:`presend_sweep` report for the human pre-send checklist.
+
+# Cross-repo constants: must match narvi ``src/narvi/records.py``
+# FT_PER_M and ``src/narvi/parcel.py`` WORK_EPSG — the persisted §6
+# offsets are computed there (``placement.gunbarrel_offset_ft`` in the
+# UTM 13N work CRS); reproducing them here requires the same numbers.
+FT_PER_M = 3.280839895
+WORK_EPSG = 32613  # UTM zone 13N — narvi's planar work CRS
+
+# Permian coordinate envelope (generous). Every emitted pair is
+# lon-first (§8); a lat/lon swap puts both values outside these ranges
+# immediately, which is exactly the defect signature this guards.
+PERMIAN_LON_RANGE = (-110.0, -100.0)
+PERMIAN_LAT_RANGE = (30.0, 34.0)
+
+# bro_time signature: a mid-lateral "heel" makes heel->toe ~half the
+# stated lateral. 40% catches the halving with headroom for genuine
+# chord-vs-along-hole differences on curved sticks.
+HEEL_TOE_MISMATCH_FRAC = 0.40
+
+# toucan signature: adopted rows (as-built bearings) in one unit all
+# stamped with a single lateral_azimuth_deg. Real per-well as-built
+# bearings never agree this tightly across a unit. Axial comparison —
+# azimuths fold to [0°, 180°).
+AZIMUTH_SPREAD_MIN_DEG = 0.1
+
+# §6 invariant: every offset reproduces from dsu_meta azimuth + origin.
+# Persisted offsets are rounded to 0.1 ft and lon/lats to ~1e-6 deg;
+# 1 ft covers that rounding while catching any real frame drift.
+OFFSET_REPRO_TOL_FT = 1.0
+
+# Loose per-month magnitude ceilings for a per-1,000-ft-normalized zone
+# sheet (warning-only — far above any physical Permian month, so a trip
+# means the normalization basis itself is suspect, e.g. volumes shipped
+# pre-multiplied by lateral). oil ceiling ≈ 2,000 bbl/d per 1,000 ft
+# for a full month. per_well sheets scale by the 25,000 ft lateral cap.
+_STREAM_MONTH_CEILING_PER_1000FT: dict[str, float] = {
+    "oil": 60_000.0,  # bbl/month per 1,000 ft
+    "gas": 300_000.0,  # Mcf/month per 1,000 ft
+    "water": 100_000.0,  # bbl/month per 1,000 ft
+}
+
+SweepStatus = Literal["pass", "fail", "warn"]
+
+
+@dataclass(frozen=True)
+class SweepFinding:
+    """One line of the pre-send sweep report."""
+
+    check: str
+    status: SweepStatus
+    detail: str
+
+
+@lru_cache(maxsize=1)
+def _geod() -> Geod:
+    # Lazy: pyproj stays out of the import graph until a sweep needs it
+    # (same pattern as well_rows' lazy ramp_arps import).
+    from pyproj import Geod
+
+    return Geod(ellps="WGS84")
+
+
+@lru_cache(maxsize=1)
+def _to_work_crs() -> Transformer:
+    from pyproj import Transformer
+
+    return Transformer.from_crs(4326, WORK_EPSG, always_xy=True)
+
+
+def _geodesic_ft(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    _, _, dist_m = _geod().inv(lon1, lat1, lon2, lat2)
+    return float(dist_m) * FT_PER_M
+
+
+def _axial_delta_deg(a: float, b: float) -> float:
+    """Angular distance between two AXIAL bearings (a lateral has no
+    direction): fold to [0°, 180°), take the shorter way around."""
+    d = abs(a % 180.0 - b % 180.0)
+    return min(d, 180.0 - d)
+
+
+def _axial_spread_deg(vals: Sequence[float]) -> float:
+    """Max pairwise axial distance. Callers guarantee len(vals) >= 2."""
+    return max(_axial_delta_deg(a, b) for a, b in itertools.combinations(vals, 2))
+
+
+def _projected_offset_ft(
+    heel_lon: float,
+    heel_lat: float,
+    toe_lon: float,
+    toe_lat: float,
+    azimuth_deg: float,
+    origin_lon: float,
+    origin_lat: float,
+) -> float:
+    """Reproduce narvi's §6 signed cross-section offset from WGS84 leg
+    endpoints: transform to the work CRS, take the leg midpoint THERE
+    (narvi projects work-CRS midpoints), project onto the axis 90°
+    clockwise of the folded azimuth through the origin. Mirrors narvi
+    ``placement.cross_axis`` / ``placement.gunbarrel_offset_ft``."""
+    tf = _to_work_crs()
+    hx, hy = tf.transform(heel_lon, heel_lat)
+    tx, ty = tf.transform(toe_lon, toe_lat)
+    ox, oy = tf.transform(origin_lon, origin_lat)
+    mx, my = (float(hx) + float(tx)) / 2.0, (float(hy) + float(ty)) / 2.0
+    a = math.radians(azimuth_deg % 180.0)
+    px, py = math.cos(a), -math.sin(a)
+    return ((mx - float(ox)) * px + (my - float(oy)) * py) * FT_PER_M
+
+
+def _labeled_inventory(data: BlueOxExportData) -> list[tuple[str, InventoryRow]]:
+    """(area, row) over every inventory row, unzoned PDP context included."""
+    rows = [(z.zone_name, inv) for z in data.zones for inv in z.inventory]
+    rows.extend(data.pdp_context_rows)
+    return rows
+
+
+def _inv_legs(inv: InventoryRow) -> list[tuple[str, float, float, float, float]]:
+    """("a"|"b", heel_lon, heel_lat, toe_lon, toe_lat) per leg with all
+    four endpoints populated (blank ``_b`` cells on singles are
+    sanctioned; a partially blank leg is simply not checkable)."""
+    legs: list[tuple[str, float, float, float, float]] = []
+    if (
+        inv.heel_a_lon is not None
+        and inv.heel_a_lat is not None
+        and inv.toe_a_lon is not None
+        and inv.toe_a_lat is not None
+    ):
+        legs.append(("a", inv.heel_a_lon, inv.heel_a_lat, inv.toe_a_lon, inv.toe_a_lat))
+    if (
+        inv.heel_b_lon is not None
+        and inv.heel_b_lat is not None
+        and inv.toe_b_lon is not None
+        and inv.toe_b_lat is not None
+    ):
+        legs.append(("b", inv.heel_b_lon, inv.heel_b_lat, inv.toe_b_lon, inv.toe_b_lat))
+    return legs
+
+
+def _header_index(headers: Sequence[str], name: str) -> int | None:
+    for i, h in enumerate(headers):
+        if str(h).casefold() == name:
+            return i
+    return None
+
+
+def _lateral_col_index(headers: Sequence[str]) -> int | None:
+    for i, h in enumerate(headers):
+        if "lateral" in str(h).casefold():
+            return i
+    return None
+
+
+def _num(v: Any) -> float | None:
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    f = float(v)
+    return f if math.isfinite(f) else None
+
+
+def _findings(
+    check: str, n_checked: int, unit: str, fails: list[str], warns: list[str]
+) -> list[SweepFinding]:
+    out: list[SweepFinding] = [SweepFinding(check, "fail", d) for d in fails]
+    out.extend(SweepFinding(check, "warn", d) for d in warns)
+    if not out:
+        out.append(SweepFinding(check, "pass", f"{n_checked} {unit} checked"))
+    return out
+
+
+def _check_heel_toe_lateral(data: BlueOxExportData) -> list[SweepFinding]:
+    """bro_time guard: wherever heel AND toe are populated, the geodesic
+    heel->toe span must be consistent with the stated producing lateral.
+    A 3-vertex stick's mid-lateral "heel" halves the span — flagged at
+    >40% mismatch. U-turn inventory rows sum both legs (each leg is
+    ~half the producing lateral by construction)."""
+    fails: list[str] = []
+    n = 0
+    for area, inv in _labeled_inventory(data):
+        legs = _inv_legs(inv)
+        lat_ft = float(inv.producing_lateral_ft)
+        if not legs or lat_ft <= 0:
+            continue
+        span_ft = sum(_geodesic_ft(hlon, hlat, tlon, tlat) for _leg, hlon, hlat, tlon, tlat in legs)
+        n += 1
+        if abs(span_ft - lat_ft) / lat_ft > HEEL_TOE_MISMATCH_FRAC:
+            fails.append(
+                f"inventory {area}/{inv.well_name or '?'}: heel->toe spans "
+                f"{span_ft:,.0f} ft vs producing_lateral_ft {lat_ft:,.0f} "
+                f"({span_ft / lat_ft:.0%}) — mid-lateral heel signature"
+            )
+    for z in data.zones:
+        h_lon = _header_index(z.analog_headers, "heel_lon")
+        h_lat = _header_index(z.analog_headers, "heel_lat")
+        t_lon = _header_index(z.analog_headers, "toe_lon")
+        t_lat = _header_index(z.analog_headers, "toe_lat")
+        lat_i = _lateral_col_index(z.analog_headers)
+        if h_lon is None or h_lat is None or t_lon is None or t_lat is None or lat_i is None:
+            continue  # no geo block on this sheet (legacy shape) — nothing to check
+        api_i = _api_col_index(z.analog_headers)
+        for row in z.analog_rows:
+            cells = [_num(row[i]) if i < len(row) else None for i in (h_lon, h_lat, t_lon, t_lat)]
+            lat_ft2 = _num(row[lat_i]) if lat_i < len(row) else None
+            if any(c is None for c in cells) or lat_ft2 is None or lat_ft2 <= 0:
+                continue  # blank heel cells (non-4-vertex stick) are sanctioned
+            hlon, hlat, tlon, tlat = (float(c) for c in cells if c is not None)
+            span_ft = _geodesic_ft(hlon, hlat, tlon, tlat)
+            n += 1
+            if abs(span_ft - lat_ft2) / lat_ft2 > HEEL_TOE_MISMATCH_FRAC:
+                fails.append(
+                    f"analog {z.zone_name}/{row[api_i]}: heel->toe spans "
+                    f"{span_ft:,.0f} ft vs lateral {lat_ft2:,.0f} "
+                    f"({span_ft / lat_ft2:.0%}) — mid-lateral heel signature"
+                )
+    return _findings("heel_toe_lateral_consistency", n, "heel/toe rows", fails, [])
+
+
+def _check_azimuth_spread(data: BlueOxExportData) -> list[SweepFinding]:
+    """toucan guard: PDP rows carry each well's OWN as-built bearing —
+    multiple PDPs in a unit sharing one lateral_azimuth_deg (within
+    0.1° axially) means a single value was stamped across the unit.
+    Planned-only units are exempt: generated wells legitimately share
+    the scenario frame azimuth. A unit whose single PDP matches every
+    planned row is only WARNed — the frame azimuth can legitimately
+    derive from a kept existing stick (rule-16 trust order)."""
+    fails: list[str] = []
+    warns: list[str] = []
+    units: dict[str, list[tuple[str, float]]] = {}
+    for _area, inv in _labeled_inventory(data):
+        az = inv.lateral_azimuth_deg
+        if inv.dsu_id is not None and az is not None:
+            units.setdefault(inv.dsu_id, []).append((inv.category, float(az)))
+    n = 0
+    for dsu, rows in sorted(units.items()):
+        vals = [az for _cat, az in rows]
+        pdp_vals = [az for cat, az in rows if cat == "PDP"]
+        if len(vals) < 2:
+            continue
+        n += 1
+        if len(pdp_vals) >= 2 and _axial_spread_deg(pdp_vals) < AZIMUTH_SPREAD_MIN_DEG:
+            fails.append(
+                f"{dsu}: {len(pdp_vals)} PDP rows share one lateral_azimuth_deg "
+                f"(axial spread {_axial_spread_deg(pdp_vals):.3f}° < "
+                f"{AZIMUTH_SPREAD_MIN_DEG}°) — as-built bearings stamped with a "
+                "single value (toucan signature)"
+            )
+        elif len(pdp_vals) == 1 and _axial_spread_deg(vals) < AZIMUTH_SPREAD_MIN_DEG:
+            warns.append(
+                f"{dsu}: the unit's only PDP row carries the same "
+                "lateral_azimuth_deg as every planned row (axial spread < "
+                f"{AZIMUTH_SPREAD_MIN_DEG}°) — verify the PDP bearing is its "
+                "own as-built value, not the frame azimuth"
+            )
+    return _findings("azimuth_spread", n, "multi-row units", fails, warns)
+
+
+def _check_coordinate_order(data: BlueOxExportData) -> list[SweepFinding]:
+    """§8 guard: every emitted pair is lon-first. Permian lon/lat live
+    in disjoint ranges, so a swapped pair fails both bounds at once.
+    Covers inventory heel/toe, dsu_meta origins, and the analog sheets'
+    surface/heel/toe columns."""
+    fails: list[str] = []
+    n = 0
+
+    def probe(label: str, lon: float | None, lat: float | None) -> None:
+        nonlocal n
+        for axis, v, (lo, hi) in (
+            ("lon", lon, PERMIAN_LON_RANGE),
+            ("lat", lat, PERMIAN_LAT_RANGE),
+        ):
+            if v is None:
+                continue
+            n += 1
+            if not lo <= float(v) <= hi:
+                fails.append(
+                    f"{label}: {axis}={float(v):.4f} outside Permian {axis} "
+                    f"range [{lo}, {hi}] — check lon-first ordering (§8)"
+                )
+
+    for area, inv in _labeled_inventory(data):
+        who = f"inventory {area}/{inv.well_name or '?'}"
+        probe(f"{who} heel_a", inv.heel_a_lon, inv.heel_a_lat)
+        probe(f"{who} toe_a", inv.toe_a_lon, inv.toe_a_lat)
+        probe(f"{who} heel_b", inv.heel_b_lon, inv.heel_b_lat)
+        probe(f"{who} toe_b", inv.toe_b_lon, inv.toe_b_lat)
+    for frame in data.dsu_meta:
+        probe(f"dsu_meta {frame.dsu_id} origin", frame.origin_lon, frame.origin_lat)
+    for z in data.zones:
+        api_i = _api_col_index(z.analog_headers)
+        for lon_name, lat_name in (
+            ("surface_lon", "surface_lat"),
+            ("heel_lon", "heel_lat"),
+            ("toe_lon", "toe_lat"),
+        ):
+            lon_i = _header_index(z.analog_headers, lon_name)
+            lat_i = _header_index(z.analog_headers, lat_name)
+            if lon_i is None or lat_i is None:
+                continue
+            for row in z.analog_rows:
+                probe(
+                    f"analog {z.zone_name}/{row[api_i]} {lon_name.removesuffix('_lon')}",
+                    _num(row[lon_i]) if lon_i < len(row) else None,
+                    _num(row[lat_i]) if lat_i < len(row) else None,
+                )
+    return _findings("coordinate_order", n, "coordinates", fails, [])
+
+
+def _check_offset_reproducibility(data: BlueOxExportData) -> list[SweepFinding]:
+    """§6 guard: every gunbarrel_offset_ft (and _b_ft) must reproduce
+    from dsu_meta.azimuth_deg + origin — the signed projection of the
+    leg midpoint onto the axis 90° clockwise of the folded azimuth —
+    to within ~1 ft. This holds for ALL rows including adopted wells
+    whose own bearing differs from the frame (§10: one axis per unit).
+    Offsets that CAN'T be verified (incomplete frame, legacy rows with
+    no leg endpoints) warn rather than fail — absence of evidence, not
+    a detected defect."""
+    fails: list[str] = []
+    warns: list[str] = []
+    frames = {f.dsu_id: f for f in data.dsu_meta}
+    incomplete_frames: set[str] = set()
+    no_endpoints: dict[str, int] = {}
+    n = 0
+    for area, inv in _labeled_inventory(data):
+        if inv.dsu_id is None:
+            continue
+        legs: dict[str, tuple[str, float, float, float, float] | None] = {"a": None, "b": None}
+        for parsed_leg in _inv_legs(inv):
+            legs[parsed_leg[0]] = parsed_leg
+        for col, offset, leg_key in (
+            ("gunbarrel_offset_ft", inv.gunbarrel_offset_ft, "a"),
+            ("gunbarrel_offset_b_ft", inv.gunbarrel_offset_b_ft, "b"),
+        ):
+            if offset is None:
+                continue
+            leg = legs[leg_key]
+            if leg is None:
+                no_endpoints[inv.dsu_id] = no_endpoints.get(inv.dsu_id, 0) + 1
+                continue
+            frame = frames.get(inv.dsu_id)
+            if (
+                frame is None
+                or frame.azimuth_deg is None
+                or frame.origin_lon is None
+                or frame.origin_lat is None
+            ):
+                incomplete_frames.add(inv.dsu_id)
+                continue
+            expected = _projected_offset_ft(
+                leg[1],
+                leg[2],
+                leg[3],
+                leg[4],
+                frame.azimuth_deg,
+                frame.origin_lon,
+                frame.origin_lat,
+            )
+            n += 1
+            if abs(expected - float(offset)) > OFFSET_REPRO_TOL_FT:
+                fails.append(
+                    f"inventory {area}/{inv.well_name or '?'}: {col}="
+                    f"{float(offset):,.1f} ft but the §6 projection from "
+                    f"dsu_meta[{inv.dsu_id}] gives {expected:,.1f} ft "
+                    f"(Δ {abs(expected - float(offset)):,.1f} ft > "
+                    f"{OFFSET_REPRO_TOL_FT} ft)"
+                )
+    for dsu in sorted(incomplete_frames):
+        warns.append(
+            f"{dsu}: dsu_meta frame is incomplete (blank azimuth/origin) — "
+            "its §6 offsets cannot be verified or reproduced downstream"
+        )
+    for dsu, count in sorted(no_endpoints.items()):
+        warns.append(
+            f"{dsu}: {count} offset(s) carried without leg heel/toe endpoints "
+            "(legacy narvi save?) — not independently verifiable"
+        )
+    return _findings("offset_reproducibility", n, "offsets", fails, warns)
+
+
+def _check_vector_sanity(data: BlueOxExportData) -> list[SweepFinding]:
+    """Zone-sheet vector sanity. Negative/non-finite values are already
+    hard build-refusals in ``_validate``; here: (a) an all-zero
+    delivered oil/gas stream is a FAIL (a delivered level must carry
+    volume — ngl's deliberate all-zero is exempt by construction),
+    all-zero water WARNs (optional column — drop it instead); (b) peak
+    monthly magnitudes above the loose normalization ceilings WARN —
+    deliberately far above physical rates so they flag basis mistakes
+    (e.g. pre-multiplied laterals), never real curves."""
+    fails: list[str] = []
+    warns: list[str] = []
+    levels = _delivered_levels(data)
+    n = 0
+    for z in data.zones:
+        scale = 1.0 if z.normalization_basis == "per_1000_lateral_ft" else LATERAL_MAX_FT / 1000.0
+        checks: list[tuple[str, str]] = [(lv, s) for lv in levels for s in ("oil", "gas")]
+        if "water" in z.volumes.get("P50", {}):
+            checks.append(("P50", "water"))
+        for lv, stream in checks:
+            vec = z.volumes.get(lv, {}).get(stream)
+            if vec is None or not vec:
+                continue  # missing levels are _validate's hard failure
+            vals = [float(v) for v in vec]
+            n += 1
+            peak = max(vals)
+            if peak <= 0.0:
+                msg = f"{z.zone_name}: {stream} {lv} is all-zero"
+                if stream == "water":
+                    warns.append(msg + " — water is optional; drop the column instead")
+                else:
+                    fails.append(msg + " — a delivered stream must carry volume")
+                continue
+            ceiling = _STREAM_MONTH_CEILING_PER_1000FT[stream] * scale
+            if peak > ceiling:
+                warns.append(
+                    f"{z.zone_name}: {stream} {lv} peak month {peak:,.0f} exceeds "
+                    f"the loose {z.normalization_basis} ceiling {ceiling:,.0f} — "
+                    "check the normalization basis (pre-multiplied laterals?)"
+                )
+    return _findings("vector_sanity", n, "stream vectors", fails, warns)
+
+
+def presend_sweep(data: BlueOxExportData) -> tuple[SweepFinding, ...]:
+    """Value-level pre-send sweep — the automated half of the
+    blueox-curve-drop skill's §7 checklist.
+
+    Returns the full structured report (every check contributes at
+    least one finding; "pass" findings carry the count of rows
+    actually inspected, so an accidentally-empty check is visible).
+    :func:`build_blueox_workbook` runs this after ``_validate`` and
+    refuses the build on any "fail"; "warn" findings are surfaced to
+    callers via this function for the human sweep."""
+    out: list[SweepFinding] = []
+    out.extend(_check_heel_toe_lateral(data))
+    out.extend(_check_azimuth_spread(data))
+    out.extend(_check_coordinate_order(data))
+    out.extend(_check_offset_reproducibility(data))
+    out.extend(_check_vector_sanity(data))
+    return tuple(out)
+
+
 # ============================ sheet writers ============================
 
 
@@ -978,9 +1433,18 @@ def build_blueox_workbook(data: BlueOxExportData) -> bytes:
 
     Raises :class:`BlueOxContractError` (with every violation listed)
     rather than emitting a workbook that would bounce off the Blue Ox
-    acceptance gate.
+    acceptance gate. After the structural contract checks, the value-
+    level pre-send sweep runs (:func:`presend_sweep`); any "fail"
+    finding also blocks the build — the sweep's "warn" findings do
+    not, but callers should surface them for the human checklist.
     """
     _validate(data)
+    sweep_failures = [f for f in presend_sweep(data) if f.status == "fail"]
+    if sweep_failures:
+        raise BlueOxContractError(
+            "Blue Ox pre-send sweep failures:\n- "
+            + "\n- ".join(f"[{f.check}] {f.detail}" for f in sweep_failures)
+        )
 
     wb = Workbook()
     wb.remove(wb.active)
