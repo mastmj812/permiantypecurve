@@ -94,9 +94,12 @@ _FETCH_ONE_SQL = text(
         we.is_horizontal,
         we.directional_survey_is_planned,
         we.eur_50yr_oil_bbl                  AS novi_oil_eur,
-        we.lateral_closer_xy_ft
+        we.lateral_closer_xy_ft,
+        wdq.water_source,
+        wdq.wor_cv
     FROM curated.wells_enriched we
     LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
+    LEFT JOIN curated.water_data_quality wdq ON wdq.api10 = we.api10
     WHERE we.api10 = :api10
     """
 )
@@ -138,6 +141,8 @@ def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
         directional_survey_is_planned=row["directional_survey_is_planned"],
         novi_oil_eur=_to_float(row["novi_oil_eur"]),
         lateral_closer_xy_ft=_to_float(row["lateral_closer_xy_ft"]),
+        water_source=row["water_source"],
+        wor_cv=_to_float(row["wor_cv"]),
     )
 
 
@@ -160,7 +165,8 @@ def fetch_well_by_api10(session: Session, api10: str) -> WellHeader | None:
 # Column block reused by the bulk fetcher. Kept as a module-level constant
 # so the single-well and bulk paths can't drift from each other. Columns are
 # `we.`-qualified — the FROM clause joins curated.enverus_lateral_lines for
-# the same three-tier wellstick COALESCE as _FETCH_ONE_SQL.
+# the same three-tier wellstick COALESCE as _FETCH_ONE_SQL, plus
+# curated.water_data_quality for the water-provenance flag.
 _HEADER_COLUMNS_SQL = f"""
     we.api10,
     we.api14_unformatted                 AS api14,
@@ -188,7 +194,9 @@ _HEADER_COLUMNS_SQL = f"""
     we.is_horizontal,
     we.directional_survey_is_planned,
     we.eur_50yr_oil_bbl                  AS novi_oil_eur,
-    we.lateral_closer_xy_ft
+    we.lateral_closer_xy_ft,
+    wdq.water_source,
+    wdq.wor_cv
 """
 
 
@@ -245,6 +253,7 @@ def fetch_well_headers(
 {_HEADER_COLUMNS_SQL}
         FROM curated.wells_enriched we
         LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
+        LEFT JOIN curated.water_data_quality wdq ON wdq.api10 = we.api10
         WHERE {" AND ".join(where_clauses)}
         ORDER BY we.api10
         """
