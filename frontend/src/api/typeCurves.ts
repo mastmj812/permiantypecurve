@@ -316,6 +316,10 @@ export interface WorkspaceWell {
   well_lateral_ft: number | null;
   well_first_prod_date: string | null;
   well_county: string | null;
+  // Water-stream provenance flag (wells.water_source). FLAG ONLY —
+  // drives the water badge + workspace composition line.
+  well_water_source: string | null;
+  well_wor_cv: number | null;
   oil: WorkspaceStreamForecast;
   gas: WorkspaceStreamForecast;
   water: WorkspaceStreamForecast;

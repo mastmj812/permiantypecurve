@@ -18,6 +18,7 @@ import {
   type ProvenanceDraft,
   type ReasonCode,
   type SelectionSummary,
+  type WaterSourceClass,
   type WellStatus,
 } from "../api/types";
 
@@ -151,6 +152,9 @@ export interface MapState {
   setSpacingIncludeNoData: (v: boolean) => void;
   setWellNameContains: (v: string | null) => void;
   setApi10s: (api10s: string[]) => void;
+  // Water-provenance classes to admit ([] = all — the flag-only
+  // default). See FilterSpec.water_sources.
+  setWaterSources: (water_sources: WaterSourceClass[]) => void;
   resetFilters: () => void;
 
   // ---- selection ----
@@ -319,6 +323,8 @@ export const useMapStore = create<MapState>((set) => ({
     })),
   setApi10s: (api10s) =>
     set((s) => ({ filters: { ...s.filters, api10s } })),
+  setWaterSources: (water_sources) =>
+    set((s) => ({ filters: { ...s.filters, water_sources } })),
   resetFilters: () => set({ filters: DEFAULT_FILTER_SPEC }),
 
   selectedApi10s: new Set<string>(),

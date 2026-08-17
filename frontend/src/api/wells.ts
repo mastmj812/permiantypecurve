@@ -38,6 +38,11 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   // tile URL risks getting rejected; the FilterPanel input warns at
   // 500 to keep users out of that zone.
   if (spec.api10s.length) params.set("api10s", spec.api10s.join(","));
+  // Empty = all classes (flag-only default) — nothing on the wire, so
+  // the unfiltered tile URL and its ETag are unchanged.
+  if (spec.water_sources.length) {
+    params.set("water_sources", spec.water_sources.join(","));
+  }
   return params.toString();
 }
 
@@ -117,6 +122,9 @@ export interface WellDetailLite {
   vintage_year: number | null;
   county: string | null;
   novi_oil_eur: number | null;
+  // Water-provenance flag (wells.water_source) — lets the Review tab's
+  // stub rows badge the water stream like forecast-joined rows do.
+  water_source: string | null;
 }
 
 export async function fetchWellDetails(api10s: string[]): Promise<WellDetailLite[]> {
@@ -149,6 +157,41 @@ export async function fetchContextWells(
   });
   if (!r.ok) throw new Error(`context wells fetch failed: ${r.status}`);
   return (await r.json()) as WellDetailLite[];
+}
+
+// Water-provenance composition over a cohort — "how much of the water
+// fit rests on calculated data". Mirrors backend WaterSourceComposition
+// (wells_api/detail.py). Keys sum to total; no_data covers NULLs and
+// api10s missing from the wells table.
+export interface WaterSourceComposition {
+  measured: number;
+  calculated: number;
+  indeterminate: number;
+  insufficient: number;
+  no_data: number;
+  total: number;
+}
+
+export async function fetchWaterSourceComposition(
+  api10s: string[],
+): Promise<WaterSourceComposition> {
+  if (api10s.length === 0) {
+    return {
+      measured: 0,
+      calculated: 0,
+      indeterminate: 0,
+      insufficient: 0,
+      no_data: 0,
+      total: 0,
+    };
+  }
+  const r = await apiFetch("/api/wells/water-sources", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ api10s }),
+  });
+  if (!r.ok) throw new Error(`water-source composition failed: ${r.status}`);
+  return (await r.json()) as WaterSourceComposition;
 }
 
 export async function fetchFacets(spec?: FilterSpec): Promise<FilterFacets> {

@@ -119,6 +119,8 @@ body {
   margin-left: 4px;
 }
 .badge-warn { background: #fef3c7; color: #92400e; }
+/* Positive/trustworthy: a measured (non-fabricated) water stream. */
+.badge-ok { background: #dcfce7; color: #166534; }
 .badge-err { background: #fee2e2; color: #991b1b; }
 .badge-info { background: #dbeafe; color: #1e40af; }
 /* Informational-but-quiet: a stream the fitter skipped (no peak). */

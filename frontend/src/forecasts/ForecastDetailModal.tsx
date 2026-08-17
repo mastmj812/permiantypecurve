@@ -17,6 +17,7 @@ import {
   deleteForecastOverride,
   putForecastOverride,
 } from "../api/typeCurves";
+import { WaterSourceBadge } from "../components/WaterSourceBadge";
 import { DeclineChart, type SeriesPoint } from "./DeclineChart";
 import { runRevert } from "./revert";
 
@@ -604,6 +605,17 @@ export function ForecastDetailModal({
                   {s}
                 </button>
               ))}
+              {/* Water-provenance flag: only meaningful while the water
+                  stream is up. "calculated" = the vendor series is a
+                  static WOR x oil formula, so this fit tracks a
+                  fabricated stream. Flag only — nothing is excluded. */}
+              {stream === "water" && (
+                <WaterSourceBadge
+                  source={forecasts[0]?.well_water_source ?? null}
+                  worCv={forecasts[0]?.well_wor_cv ?? null}
+                  showNoData
+                />
+              )}
             </div>
             <div className="toolbar-group">
               {/* Affects the LINEAR rate chart only — log + cum charts
