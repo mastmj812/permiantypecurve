@@ -80,7 +80,10 @@ export function scaleRates(
 function scaleFit(fit: FittedTypeCurve, mul: number): FittedTypeCurve {
   return {
     ...fit,
-    qi: fit.qi * mul,
+    // Ratio-mode fitted blocks carry no qi (Arps fields absent at
+    // runtime) — skip it rather than stamp NaN. Mirrors the backend's
+    // _scale_fit, which scales only the keys that exist.
+    ...(Number.isFinite(fit.qi) ? { qi: fit.qi * mul } : {}),
     eur_per_unit: fit.eur_per_unit * mul,
     smoothed_rate: fit.smoothed_rate?.map((v) => v * mul) ?? fit.smoothed_rate,
     ...(fit.qo != null ? { qo: fit.qo * mul } : {}),

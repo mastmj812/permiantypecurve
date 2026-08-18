@@ -9,6 +9,7 @@ import {
   type AlignmentMethod,
   type FitOverride,
   type RiskMultipliers,
+  type StreamMode,
   type StreamSeries,
   type TypeCurveRow,
   type TypeCurveSummary,
@@ -53,6 +54,28 @@ const STREAM_UNITS: Record<Stream, { rate: string; cum: string }> = {
   gas: { rate: "MCFD / 1000 ft", cum: "MCF / 1000 ft" },
   water: { rate: "BWPD / 1000 ft", cum: "BBL / 1000 ft" },
 };
+
+// Per-stream forecast modes for the published fitted curve (gas/water
+// only — oil is always independent Arps). Recovered from an agg payload
+// so a loaded curve's toggles reflect how its series was actually built.
+type StreamModes = Record<"gas" | "water", StreamMode>;
+
+function modesFromAgg(agg: AggregatePayload | null | undefined): StreamModes {
+  return {
+    gas: agg?.streams?.gas?.fitted?.mode === "ratio" ? "ratio" : "arps",
+    water: agg?.streams?.water?.fitted?.mode === "ratio" ? "ratio" : "arps",
+  };
+}
+
+// Only the ratio entries go over the wire (arps is the server default).
+function ratioModesForRequest(
+  modes: StreamModes,
+): Partial<Record<"gas" | "water", StreamMode>> | null {
+  const out: Partial<Record<"gas" | "water", StreamMode>> = {};
+  if (modes.gas === "ratio") out.gas = "ratio";
+  if (modes.water === "ratio") out.water = "ratio";
+  return Object.keys(out).length > 0 ? out : null;
+}
 
 const PERCENTILES: Array<{ key: string; label: string }> = [
   { key: "p10", label: "P10" },
@@ -135,6 +158,14 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   // first mount when there's a persisted result.
   const [alignment, setAlignment] = useState<AlignmentMethod>(
     persistedAgg?.alignment_method ?? "peak_ramp",
+  );
+  // Per-stream forecast mode for the NEXT aggregation / save. Seeded
+  // from the persisted agg so nav-return reflects what's on screen;
+  // hydrated from a loaded curve's series on load (load-as-reset).
+  // Toggling recomputes immediately (see onStreamModeChange) so the
+  // charts always show the mode the toggle claims.
+  const [streamModes, setStreamModes] = useState<StreamModes>(
+    modesFromAgg(persistedAgg),
   );
   const [saveName, setSaveName] = useState("");
   const [saveNotes, setSaveNotes] = useState("");
@@ -338,7 +369,11 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     setComputing(true);
     setSelectedSaved(null);
     clearTweakState();
-    computeTypeCurve({ api10s: included, alignment_method: alignment })
+    computeTypeCurve({
+      api10s: included,
+      alignment_method: alignment,
+      stream_modes: ratioModesForRequest(streamModes),
+    })
       .then(setAgg)
       .catch((e) => {
         console.error("compute failed", e);
@@ -360,15 +395,52 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
 
   // Gather per-stream overrides where the user has clicked Preview at
   // least once (so we don't persist tweak inputs the user never confirmed).
+  // Ratio-mode streams never carry an Arps override — the server would
+  // refuse the save (an Arps override on a ratio stream would silently
+  // convert it), and the TweakPanel is disabled for them anyway.
   function collectOverrides(): Record<string, FitOverride> | null {
     const out: Record<string, FitOverride> = {};
     for (const s of ["oil", "gas", "water"] as Stream[]) {
+      if (s !== "oil" && streamModes[s] === "ratio") continue;
       const v = editValues[s];
       if (v && previewSmoothed[s]) {
         out[s] = v;
       }
     }
     return Object.keys(out).length > 0 ? out : null;
+  }
+
+  // Per-stream mode toggle (gas/water). Recomputes the aggregation
+  // immediately so the published fitted curve on screen always matches
+  // the toggle — never a stale-mode chart under a fresh-mode label.
+  // Save/version then sends the same modes, so what you see is what
+  // persists. Never auto-selected: this control is the engineer's
+  // explicit choice (flag-only philosophy).
+  function onStreamModeChange(s: "gas" | "water", mode: StreamMode) {
+    if (streamModes[s] === mode) return;
+    const nextModes: StreamModes = { ...streamModes, [s]: mode };
+    setStreamModes(nextModes);
+    // Drop any in-flight tweak preview for the stream — its fitted
+    // block is about to change shape.
+    setEditValues((prev) => ({ ...prev, [s]: null }));
+    setPreviewSmoothed((prev) => ({ ...prev, [s]: null }));
+    setPreviewFullSmoothed((prev) => ({ ...prev, [s]: null }));
+    setPreviewEur((prev) => ({ ...prev, [s]: null }));
+    setTweakError(null);
+    const wells = selectedSaved ? selectedSaved.included_api10s : included;
+    if (!agg || wells.length === 0) return;
+    setComputing(true);
+    computeTypeCurve({
+      api10s: wells,
+      alignment_method: selectedSaved ? versionAlignment : alignment,
+      stream_modes: ratioModesForRequest(nextModes),
+    })
+      .then(setAgg)
+      .catch((e) => {
+        console.error("stream-mode recompute failed", e);
+        setTweakError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => setComputing(false));
   }
 
   async function onSave() {
@@ -405,6 +477,10 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
         alignment_method: selectedSaved ? versionAlignment : alignment,
         version_of: parent,
         fit_overrides: collectOverrides(),
+        // What's on screen is what persists: the same per-stream modes
+        // the last compute ran with. (A version save could also inherit
+        // server-side, but sending explicitly keeps preview === saved.)
+        stream_modes: ratioModesForRequest(streamModes),
         take_over_deal:
           !!selectedSaved && selectedSaved.deal_id != null && takeOverDeal,
         provenance: draft
@@ -444,7 +520,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   async function onTweakPreview() {
     // Drafts seed from the CLEAN fit — the tweak panel edits the
     // pre-risking curve (the preview line is re-risked for display).
-    if (!cleanStream?.fitted || !agg) return;
+    // Ratio-mode fitted blocks have no Arps params to seed from — the
+    // panel is disabled for them (see the render site).
+    if (!cleanStream?.fitted || cleanStream.fitted.mode === "ratio" || !agg) return;
     setTweakError(null);
     const draft = editValues[stream] ?? {
       qi: cleanStream.fitted.qi,
@@ -484,7 +562,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
   }
 
   function setTweakField(key: keyof FitOverride, value: number) {
-    if (!cleanStream?.fitted) return;
+    if (!cleanStream?.fitted || cleanStream.fitted.mode === "ratio") return;
     setEditValues((prev) => {
       const base: FitOverride = prev[stream] ?? {
         qi: cleanStream.fitted!.qi,
@@ -503,6 +581,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     setSelectedSaved(row);
     setAgg(row.series);
     setAlignment(row.alignment_method);
+    // Load-as-reset: the toggles reflect how THIS curve's series was
+    // built (a ratio-mode stream loads as ratio; everything else arps).
+    setStreamModes(modesFromAgg(row.series));
     setEditedNotes(row.notes ?? "");
     setUpdateError(null);
     // Hydrate the workspace scope from the loaded curve so a
@@ -572,6 +653,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
     computeTypeCurve({
       api10s: selectedSaved.included_api10s,
       alignment_method: next,
+      stream_modes: ratioModesForRequest(streamModes),
     })
       .then((p) => {
         if (seq === alignPreviewSeq.current) setAgg(p);
@@ -848,6 +930,32 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
               </button>
             ))}
           </div>
+          {/* Per-stream forecast-mode toggle (gas/water only — oil is
+              always independent Arps). Toggling recomputes so the
+              chart's published fit always matches the label. */}
+          {stream !== "oil" && (
+            <div className="toolbar-group">
+              <span className="toolbar-label">Mode:</span>
+              <button
+                type="button"
+                className={`tb-btn ${streamModes[stream] === "arps" ? "tb-active" : ""}`}
+                disabled={computing}
+                onClick={() => onStreamModeChange(stream, "arps")}
+                title="Independent Arps fit on this stream's own aggregated series"
+              >
+                Arps
+              </button>
+              <button
+                type="button"
+                className={`tb-btn ${streamModes[stream] === "ratio" ? "tb-active" : ""}`}
+                disabled={computing}
+                onClick={() => onStreamModeChange(stream, "ratio")}
+                title="Publish this stream as a fitted ratio of cumulative oil x the TC oil stream (fit on the cohort mean series). Not exportable to the Blue Ox drop until the contract carries ratio params."
+              >
+                ratio vs cum oil
+              </button>
+            </div>
+          )}
           {/* Cohort water-provenance mix, shown while the water stream
               is up — how much of this curve's water fit rests on
               vendor-calculated (static WOR x oil) data. Flag only —
@@ -1012,25 +1120,29 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   </tr>
                 </tbody>
               </table>
-              {cleanStream?.fitted && (
-                <>
-                  {streamMul !== 1.0 && (
-                    <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
-                      tweak panel edits the pre-risking fit — the preview
-                      line and EUR above already include ×{streamMul.toFixed(2)}
-                    </p>
-                  )}
-                  <TweakPanel
-                    stream={stream}
-                    fitted={cleanStream.fitted}
-                    draft={editValues[stream]}
-                    hasPreview={!!previewSmoothed[stream]}
-                    error={tweakError}
-                    onChange={setTweakField}
-                    onPreview={() => void onTweakPreview()}
-                    onReset={onTweakReset}
-                  />
-                </>
+              {cleanStream?.fitted && cleanStream.fitted.mode === "ratio" ? (
+                <RatioModePanel fitted={cleanStream.fitted} stream={stream} />
+              ) : (
+                cleanStream?.fitted && (
+                  <>
+                    {streamMul !== 1.0 && (
+                      <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+                        tweak panel edits the pre-risking fit — the preview
+                        line and EUR above already include ×{streamMul.toFixed(2)}
+                      </p>
+                    )}
+                    <TweakPanel
+                      stream={stream}
+                      fitted={cleanStream.fitted}
+                      draft={editValues[stream]}
+                      hasPreview={!!previewSmoothed[stream]}
+                      error={tweakError}
+                      onChange={setTweakField}
+                      onPreview={() => void onTweakPreview()}
+                      onReset={onTweakReset}
+                    />
+                  </>
+                )
               )}
             </section>
 
@@ -1887,7 +1999,12 @@ function fullForecastSeries(stream: StreamSeries): StreamSeries {
     // ribbon stays empty rather than projecting a stale count forward.
     well_count: Array<number>(N).fill(0),
     fitted: stream.fitted
-      ? { ...stream.fitted, smoothed_rate: buildRampArpsRate(stream.fitted, N) }
+      ? stream.fitted.mode === "ratio"
+        ? // Ratio-mode published fit: smoothed_rate is ALREADY the full
+          // 600-month derived grid (ratio x TC oil) — re-evaluating via
+          // Arps params would read absent qi/Di/b and draw garbage.
+          stream.fitted
+        : { ...stream.fitted, smoothed_rate: buildRampArpsRate(stream.fitted, N) }
       : null,
   };
 }
@@ -1958,6 +2075,81 @@ interface TweakPanelProps {
   onChange: (key: keyof FitOverride, value: number) => void;
   onPreview: () => void;
   onReset: () => void;
+}
+
+// Replaces the Arps TweakPanel for a ratio-mode stream: there are no
+// Arps sliders (no qi/Di/b of its own), so show the ratio-fit
+// diagnostics instead — β sign, ln-fit R², implied EUR, and an
+// effective year-1 decline computed FROM THE DERIVED SERIES so the
+// engineer still sees a decline number.
+function RatioModePanel({
+  fitted,
+  stream,
+}: {
+  fitted: NonNullable<AggregatePayload["streams"]["oil"]["fitted"]>;
+  stream: Stream;
+}) {
+  const ratioAt0 =
+    typeof fitted.alpha === "number" ? Math.exp(fitted.alpha) : null;
+  const beta = typeof fitted.beta === "number" ? fitted.beta : null;
+  const ratioUnit = stream === "gas" ? "MCF/BBL" : "BBL/BBL";
+  const betaLabel =
+    beta == null
+      ? "—"
+      : beta === 0
+        ? "0 (constant ratio)"
+        : `${beta > 0 ? "+" : "−"}${Math.abs(beta).toExponential(2)} per BBL/1000ft cum oil (${beta > 0 ? "rising" : "falling"})`;
+  const effYr1 = fitted.implied_effective_decline_yr1;
+  return (
+    <div className="fitted-params tweak-panel">
+      <div className="tweak-header">
+        <strong>Fit ({stream}):</strong>
+        <span className="badge badge-warn" title="Ratio-mode stream — no Arps params">
+          ratio vs cum oil
+        </span>
+      </div>
+      <p className="muted" style={{ margin: "4px 0 6px", fontSize: 12 }}>
+        Arps sliders are disabled — this stream is published as a fitted
+        ratio of cumulative oil × the TC oil stream.
+      </p>
+      <div className="tweak-grid">
+        <RatioStat
+          label="sub-mode"
+          value={
+            fitted.sub_mode === "constant"
+              ? "constant (gate failed)"
+              : "ln-ratio vs cum oil"
+          }
+        />
+        <RatioStat
+          label="ratio @ Np=0"
+          value={ratioAt0 != null ? `${ratioAt0.toFixed(3)} ${ratioUnit}` : "—"}
+        />
+        <RatioStat label="β" value={betaLabel} />
+        <RatioStat
+          label="ratio-fit R²"
+          value={fitted.r2 != null ? fitted.r2.toFixed(3) : "—"}
+        />
+        <RatioStat
+          label="months in fit"
+          value={fitted.n_months != null ? String(fitted.n_months) : "—"}
+        />
+        <RatioStat
+          label="eff. yr-1 decline (derived)"
+          value={effYr1 != null ? `${(effYr1 * 100).toFixed(1)}%` : "—"}
+        />
+      </div>
+    </div>
+  );
+}
+
+function RatioStat({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="tweak-input" title={label}>
+      <span className="tweak-label">{label}</span>
+      <span className="muted">{value}</span>
+    </span>
+  );
 }
 
 // Pre-save build-up status — makes AOI capture visible BEFORE the save,

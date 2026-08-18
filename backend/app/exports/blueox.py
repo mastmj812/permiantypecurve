@@ -330,6 +330,28 @@ def monthly_volumes_from_rates(
 
 # ============================ validation ============================
 
+# Ratio-mode refusal (hard, by design): the drop contract's curve_params
+# sheet declares Arps params (qi/b/di/dmin) per stream — a ratio-mode
+# stream (fitted ratio of cumulative oil; see app.forecasting.ratio) has
+# none, and emitting placeholder Arps rows would misdeclare the curve.
+# Do NOT relax this or touch the contract/ledger to accommodate it.
+RATIO_REFUSAL_NOTE = (
+    "ratio-mode streams are not yet in the drop contract — refit the "
+    "stream as Arps or await a contract amendment"
+)
+
+
+def ratio_mode_streams(series: Mapping[str, Any] | None) -> list[str]:
+    """Streams whose PUBLISHED fitted block is ratio-mode in a saved
+    type-curve ``series`` JSONB. Pure + import-light so the zone
+    collector, the dossier builder, and tests share one rule."""
+    streams = (series or {}).get("streams") or {}
+    return [
+        s
+        for s in ("oil", "gas", "water")
+        if ((streams.get(s) or {}).get("fitted") or {}).get("mode") == "ratio"
+    ]
+
 
 def _validate_zone_name(name: str) -> str | None:
     """Return an error string if ``name`` breaks Principle 2, else None."""

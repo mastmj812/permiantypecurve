@@ -57,6 +57,12 @@ from app.type_curves.loader import (
     load_well_series,
     load_wells_with_forecast,
 )
+from app.type_curves.ratio_mode import (
+    build_ratio_fitted,
+    ratio_override_conflicts,
+    stream_modes_from_series,
+    validate_stream_modes,
+)
 from app.type_curves.reason_codes import validate_code
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.type_curves.universe import compute_universe, polygon_area_sq_mi
@@ -85,6 +91,12 @@ class ComputeRequest(BaseModel):
     # governs programmatic callers that omit it.
     alignment_method: str = "peak_ramp"
     n_months: int | None = Field(default=None, ge=1, le=240)
+    # Per-stream forecast mode for the PUBLISHED fitted curve. Keys:
+    # gas/water only (oil is always an independent Arps fit); values
+    # 'arps' (default) | 'ratio' (stream = fitted ratio of cumulative
+    # oil x the TC oil stream — see app.type_curves.ratio_mode). Never
+    # inferred from data: the engineer chooses, the UI sends it.
+    stream_modes: dict[str, str] | None = None
 
 
 class ComputeResponse(BaseModel):
@@ -209,6 +221,11 @@ class SaveRequest(BaseModel):
     # "inherit the parent's provenance" (old-workflow version saves);
     # None on plain create stores {} (provenance not recorded).
     provenance: ProvenanceIn | None = None
+    # Per-stream forecast mode (see ComputeRequest.stream_modes). On the
+    # versions endpoint, None means "inherit the parent's modes from its
+    # saved series" — a version-save must never silently convert a
+    # ratio-mode stream back to Arps.
+    stream_modes: dict[str, str] | None = None
 
 
 class BuildupPreviewRequest(BaseModel):
@@ -593,6 +610,7 @@ def _compute(
     alignment: str,
     n_months: int | None,
     tc: TypeCurve | None = None,
+    stream_modes: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the persisted ``series`` JSONB.
 
@@ -696,6 +714,38 @@ def _compute(
     agg = replace(agg, streams=fitted_streams)
     payload = serialize_aggregate(agg)
 
+    # --- ratio-mode streams (engineer-selected, gas/water only) ---
+    # The PUBLISHED fitted block for a ratio-mode stream is replaced
+    # with the ratio-vs-cum-oil fit on the cohort's aggregated MEAN
+    # series, forecast = ratio x the TC oil fitted stream. Bands /
+    # percentiles / n_wells semantics are untouched (the aggregation
+    # itself is unchanged); fitted_per_percentile keeps the independent
+    # Arps fits as diagnostics.
+    for stream_name, mode in (stream_modes or {}).items():
+        if mode != "ratio":
+            continue
+        oil_fitted = fitted_streams["oil"].fitted
+        if not oil_fitted:
+            raise HTTPException(
+                status_code=422,
+                detail=f"ratio-mode {stream_name} needs a fitted oil stream — none available",
+            )
+        fitted_ratio = build_ratio_fitted(
+            mean_oil=fitted_streams["oil"].mean,
+            mean_stream=fitted_streams[stream_name].mean,
+            oil_fitted=oil_fitted,
+            n_months=_FORECAST_N_MONTHS,
+        )
+        if fitted_ratio is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"ratio-mode {stream_name}: no valid post-oil-peak months with oil > 0 "
+                    f"and {stream_name} > 0 in the cohort mean series — nothing to fit"
+                ),
+            )
+        payload["streams"][stream_name]["fitted"] = fitted_ratio
+
     # --- empirical observed-only aggregation ---
     observed_wells = load_well_series(
         session, api10s, alignment=validated_alignment, ramp_anchors=anchors
@@ -768,6 +818,43 @@ def _empty_tc_for_resolver() -> TypeCurve:
     return tc
 
 
+def _stream_modes_or_400(modes: dict[str, str] | None) -> dict[str, str]:
+    """Validate a request's stream_modes map (gas/water only, arps|ratio)
+    into the canonical ratio-only dict, surfacing violations as 400s."""
+    try:
+        return validate_stream_modes(modes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _reject_overrides_on_ratio(
+    series_or_modes: dict[str, Any] | None,
+    fit_overrides: dict[str, Any] | None,
+    *,
+    modes: dict[str, str] | None = None,
+) -> None:
+    """400 when an Arps fit-override targets a ratio-mode stream.
+
+    Applying qi/Di/b/Df over a ratio-mode stream would silently convert
+    it to Arps — the override-loss posture says refuse loudly instead.
+    ``modes`` (request-level) wins over the stored series when given.
+    """
+    if not fit_overrides:
+        return
+    if modes is not None:
+        conflicts = sorted(s for s in fit_overrides if modes.get(s) == "ratio")
+    else:
+        conflicts = ratio_override_conflicts(series_or_modes, fit_overrides)
+    if conflicts:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"stream(s) {', '.join(conflicts)} are ratio-mode — an Arps fit override "
+                "does not apply; rebuild the stream as Arps first"
+            ),
+        )
+
+
 # ============================ compute (preview) ============================
 
 
@@ -781,6 +868,7 @@ def compute_type_curve(
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
+        stream_modes=_stream_modes_or_400(req.stream_modes),
     )
     return ComputeResponse(**payload)
 
@@ -1004,12 +1092,15 @@ def _persist(
 
 @router.post("", response_model=TypeCurveRow, status_code=201)
 def save_type_curve(req: SaveRequest, session: Session = Depends(get_session)) -> TypeCurveRow:
+    modes = _stream_modes_or_400(req.stream_modes)
+    _reject_overrides_on_ratio(None, req.fit_overrides, modes=modes)
     payload = _compute(
         session,
         req.included_api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
+        stream_modes=modes,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     provenance = _build_provenance(session, req)
@@ -1034,6 +1125,15 @@ def save_as_new_version(
     parent = session.get(TypeCurve, type_curve_id)
     if parent is None:
         raise HTTPException(status_code=404, detail="parent type curve not found")
+    # Per-stream modes ride the lineage: an explicit request wins, and a
+    # None inherits the PARENT's modes from its saved series — a
+    # version-save must never silently convert a ratio-mode stream back
+    # to Arps (same no-silent-loss posture as forecast_overrides below).
+    if req.stream_modes is not None:
+        modes = _stream_modes_or_400(req.stream_modes)
+    else:
+        modes = stream_modes_from_series(parent.series)
+    _reject_overrides_on_ratio(None, req.fit_overrides, modes=modes)
     # tc=parent so the bands resolve override -> global exactly like
     # re-aggregating the parent. Without it the version's series silently
     # reverts every per-well engineering edit to the global fits.
@@ -1044,6 +1144,7 @@ def save_as_new_version(
         alignment=req.alignment_method,
         n_months=req.n_months,
         tc=parent,
+        stream_modes=modes,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     # Provenance on versions: fresh inputs win; a None (old-workflow
@@ -1147,6 +1248,10 @@ def patch_type_curve(
     if req.notes is not None:
         row.notes = req.notes
     if req.fit_overrides:
+        # An Arps override on a ratio-mode stream would silently convert
+        # it — refuse (the TweakPanel is disabled for ratio streams; this
+        # guards direct API callers).
+        _reject_overrides_on_ratio(row.series, req.fit_overrides)
         # JSONB mutation gotcha: `dict(row.series or {})` is a SHALLOW
         # copy — its nested `streams` dict is shared with row.series.
         # _apply_fit_overrides mutates the per-stream `fitted` dict, so
@@ -2067,6 +2172,9 @@ def reaggregate_type_curve(
         alignment=tc.alignment_method.value,
         n_months=n_months,
         tc=tc,
+        # Preserve the saved series' per-stream modes — reaggregation
+        # must never silently convert a ratio-mode stream back to Arps.
+        stream_modes=stream_modes_from_series(tc.series),
     )
     tc.series = payload
     tc.is_stale = False
@@ -2088,6 +2196,22 @@ def export_type_curve(
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
+
+    # The CSV zip's forecast/metadata blocks declare Arps params per
+    # stream (economics-model handoff). A ratio-mode stream has none,
+    # and the per-percentile Arps diagnostics would silently diverge
+    # from the published ratio curve — refuse, same posture as the Blue
+    # Ox drop / dossier (in-app use stays unrestricted).
+    from app.exports.blueox import RATIO_REFUSAL_NOTE, ratio_mode_streams
+
+    ratio_streams = ratio_mode_streams(tc.series)
+    if ratio_streams:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"stream(s) {', '.join(ratio_streams)} are ratio-mode — {RATIO_REFUSAL_NOTE}"
+            ),
+        )
 
     buf = io.BytesIO()
     # Export boundary: geologic risking applies here (stored series is
