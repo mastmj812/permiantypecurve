@@ -28,6 +28,7 @@ from pptx.util import Inches, Pt
 from sqlalchemy.orm import Session
 
 from app.db.models import TypeCurve
+from app.exports.blueox import RATIO_REFUSAL_NOTE, ratio_mode_streams
 from app.exports.pptx_builder import (
     _STREAM_TITLE,
     TEMPLATE_PATH,
@@ -129,6 +130,15 @@ def build_deal_dossier_pptx(
         tc = session.get(TypeCurve, cv.type_curve_id)
         if tc is None:
             raise ValueError(f"type curve {cv.type_curve_id} not found")
+        # The dossier's param table declares Arps params per stream — a
+        # ratio-mode stream has none. HARD refusal, same posture as the
+        # Blue Ox drop builder (in-app use stays unrestricted).
+        ratio_streams = ratio_mode_streams(tc.series)
+        if ratio_streams:
+            raise ValueError(
+                f"curve {tc.name}: stream(s) {', '.join(ratio_streams)} are "
+                f"ratio-mode — {RATIO_REFUSAL_NOTE}"
+            )
         for stream in streams:
             if stream not in cv.stream_pngs:
                 raise ValueError(f"curve {tc.name}: missing {stream} panels")

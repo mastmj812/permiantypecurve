@@ -42,6 +42,12 @@ class FitMethod(str, enum.Enum):
     # well's own peak. Donor cohort details are persisted in
     # `Forecast.diagnostics`. See app.forecasting.cohort.
     COHORT_TRANSFER = "cohort_transfer"
+    # Ratio mode (gas/water only, engineer-selected): the stream is a
+    # fitted ratio of CUMULATIVE OIL (ln r = alpha + beta*Np), forecast
+    # as ratio x the oil forecast. Params live in the params JSONB
+    # (mode/alpha/beta/sub_mode/...); the Arps columns are NULL. See
+    # app.forecasting.ratio.
+    RATIO_CUM_OIL = "ratio_cum_oil"
 
 
 class ModelType(str, enum.Enum):
@@ -50,6 +56,9 @@ class ModelType(str, enum.Enum):
     ARPS_HARMONIC = "arps_harmonic"
     MODIFIED_HYPERBOLIC = "modified_hyperbolic"
     DUONG = "duong"
+    # Derived stream: ratio-vs-cumulative-oil (no Arps params of its
+    # own). Only ever set on gas/water rows via the mode-switch API.
+    RATIO = "ratio"
 
 
 class Forecast(Base):

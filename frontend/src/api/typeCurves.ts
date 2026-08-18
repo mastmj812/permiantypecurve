@@ -50,16 +50,36 @@ export type RiskMultipliers = Partial<Record<"oil" | "gas" | "water", number>>;
 // at the cohort-median ramp length, its own ramp in the months before.
 export type AlignmentMethod = "peak_month" | "first_prod_month" | "peak_ramp";
 
+// Per-stream forecast mode for the PUBLISHED fitted curve. gas/water
+// only — oil is always an independent Arps fit. "ratio" = the stream is
+// a fitted ratio of cumulative oil x the TC oil stream (backend
+// app/type_curves/ratio_mode.py). Never inferred: the engineer picks.
+export type StreamMode = "arps" | "ratio";
+
 export interface FittedTypeCurve {
   model_type: string;
+  // RATIO-MODE CAVEAT: when `mode === "ratio"` the Arps fields below
+  // (qi/Di/b/Df, qo/peak_index/ramp_eur/arps_eur, r2 as Arps-R²) are
+  // ABSENT at runtime — the type keeps them required for the common
+  // Arps shape; check `mode` before reading them. eur_per_unit and
+  // smoothed_rate are always present in both shapes.
   qi: number;
   Di: number;          // nominal per-year
   b: number;
   Df: number;
   eur_per_unit: number; // BBL or MCF per 1,000 lateral ft (total: ramp + Arps)
-  r2?: number;          // present on auto-fit, absent on manual override
-  rmse?: number;        // ditto
+  r2?: number | null;   // auto-fit R² (Arps: cum fit; ratio: ln-ratio fit)
+  rmse?: number;        // Arps auto-fit only
   smoothed_rate: number[];
+  // ---- ratio-mode fields (present iff mode === "ratio") ----
+  mode?: StreamMode;
+  alpha?: number;              // ln r at Np = 0
+  beta?: number;               // d(ln r)/d(Np), per BBL-per-unit of cum oil
+  sub_mode?: "exp_cum" | "constant";
+  n_months?: number;           // valid months in the ratio regression
+  r_const?: number | null;     // constant-fallback ratio (median of tail)
+  implied_effective_decline_yr1?: number | null; // from the DERIVED series
+  oil_ref?: Record<string, number | null>;       // oil fit snapshot (audit)
   // Ramp-prefix params — initial rate, ramp length, and the ramp's EUR
   // contribution. peak_index=0 + qo=qi reduces to pure post-peak Arps
   // (back-compat for type curves built before the ramp model).
@@ -165,6 +185,9 @@ export async function computeTypeCurve(args: {
   normalization_basis?: NormalizationBasis;
   alignment_method?: AlignmentMethod;
   n_months?: number | null;
+  // Per-stream mode for the published fitted curve (gas/water only).
+  // Omitted keys default to Arps server-side.
+  stream_modes?: Partial<Record<"gas" | "water", StreamMode>> | null;
 }): Promise<AggregatePayload> {
   const r = await apiFetch("/api/type-curves/compute", {
     method: "POST",
@@ -193,6 +216,10 @@ export async function saveTypeCurve(args: {
   // Build-up funnel inputs (fresh-aggregate saves). Null/omitted on a
   // version save inherits the parent's provenance server-side.
   provenance?: ProvenanceBody | null;
+  // Per-stream mode (gas/water only). On a version save, null/omitted
+  // inherits the PARENT's modes from its saved series server-side — a
+  // version can never silently convert a ratio stream back to Arps.
+  stream_modes?: Partial<Record<"gas" | "water", StreamMode>> | null;
 }): Promise<TypeCurveRow> {
   const path = args.version_of
     ? `/api/type-curves/${args.version_of}/versions`
@@ -211,6 +238,7 @@ export async function saveTypeCurve(args: {
       fit_overrides: args.fit_overrides ?? null,
       take_over_deal: args.take_over_deal ?? false,
       provenance: args.provenance ?? null,
+      stream_modes: args.stream_modes ?? null,
     }),
   });
   if (!r.ok) throw new Error(`save failed: ${r.status} ${await r.text()}`);

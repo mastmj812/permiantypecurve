@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -75,16 +75,28 @@ from app.forecasting.models import (
 )
 from app.forecasting.orchestrator import (
     STREAMS,
+    _load_monthly,
     _stream_rate_at_index,
     detect_stream_peaks,
+    forecast_well,
     forecast_wells,
     stream_rate_at_peak,
 )
 from app.forecasting.peak_detection import detect_onset
 from app.forecasting.ramp_arps import (
     compute_total_eur,
+    display_eur_from_params,
     evaluate_well_rate,
     model_cum_at_t,
+)
+from app.forecasting.ratio import (
+    RatioFit,
+    RatioSeries,
+    derive_ratio_stream,
+    fit_ratio_vs_cum_oil,
+    implied_effective_decline_yr1,
+    is_ratio_params,
+    ratio_forecast_from_oil_params,
 )
 from app.forecasting.types import (
     DEFAULT_ECONOMIC_LIMIT_BOPD,
@@ -92,6 +104,7 @@ from app.forecasting.types import (
     DEFAULT_ECONOMIC_LIMIT_MCFD,
     DEFAULT_FORECAST_HORIZON_YEARS,
     ForecastConfig,
+    ForecastResult,
 )
 
 router = APIRouter(prefix="/forecasts", tags=["forecasts"])
@@ -1021,6 +1034,19 @@ def patch_forecast(
     if f is None:
         raise HTTPException(status_code=404, detail="not found")
 
+    if req.params is not None and is_ratio_params(f.params):
+        # A ratio-mode stream has no Arps params to edit — the modal
+        # disables the editor, but be defensive: a params-merge here
+        # would corrupt the ratio payload. lock / manual_override
+        # toggles (params=None) are still allowed.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "ratio-mode stream has no Arps params to edit; switch the "
+                "stream back to Arps mode first"
+            ),
+        )
+
     if req.params is not None:
         # Validate then apply. Keep top-level scalar fields in sync with params.
         merged: dict[str, Any] = {**(f.params or {}), **req.params}
@@ -1066,6 +1092,242 @@ def patch_forecast(
         f.manual_override = req.manual_override
 
     session.commit()
+    return _row_with_well_join(f, session)
+
+
+# ============================ per-stream mode switch ============================
+
+
+class ModeSwitchRequest(BaseModel):
+    """Body for POST /forecasts/{id}/mode.
+
+    "ratio" derives the stream from cumulative oil (gas/water only;
+    requires an oil forecast on the same well); "arps" re-fits the
+    stream's own independent decline. Either direction follows the
+    param-edit convention: the row comes out ``manual_override=True,
+    locked=True`` — the engineer chose this, and a bulk refit must
+    keep its hands off.
+    """
+
+    mode: Literal["arps", "ratio"]
+
+
+def apply_ratio_mode(
+    f: Forecast,
+    *,
+    fit: RatioFit,
+    series: RatioSeries,
+    peak_month_date: date | None,
+    peak_rate: float | None,
+    oil_forecast_id: str,
+    oil_eur_at_fit: float,
+) -> None:
+    """Mutate a Forecast row into ratio mode (pure ORM mutation, no DB).
+
+    Params JSONB carries the full ratio payload (mode / alpha / beta /
+    sub_mode / ratio_r2 / ratio_n_months / r_const); the Arps scalar
+    columns are nulled — a ratio stream has no qi/Di/b of its own.
+    Fresh dicts are assigned (never mutated in place) so SQLAlchemy's
+    change detection fires without a flag_modified dance.
+
+    Sets ``manual_override=True, locked=True`` per the mode-switch
+    convention: the engineer chose ratio mode; a bulk refit must not
+    silently revert it (``_persist`` skips locked rows).
+    """
+    f.model_type = ModelType.RATIO
+    f.fit_method = FitMethod.RATIO_CUM_OIL
+    f.params = {
+        "mode": "ratio",
+        "alpha": fit.alpha,
+        "beta": fit.beta,
+        "sub_mode": fit.sub_mode,
+        "ratio_r2": fit.r2,
+        "ratio_n_months": fit.n_months,
+        "r_const": fit.r_const,
+    }
+    f.qi = None
+    f.di_initial = None
+    f.b = None
+    f.df_terminal = None
+    f.qo = None
+    f.peak_index_months = None
+    f.eur = series.eur
+    f.peak_month_date = peak_month_date
+    f.peak_rate = peak_rate
+    f.fit_r2 = fit.r2
+    f.fit_rmse = None
+    f.downtime_ratio = None
+    f.diagnostics = {
+        "mode": "ratio",
+        "source": "ratio_vs_cum_oil",
+        **fit.diagnostics,
+        "implied_eur": series.eur,
+        "implied_effective_decline_yr1": implied_effective_decline_yr1(series.rates),
+        "np_total_forecast": series.np_total,
+        "oil_forecast_id": oil_forecast_id,
+        "oil_eur_at_fit": oil_eur_at_fit,
+    }
+    f.manual_override = True
+    f.locked = True
+    f.updated_at = datetime.now(UTC)
+
+
+def apply_arps_refit(f: Forecast, result: ForecastResult) -> None:
+    """Mutate a Forecast row back to an independent Arps fit.
+
+    Mirrors the value set ``orchestrator._persist`` writes, but — per
+    the mode-switch convention — stamps ``manual_override=True,
+    locked=True``: leaving ratio mode is an engineer's decision, not a
+    machine fit to be silently overwritten by the next bulk pass.
+    """
+    f.model_type = ModelType(result.model_type)
+    f.fit_method = FitMethod(result.fit_method)
+    f.params = dict(result.params)
+    f.qi = result.qi
+    f.di_initial = result.di_initial
+    f.b = result.b
+    f.df_terminal = result.df_terminal
+    f.qo = result.qo
+    f.peak_index_months = result.peak_index_months
+    f.eur = result.eur
+    f.peak_month_date = result.peak_month_date
+    f.peak_rate = result.peak_rate
+    f.fit_r2 = result.fit_r2
+    f.fit_rmse = result.fit_rmse
+    f.downtime_ratio = result.downtime_ratio
+    f.diagnostics = {"source": "mode_switch_arps_refit"}
+    f.manual_override = True
+    f.locked = True
+    f.updated_at = datetime.now(UTC)
+
+
+_STREAM_VOLUME_ATTR: dict[str, str] = {
+    "gas": "gas_mcf",
+    "water": "water_bbl",
+}
+
+
+@router.post("/{forecast_id}/mode", response_model=ForecastRow)
+def switch_forecast_mode(
+    forecast_id: uuid.UUID,
+    req: ModeSwitchRequest,
+    session: Session = Depends(get_session),
+) -> ForecastRow:
+    """Switch a gas/water stream between independent Arps and ratio mode.
+
+    Ratio mode (fit vs cumulative oil) is never auto-selected — this
+    endpoint IS the engineer's choice, so both directions stamp
+    ``manual_override=True, locked=True`` (same convention as a param
+    edit). Oil rows are always independent Arps (400 on 'ratio').
+    """
+    f = session.get(Forecast, forecast_id)
+    if f is None:
+        raise HTTPException(status_code=404, detail="not found")
+
+    if req.mode == "ratio":
+        if f.stream == Stream.OIL:
+            raise HTTPException(
+                status_code=400,
+                detail="oil is always an independent Arps fit; ratio mode is gas/water only",
+            )
+        oil = session.execute(
+            select(Forecast).where(Forecast.api10 == f.api10, Forecast.stream == Stream.OIL)
+        ).scalar_one_or_none()
+        if oil is None or is_ratio_params(oil.params):
+            raise HTTPException(
+                status_code=422,
+                detail="ratio mode needs an oil (Arps) forecast on this well — fit oil first",
+            )
+        oil_params = dict(oil.params or {})
+        if any(oil_params.get(k) is None for k in ("qi", "Di", "b", "Df")):
+            raise HTTPException(
+                status_code=422, detail="oil forecast params are incomplete; re-fit oil first"
+            )
+        monthly = _load_monthly(session, f.api10)
+        if monthly.empty:
+            raise HTTPException(status_code=422, detail=f"no production for {f.api10}")
+        monthly = monthly.sort_values("prod_date").reset_index(drop=True)
+        peaks = detect_stream_peaks(monthly)
+        oil_peak = peaks.get("oil")
+        if oil_peak is None:
+            raise HTTPException(status_code=422, detail="no detectable oil peak on this well")
+        # Np_max for the beta band = the oil forecast's 50-yr Np. Prefer
+        # the stored scalar; recompute from params when absent.
+        oil_eur = float(oil.eur) if oil.eur is not None else None
+        if oil_eur is None or oil_eur <= 0:
+            oil_eur = display_eur_from_params(oil_params)
+        if oil_eur is None or oil_eur <= 0:
+            raise HTTPException(status_code=422, detail="oil forecast has no usable EUR")
+
+        stream_name = f.stream.value
+        fit = fit_ratio_vs_cum_oil(
+            monthly["oil_bbl"].tolist(),
+            monthly[_STREAM_VOLUME_ATTR[stream_name]].tolist(),
+            start_index=int(oil_peak.peak_index),
+            np_max_forecast=oil_eur,
+        )
+        if fit is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"no valid post-oil-peak months with oil > 0 and {stream_name} > 0 — "
+                    "nothing to fit a ratio on"
+                ),
+            )
+        series = ratio_forecast_from_oil_params(
+            qi=float(oil_params["qi"]),
+            Di=float(oil_params["Di"]),
+            b=float(oil_params["b"]),
+            Df=float(oil_params["Df"]),
+            qo=oil_params.get("qo"),
+            peak_index_months=(
+                int(oil_params["peak_index_months"])
+                if oil_params.get("peak_index_months") is not None
+                else None
+            ),
+            alpha=fit.alpha,
+            beta=fit.beta,
+        )
+        stream_peak = peaks.get(stream_name)
+        apply_ratio_mode(
+            f,
+            fit=fit,
+            series=series,
+            peak_month_date=(
+                stream_peak.peak_month_date if stream_peak is not None else f.peak_month_date
+            ),
+            peak_rate=stream_peak.peak_rate if stream_peak is not None else f.peak_rate,
+            oil_forecast_id=str(oil.id),
+            oil_eur_at_fit=oil_eur,
+        )
+        session.commit()
+        log.info(
+            "forecast_mode_ratio",
+            api10=f.api10,
+            stream=stream_name,
+            sub_mode=fit.sub_mode,
+            beta=fit.beta,
+            r2=fit.r2,
+            eur=series.eur,
+        )
+        return _row_with_well_join(f, session)
+
+    # mode == "arps": re-fit the stream's own independent decline.
+    if not is_ratio_params(f.params):
+        raise HTTPException(status_code=400, detail="stream is already in Arps mode")
+    results = forecast_well(session, f.api10, persist=False)
+    result = results.get(f.stream.value)
+    if result is None:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Arps re-fit failed for {f.stream.value} — no detectable peak or the fit "
+                "did not converge; the row stays in ratio mode"
+            ),
+        )
+    apply_arps_refit(f, result)
+    session.commit()
+    log.info("forecast_mode_arps", api10=f.api10, stream=f.stream.value)
     return _row_with_well_join(f, session)
 
 
@@ -1177,6 +1439,41 @@ def well_curves(
 
     first_prod_date: date = prod_rows[0].prod_date
 
+    def _eval_selection(stream_name: str) -> tuple[dict[str, Any], str, dict[str, Any] | None]:
+        """(eval_params, model_type, override_block) for one stream —
+        TC override wins over the global forecast row."""
+        block = tc_overrides_for_well.get(stream_name) or None
+        fc_row = fc_by_stream.get(Stream(stream_name))
+        if block:
+            return (
+                dict(block.get("params") or {}),
+                str(block.get("model_type") or "modified_hyperbolic"),
+                block,
+            )
+        if fc_row:
+            return dict(fc_row.params), fc_row.model_type.value, None
+        return {}, "modified_hyperbolic", None
+
+    def _anchor_for(eval_params: dict[str, Any], fc_row: Forecast | None) -> date:
+        """Forecast anchor date: onset-adjusted first prod when the
+        params carry a ramp; the row's peak month otherwise (back-compat
+        with pre-ramp rows)."""
+        has_ramp = eval_params.get("peak_index_months") is not None and (
+            eval_params.get("qo") is not None
+        )
+        if has_ramp:
+            onset_m = int(eval_params.get("onset_index_months") or 0)
+            return _add_months(first_prod_date, onset_m)
+        if fc_row is not None and fc_row.peak_month_date is not None:
+            return fc_row.peak_month_date
+        return first_prod_date
+
+    # Oil's resolved params, evaluated once — ratio-mode gas/water rows
+    # derive their forecast from the oil trajectory (ratio x oil), on
+    # oil's own anchor (the derived stream is slaved to oil's timeline).
+    oil_eval_params, oil_model_type, _oil_override = _eval_selection("oil")
+    oil_fc = fc_by_stream.get(Stream.OIL)
+
     streams: list[StreamCurves] = []
     for stream_name in ("oil", "gas", "water"):
         st = Stream(stream_name)
@@ -1200,18 +1497,23 @@ def well_curves(
         # the TC override wins when present (tc_id query supplied + a
         # row exists for this stream), otherwise fall back to the
         # global forecast row.
-        override_block = tc_overrides_for_well.get(stream_name) or None
-        if override_block:
-            eval_params = dict(override_block.get("params") or {})
-            eval_model_type = str(override_block.get("model_type") or "modified_hyperbolic")
-        elif fc:
-            eval_params = dict(fc.params)
-            eval_model_type = fc.model_type.value
-        else:
-            eval_params = {}
-            eval_model_type = "modified_hyperbolic"
+        eval_params, eval_model_type, override_block = _eval_selection(stream_name)
 
-        if (fc and fc.peak_month_date is not None) or override_block:
+        # Ratio-mode stream: forecast = r(Np) x the oil forecast,
+        # evaluated on oil's grid and anchored on oil's timeline. Needs
+        # a resolvable (Arps) oil param set — without one the forecast
+        # portion stays empty rather than fabricating a curve.
+        is_ratio = is_ratio_params(eval_params)
+        oil_available = (
+            not is_ratio_params(oil_eval_params)
+            and all(oil_eval_params.get(k) is not None for k in ("qi", "Di", "b", "Df"))
+        )
+
+        can_forecast = bool((fc and fc.peak_month_date is not None) or override_block)
+        if is_ratio:
+            can_forecast = oil_available
+
+        if can_forecast:
             n_pts = int(horizon_years * 12)
             t = np.arange(n_pts, dtype=float) / 12.0
             # Anchor at the stream's ONSET (first_prod + onset_index_months)
@@ -1219,21 +1521,25 @@ def well_curves(
             # (e.g. water with leading zeros) the forecast then lines up
             # with the real history instead of slow-ramping from month 0.
             # onset defaults to 0, so this reduces to first_prod. peak_month
-            # otherwise for back-compat with pre-ramp rows.
-            has_ramp = eval_params.get("peak_index_months") is not None and (
-                eval_params.get("qo") is not None
-            )
-            if has_ramp:
-                onset_m = int(eval_params.get("onset_index_months") or 0)
-                anchor_date = _add_months(first_prod_date, onset_m)
+            # otherwise for back-compat with pre-ramp rows. Ratio streams
+            # anchor on OIL (their Np clock).
+            if is_ratio:
+                anchor_date = _anchor_for(oil_eval_params, oil_fc)
+                oil_rates = _evaluate_rate(oil_model_type, oil_eval_params, t)
+                derived = derive_ratio_stream(
+                    [float(v) for v in oil_rates],
+                    alpha=float(eval_params["alpha"]),
+                    beta=float(eval_params["beta"]),
+                )
+                rate_arr = np.asarray(derived.rates, dtype=float)
             else:
-                # Use the global row's peak when available; the override
-                # itself doesn't carry a peak_month_date.
-                anchor_date = fc.peak_month_date if fc else first_prod_date
-            r = _evaluate_rate(eval_model_type, eval_params, t)
+                anchor_date = _anchor_for(eval_params, fc)
+                rate_arr = np.asarray(
+                    _evaluate_rate(eval_model_type, eval_params, t), dtype=float
+                )
             cum_running = 0.0
             for i in range(n_pts):
-                rate_i = float(r[i])
+                rate_i = float(rate_arr[i])
                 forecast_rate.append(rate_i)
                 # Trapezoid step from t[i-1] to t[i] (one month apart).
                 # cum[0] = 0 (no production has accumulated AT the
@@ -1241,7 +1547,7 @@ def well_curves(
                 # the average of the two end-rates times the month
                 # length (_DAYS_PER_MONTH).
                 if i > 0:
-                    cum_running += 0.5 * (float(r[i - 1]) + rate_i) * _DAYS_PER_MONTH
+                    cum_running += 0.5 * (float(rate_arr[i - 1]) + rate_i) * _DAYS_PER_MONTH
                 forecast_cum.append(cum_running)
                 yr = anchor_date.year + (anchor_date.month - 1 + i) // 12
                 mo = ((anchor_date.month - 1 + i) % 12) + 1

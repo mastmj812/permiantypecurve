@@ -10,17 +10,23 @@ export type Stream = "oil" | "gas" | "water";
 // "cohort_transfer" = short-history well whose Di / b were transferred
 // from the median of the long-history cohort in the same batch.
 // See backend forecasting/cohort.py + the /transfer-cohort-params endpoint.
+// "ratio_cum_oil" = ratio mode (gas/water only, engineer-selected): the
+// stream is a fitted ratio of CUMULATIVE OIL, forecast as ratio x the
+// oil forecast. Such rows carry model_type "ratio" and no Arps params
+// (qi/Di/b/Df null; ratio params ride `params` + `diagnostics`).
 export type FitMethod =
   | "rate_cum"
   | "rate_time"
   | "rate_time_fallback"
-  | "cohort_transfer";
+  | "cohort_transfer"
+  | "ratio_cum_oil";
 export type ModelType =
   | "arps_exponential"
   | "arps_hyperbolic"
   | "arps_harmonic"
   | "modified_hyperbolic"
-  | "duong";
+  | "duong"
+  | "ratio";
 
 export interface ForecastConfig {
   model_type: ModelType;
@@ -351,6 +357,33 @@ export async function previewForecast(args: {
   });
   if (!r.ok) throw new Error(`preview failed: ${r.status}`);
   return (await r.json()) as PreviewResponse;
+}
+
+// Per-stream forecast mode switch. "ratio" derives the stream from
+// cumulative oil (gas/water only; needs an oil forecast on the well);
+// "arps" re-fits the stream's own independent decline. Either direction
+// stamps manual_override=true + locked=true server-side (same
+// convention as a param edit — the engineer chose this).
+export async function switchForecastMode(
+  id: string,
+  mode: "arps" | "ratio",
+): Promise<ForecastRow> {
+  const r = await apiFetch(`/api/forecasts/${id}/mode`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode }),
+  });
+  if (!r.ok) {
+    let detail = "";
+    try {
+      const body = (await r.json()) as { detail?: string };
+      detail = typeof body.detail === "string" ? body.detail : "";
+    } catch {
+      // non-JSON error body — the status alone will have to do
+    }
+    throw new Error(`mode switch failed: ${r.status}${detail ? ` — ${detail}` : ""}`);
+  }
+  return (await r.json()) as ForecastRow;
 }
 
 export async function patchForecast(

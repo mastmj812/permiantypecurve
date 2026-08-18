@@ -47,6 +47,7 @@ from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
     LEVEL_TO_SPE_KEY,
+    RATIO_REFUSAL_NOTE,
     RISKING_APPLIED,
     RISKING_UNRISKED,
     BlueOxContractError,
@@ -58,6 +59,7 @@ from app.exports.blueox import (
     blueox_filename,
     build_blueox_workbook,
     monthly_volumes_from_rates,
+    ratio_mode_streams,
 )
 from app.exports.buildup import write_buildup_sheet
 from app.exports.dossier import (
@@ -852,6 +854,17 @@ def _collect_blueox_zone(
         errors.append(
             f"{zone_name}: normalization basis "
             f"{tc.normalization_basis.value!r} is not exportable under the contract"
+        )
+        return None
+
+    # HARD refusal (by design): the contract's curve_params declares
+    # Arps params per stream; a ratio-mode stream has none. No contract
+    # / ledger change here — refuse the zone with a clear remedy.
+    ratio_streams = ratio_mode_streams(tc.series)
+    if ratio_streams:
+        errors.append(
+            f"{zone_name}: stream(s) {', '.join(ratio_streams)} are ratio-mode — "
+            f"{RATIO_REFUSAL_NOTE}"
         )
         return None
 

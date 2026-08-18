@@ -12,6 +12,7 @@ import {
   fetchWellCurves,
   patchForecast,
   previewForecast,
+  switchForecastMode,
 } from "../api/forecasts";
 import {
   deleteForecastOverride,
@@ -125,6 +126,15 @@ export function ForecastDetailModal({
   // persisted. Cleared at the start of the next save/lock attempt.
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  // Ratio-mode stream (gas/water forecast as a fitted ratio of
+  // cumulative oil x the oil forecast): no Arps params of its own —
+  // the param editor is replaced with the ratio fit diagnostics and
+  // an explanation; the lock toggle stays available.
+  const isRatio = forecastForStream?.model_type === "ratio";
+  // Mode switch in flight — disables the toggle so a double-click
+  // can't race two server-side refits.
+  const [modeBusy, setModeBusy] = useState(false);
+
   useEffect(() => {
     if (!forecastForStream) return;
     setEditQi(forecastForStream.params.qi ?? null);
@@ -147,11 +157,13 @@ export function ForecastDetailModal({
     setPreviewEur(null);
     setPreviewEurDisplayed(null);
     setPreviewEurRemaining(null);
-    // Intentionally keyed only on the forecast's id: reset the edit
-    // fields when the user switches to a DIFFERENT forecast, not on
-    // every parent re-render (which would clobber in-progress edits).
+    // Keyed on the forecast's id AND model_type: reset the edit fields
+    // when the user switches to a DIFFERENT forecast or the same row
+    // changes mode (arps <-> ratio rewrites params in place under the
+    // same id), but not on every parent re-render (which would clobber
+    // in-progress edits).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [forecastForStream?.id]);
+  }, [forecastForStream?.id, forecastForStream?.model_type]);
 
   // Keyboard nav while the modal is open. Skip when focus is in an
   // input/textarea so editing fit parameters doesn't trigger nav.
@@ -531,6 +543,32 @@ export function ForecastDetailModal({
     }
   }
 
+  // Per-stream mode switch (gas/water): "ratio vs cum oil" derives the
+  // stream from the oil forecast; "arps" re-fits its own decline. The
+  // server stamps manual_override + locked either way (the engineer
+  // chose), then we splice the updated row in and refetch the curves
+  // so the red line redraws as the derived (or refit) series.
+  async function onSwitchMode(mode: "arps" | "ratio") {
+    if (!forecastForStream || modeBusy) return;
+    setSaveError(null);
+    setModeBusy(true);
+    try {
+      const updated = await switchForecastMode(forecastForStream.id, mode);
+      onSaved(updated);
+      setPreviewPoints([]);
+      setPreviewCumPoints([]);
+      setPreviewEur(null);
+      setPreviewEurDisplayed(null);
+      setPreviewEurRemaining(null);
+      const r = await fetchWellCurves(api10, 50, tcContext?.id ?? null);
+      setCurves(r.streams.find((s) => s.stream === stream) ?? null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModeBusy(false);
+    }
+  }
+
   const units = STREAM_UNITS[stream];
 
   return (
@@ -707,6 +745,38 @@ export function ForecastDetailModal({
           {forecastForStream && (
             <div className="param-editor">
               <h3>Fit parameters{readOnly && " (read-only)"}</h3>
+              {/* Per-stream forecast mode (gas/water only — oil is
+                  always an independent Arps fit). Global rows only:
+                  TC-context overrides are Arps-shaped by design, so
+                  the toggle hides there. Never auto-selected — this
+                  control IS the engineer's choice. */}
+              {!readOnly && !tcContext && stream !== "oil" && (
+                <div className="toolbar-group" style={{ marginBottom: 6 }}>
+                  <span className="toolbar-label">Mode:</span>
+                  <button
+                    type="button"
+                    className={`tb-btn ${!isRatio ? "tb-active" : ""}`}
+                    disabled={modeBusy || !isRatio}
+                    onClick={() => void onSwitchMode("arps")}
+                    title="Independent Arps decline fit on this stream's own history (sets manual override + lock)"
+                  >
+                    Arps
+                  </button>
+                  <button
+                    type="button"
+                    className={`tb-btn ${isRatio ? "tb-active" : ""}`}
+                    disabled={modeBusy || isRatio}
+                    onClick={() => void onSwitchMode("ratio")}
+                    title="Forecast this stream as a fitted ratio of cumulative oil x the oil forecast (sets manual override + lock)"
+                  >
+                    ratio vs cum oil
+                  </button>
+                  {modeBusy && <span className="muted">fitting…</span>}
+                </div>
+              )}
+              {isRatio ? (
+                <RatioDiagnostics row={forecastForStream} stream={stream} />
+              ) : (
               <table>
                 <tbody>
                   <ParamRow
@@ -767,14 +837,19 @@ export function ForecastDetailModal({
                   )}
                 </tbody>
               </table>
+              )}
               {!readOnly && (
                 <div className="param-actions">
-                  <button type="button" onClick={() => void recompute()}>
-                    preview
-                  </button>
-                  <button type="button" className="btn-primary" onClick={() => void save()}>
-                    {tcContext ? "save TC override" : "save override"}
-                  </button>
+                  {!isRatio && (
+                    <>
+                      <button type="button" onClick={() => void recompute()}>
+                        preview
+                      </button>
+                      <button type="button" className="btn-primary" onClick={() => void save()}>
+                        {tcContext ? "save TC override" : "save override"}
+                      </button>
+                    </>
+                  )}
                   {tcContext &&
                     tcContext.sourceByStream[stream] === "override" && (
                       <button
@@ -888,6 +963,88 @@ function ParamRow({
       </td>
       <td>
         <span className="muted">{unit}</span>
+      </td>
+    </tr>
+  );
+}
+
+// Ratio-mode diagnostics — replaces the Arps sliders for a ratio
+// stream. There is no Di for a ratio stream, so the decline number the
+// engineer sees is the effective year-1 decline computed FROM THE
+// DERIVED SERIES (backend diagnostics.implied_effective_decline_yr1).
+function RatioDiagnostics({ row, stream }: { row: ForecastRow; stream: Stream }) {
+  const params = row.params as Record<string, unknown>;
+  const diag = row.diagnostics ?? {};
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const alpha = num(params.alpha);
+  const beta = num(params.beta);
+  const subMode = typeof params.sub_mode === "string" ? params.sub_mode : null;
+  const nMonths = num(params.ratio_n_months);
+  const r2 = num(params.ratio_r2);
+  const effYr1 = num(diag.implied_effective_decline_yr1);
+  const impliedEur = num(diag.implied_eur) ?? row.eur;
+  const ratioAt0 = alpha != null ? Math.exp(alpha) : null;
+  const ratioUnit = stream === "gas" ? "MCF/BBL" : "BBL/BBL";
+  const betaLabel =
+    beta == null
+      ? "—"
+      : beta === 0
+        ? "0 (constant ratio)"
+        : `${beta > 0 ? "+" : "−"}${Math.abs(beta).toExponential(2)} /BBL cum oil (${beta > 0 ? "rising" : "falling"})`;
+  return (
+    <div>
+      <p className="muted" style={{ fontSize: 12, margin: "0 0 6px" }}>
+        Arps sliders are disabled — this stream is forecast as a fitted
+        ratio of cumulative oil × the oil forecast.
+      </p>
+      <table>
+        <tbody>
+          <RatioStatRow
+            label="sub-mode"
+            value={
+              subMode === "constant"
+                ? "constant ratio (fit gate failed)"
+                : "ln-ratio vs cum oil"
+            }
+          />
+          <RatioStatRow
+            label="ratio @ Np=0"
+            value={ratioAt0 != null ? `${ratioAt0.toFixed(3)} ${ratioUnit}` : "—"}
+          />
+          <RatioStatRow label="β (slope)" value={betaLabel} />
+          <RatioStatRow
+            label="ratio-fit R²"
+            value={r2 != null ? r2.toFixed(3) : "—"}
+          />
+          <RatioStatRow
+            label="months in fit"
+            value={nMonths != null ? String(nMonths) : "—"}
+          />
+          <RatioStatRow
+            label="implied EUR"
+            value={
+              impliedEur != null
+                ? fmtEur(impliedEur, stream === "gas" ? "MCF" : "BBL")
+                : "—"
+            }
+          />
+          <RatioStatRow
+            label="eff. yr-1 decline (derived)"
+            value={effYr1 != null ? `${(effYr1 * 100).toFixed(1)}%` : "—"}
+          />
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RatioStatRow({ label, value }: { label: string; value: string }) {
+  return (
+    <tr>
+      <th>{label}</th>
+      <td colSpan={2}>
+        <span className="muted">{value}</span>
       </td>
     </tr>
   );

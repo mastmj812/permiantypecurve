@@ -46,6 +46,7 @@ from sqlalchemy.orm import Session
 from app.db.models import Forecast, ProductionMonthly, Stream, TypeCurve, Well
 from app.forecasting.peak_detection import onset_index_from_rates
 from app.forecasting.ramp_arps import evaluate_well_rate
+from app.forecasting.ratio import derive_ratio_rates_masked
 from app.forecasting.types import (
     DEFAULT_DOWNTIME_FLOOR_BOPD,
     DEFAULT_DOWNTIME_FLOOR_BWPD,
@@ -330,9 +331,30 @@ def _resolve_params(
     come along when present (lets the caller render the ramp prefix
     via evaluate_well_rate); they're None for rows that pre-date the
     ramp columns and the evaluator falls back to pure Arps.
+
+    Ratio-mode rows (params.mode == "ratio", gas/water only) resolve to
+    ``{"mode": "ratio", "alpha", "beta"}`` — the caller derives the
+    stream from the SAME well's oil trajectory (ratio x oil), so a
+    ratio-mode well contributes its derived forecast to the cohort
+    panel instead of silently dropping out. A TC-scoped override is
+    always Arps and wins over a global ratio row (same resolver rule
+    as everywhere else).
     """
     overrides = (tc.forecast_overrides or {}).get(api10) or {}
     override = overrides.get(stream.value)
+    src_params = (
+        (override.get("params") or {})
+        if override
+        else ((global_forecast.params or {}) if global_forecast is not None else None)
+    )
+    if src_params is not None and src_params.get("mode") == "ratio":
+        alpha = src_params.get("alpha")
+        beta = src_params.get("beta")
+        if alpha is None or beta is None or not all(
+            math.isfinite(float(v)) for v in (alpha, beta)
+        ):
+            return None
+        return {"mode": "ratio", "alpha": float(alpha), "beta": float(beta)}
     if override:
         params = override.get("params") or {}
         qi = params.get("qi", override.get("qi"))
@@ -394,6 +416,12 @@ def _forecast_rates(
     """
     if params is None or n_months <= 0:
         return [None] * max(n_months, 0)
+    if params.get("mode") == "ratio":
+        # Ratio rows are evaluated by the caller against the well's own
+        # oil trajectory (see load_wells_with_forecast) — reaching this
+        # generic Arps evaluator with one is a programming error; null
+        # the stream rather than crash the whole aggregation.
+        return [None] * n_months
     lead = max(0, shift_months)
     t_years = (np.arange(n_months - lead, dtype=float) - min(shift_months, 0)) / 12.0
     qo = params.get("qo") if include_ramp else None
@@ -515,18 +543,33 @@ def load_wells_with_forecast(
             include_ramp=include_ramp,
             shift_months=_shift(oil_params, "oil"),
         )
-        gas_rates = _forecast_rates(
-            gas_params,
-            n_months,
-            include_ramp=include_ramp,
-            shift_months=_shift(gas_params, "gas"),
-        )
-        wat_rates = _forecast_rates(
-            wat_params,
-            n_months,
-            include_ramp=include_ramp,
-            shift_months=_shift(wat_params, "water"),
-        )
+
+        def _stream_rates(
+            params: dict[str, Any] | None,
+            stream: str,
+            *,
+            oil_params: dict[str, Any] | None = oil_params,
+            oil_rates: list[float | None] = oil_rates,
+        ) -> list[float | None]:
+            # Ratio-mode row: derive from the well's own oil trajectory
+            # (on oil's panel alignment — the derived stream is slaved
+            # to oil's timeline / Np clock). No oil fit → no derived
+            # stream (nulls), never a fabricated series.
+            if params is not None and params.get("mode") == "ratio":
+                if oil_params is None or oil_params.get("mode") == "ratio":
+                    return [None] * n_months
+                return derive_ratio_rates_masked(
+                    oil_rates, alpha=float(params["alpha"]), beta=float(params["beta"])
+                )
+            return _forecast_rates(
+                params,
+                n_months,
+                include_ramp=include_ramp,
+                shift_months=_shift(params, stream),
+            )
+
+        gas_rates = _stream_rates(gas_params, "gas")
+        wat_rates = _stream_rates(wat_params, "water")
 
         out.append(
             WellSeries(
