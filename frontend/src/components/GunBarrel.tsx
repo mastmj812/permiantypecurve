@@ -53,7 +53,7 @@ export interface GunBarrelProps {
   height?: number;
 }
 
-const PAD = { top: 24, right: 32, bottom: 40, left: 56 };
+const PAD = { top: 24, right: 36, bottom: 46, left: 66 };
 const WELL_RADIUS = 7;
 // Rough lat/lon → feet at Permian latitude (~32°N). One degree of lat
 // is ~364,000 ft anywhere; one degree of lon shrinks with latitude.
@@ -315,7 +315,7 @@ export function GunBarrel({
           x={width / 2}
           y={height / 2}
           textAnchor="middle"
-          fontSize="12"
+          fontSize="14"
           fill="#6b7280"
         >
           No wells with surface + bottomhole coordinates to render.
@@ -522,7 +522,7 @@ export function GunBarrel({
             y={yScale(t)}
             textAnchor="end"
             dominantBaseline="middle"
-            fontSize="10"
+            fontSize="12"
             fill="#6b7280"
           >
             {Math.round(t).toLocaleString()}
@@ -544,7 +544,7 @@ export function GunBarrel({
             x={xScale(t)}
             y={plotArea.y + plotArea.h + 14}
             textAnchor="middle"
-            fontSize="10"
+            fontSize="12"
             fill="#6b7280"
           >
             {Math.round(t).toLocaleString()}
@@ -675,7 +675,7 @@ export function GunBarrel({
         x={plotArea.x + plotArea.w / 2}
         y={height - 6}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fill="#374151"
       >
         Cross-section offset (ft) — +X is {axisLabel}
@@ -685,7 +685,7 @@ export function GunBarrel({
         y={plotArea.y + plotArea.h / 2}
         transform={`rotate(-90 14 ${plotArea.y + plotArea.h / 2})`}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fill="#374151"
       >
         TVD (ft)
@@ -741,8 +741,8 @@ function GunBarrelTooltip({
   // to the left if it'd run off the chart's right edge. Same trick for
   // top/bottom so a circle near the y-axis edges doesn't push the box
   // off-screen.
-  const TT_WIDTH = 220;
-  const TT_HEIGHT = 96;
+  const TT_WIDTH = 250;
+  const TT_HEIGHT = 112;
   const placeLeft = x + WELL_RADIUS + 8 + TT_WIDTH > chartWidth;
   const placeAbove = y + TT_HEIGHT + 8 > chartHeight;
   const tx = placeLeft ? x - WELL_RADIUS - 8 - TT_WIDTH : x + WELL_RADIUS + 8;
@@ -762,28 +762,28 @@ function GunBarrelTooltip({
       />
       <text
         x={tx + 10}
-        y={ty + 18}
-        fontSize="12"
+        y={ty + 20}
+        fontSize="14"
         fontWeight={600}
         fill="#0f172a"
       >
         {w.name ?? w.api10}
       </text>
-      <text x={tx + 10} y={ty + 34} fontSize="11" fill="#374151">
+      <text x={tx + 10} y={ty + 39} fontSize="13" fill="#374151">
         {w.formation_blueox ?? "—"}
         {w.formation ? ` (${w.formation})` : ""}
       </text>
-      <text x={tx + 10} y={ty + 50} fontSize="11" fill="#374151">
+      <text x={tx + 10} y={ty + 58} fontSize="13" fill="#374151">
         TVD {Math.round(point.tvd).toLocaleString()} ft
         {point.tvdEstimated ? " (estimated)" : ""}
       </text>
-      <text x={tx + 10} y={ty + 66} fontSize="11" fill="#374151">
+      <text x={tx + 10} y={ty + 77} fontSize="13" fill="#374151">
         Lateral{" "}
         {w.lateral_ft != null
           ? `${Math.round(w.lateral_ft).toLocaleString()} ft`
           : "—"}
       </text>
-      <text x={tx + 10} y={ty + 82} fontSize="11" fill="#374151">
+      <text x={tx + 10} y={ty + 96} fontSize="13" fill="#374151">
         First prod {w.first_prod_date ?? "—"}
       </text>
     </g>

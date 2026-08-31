@@ -46,7 +46,7 @@ export interface InspectProductionChartsProps {
   chartHeight?: number;
 }
 
-const PAD = { top: 24, right: 16, bottom: 36, left: 56 };
+const PAD = { top: 26, right: 18, bottom: 42, left: 64 };
 
 // Plot modes: the three raw streams plus the two oil-denominator
 // ratios. GOR/WOR are derived client-side from the same per-well
@@ -396,7 +396,7 @@ function OverlayChart({
         x={width / 2}
         y={14}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fontWeight={600}
         fill="#0f172a"
       >
@@ -427,7 +427,7 @@ function OverlayChart({
             y={yScale(t)}
             textAnchor="end"
             dominantBaseline="middle"
-            fontSize="9"
+            fontSize="11"
             fill="#6b7280"
           >
             {formatTick(t)}
@@ -448,7 +448,7 @@ function OverlayChart({
             x={xScale(t)}
             y={plot.y + plot.h + 12}
             textAnchor="middle"
-            fontSize="9"
+            fontSize="11"
             fill="#6b7280"
           >
             {Math.round(t)}
@@ -559,7 +559,7 @@ function OverlayChart({
           x={plot.x + plot.w - 4}
           y={plot.y + 10}
           textAnchor="end"
-          fontSize="9"
+          fontSize="11"
           fill="#b91c1c"
         >
           ▲ {clippedCount} pt{clippedCount === 1 ? "" : "s"} off-scale
@@ -571,7 +571,7 @@ function OverlayChart({
         x={plot.x + plot.w / 2}
         y={height - 4}
         textAnchor="middle"
-        fontSize="10"
+        fontSize="12"
         fill="#374151"
       >
         months since first prod
@@ -581,7 +581,7 @@ function OverlayChart({
         y={plot.y + plot.h / 2}
         transform={`rotate(-90 14 ${plot.y + plot.h / 2})`}
         textAnchor="middle"
-        fontSize="10"
+        fontSize="12"
         fill="#374151"
       >
         {yLabel}

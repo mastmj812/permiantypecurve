@@ -65,12 +65,20 @@ interface Props {
   compactLayout?: boolean;
 }
 
-const DEFAULT_PAD = { top: 26, right: 18, bottom: 48, left: 60 };
+// In-app padding. Left fits the rotated y-axis caption at x=14 +
+// 12px y-tick labels right-aligned at PAD.left-6=66 (max ~29px wide
+// for "1.0M" / "1.5k").
+const DEFAULT_PAD = { top: 30, right: 20, bottom: 56, left: 72 };
 // Slide-export padding. Left fits the rotated y-axis caption at x=14
-// + y-tick labels right-aligned at PAD.left-6=44 (max ~24px wide for
-// "1.0M" / "1.5k"). Right is just enough that the rightmost x-tick
+// + 10px y-tick labels right-aligned at PAD.left-6=44 (max ~24px wide
+// for "1.0M" / "1.5k"). Right is just enough that the rightmost x-tick
 // label centered at xScale(35) doesn't clip the SVG edge.
 const COMPACT_PAD = { top: 8, right: 4, bottom: 32, left: 50 };
+// Font sizes follow the pads: the in-app chart uses the bigger UI
+// scale; the slide-export chart keeps the sizes the letter-landscape
+// picture boxes were tuned to.
+const DEFAULT_FS = { tick: 12, axis: 13, title: 14, ribbon: 11, legend: 12 };
+const COMPACT_FS = { tick: 10, axis: 11, title: 12, ribbon: 9, legend: 10 };
 const DEFAULT_RIBBON_H = 38; // well-count strip below the main panel
 const COMPACT_RIBBON_H = 0; // hidden in slide-export mode
 const DEFAULT_RIBBON_GAP = 6; // gap between plot and ribbon
@@ -95,6 +103,7 @@ export function TypeCurveChart({
   compactLayout = false,
 }: Props) {
   const PAD = compactLayout ? COMPACT_PAD : DEFAULT_PAD;
+  const FS = compactLayout ? COMPACT_FS : DEFAULT_FS;
   const RIBBON_H = compactLayout ? COMPACT_RIBBON_H : DEFAULT_RIBBON_H;
   const RIBBON_GAP = RIBBON_H > 0 ? DEFAULT_RIBBON_GAP : 0;
   // Slice every series to the first xMaxMonths if provided. This is the
@@ -209,7 +218,7 @@ export function TypeCurveChart({
             y={yScale(t.value)}
             textAnchor="end"
             dominantBaseline="middle"
-            fontSize="10"
+            fontSize={FS.tick}
             fill="#6b7280"
           >
             {t.label}
@@ -232,7 +241,7 @@ export function TypeCurveChart({
             x={xScale(t)}
             y={ribbonArea.y + ribbonArea.h + 12}
             textAnchor="middle"
-            fontSize="10"
+            fontSize={FS.tick}
             fill="#6b7280"
           >
             {t}
@@ -335,7 +344,7 @@ export function TypeCurveChart({
             stroke="#16a34a"
             strokeWidth={2}
           />
-          <text x={mainArea.x + 28} y={mainArea.y + 15} fontSize="10" fill="#374151">
+          <text x={mainArea.x + 28} y={mainArea.y + 15} fontSize={FS.legend} fill="#374151">
             vs {compareLabel}
           </text>
         </g>
@@ -355,7 +364,7 @@ export function TypeCurveChart({
               strokeWidth={2}
               strokeDasharray="7 5"
             />
-            <text x={mainArea.x + 28} y={ly + 3} fontSize="10" fill="#374151">
+            <text x={mainArea.x + 28} y={ly + 3} fontSize={FS.legend} fill="#374151">
               {dashedOverlayLabel}
             </text>
           </g>
@@ -380,7 +389,7 @@ export function TypeCurveChart({
             y={ribbonArea.y + ribbonArea.h / 2}
             textAnchor="end"
             dominantBaseline="middle"
-            fontSize="9"
+            fontSize={FS.ribbon}
             fill="#6b7280"
           >
             well count
@@ -389,7 +398,7 @@ export function TypeCurveChart({
           <text
             x={ribbonArea.x + ribbonArea.w + 2}
             y={ribbonArea.y + 8}
-            fontSize="9"
+            fontSize={FS.ribbon}
             fill="#6b7280"
           >
             {Math.max(...series.well_count)}
@@ -397,7 +406,7 @@ export function TypeCurveChart({
           <text
             x={ribbonArea.x + ribbonArea.w + 2}
             y={ribbonArea.y + ribbonArea.h - 2}
-            fontSize="9"
+            fontSize={FS.ribbon}
             fill="#6b7280"
           >
             0
@@ -412,7 +421,7 @@ export function TypeCurveChart({
           y={6}
           dominantBaseline="hanging"
           textAnchor="middle"
-          fontSize="12"
+          fontSize={FS.title}
           fontWeight="600"
           fill="#1f2937"
         >
@@ -425,7 +434,7 @@ export function TypeCurveChart({
         x={mainArea.x + mainArea.w / 2}
         y={height - 4}
         textAnchor="middle"
-        fontSize="11"
+        fontSize={FS.axis}
         fill="#374151"
       >
         {xLabel}
@@ -435,7 +444,7 @@ export function TypeCurveChart({
         y={mainArea.y + mainArea.h / 2}
         transform={`rotate(-90 14 ${mainArea.y + mainArea.h / 2})`}
         textAnchor="middle"
-        fontSize="11"
+        fontSize={FS.axis}
         fill="#374151"
       >
         {yLabel}

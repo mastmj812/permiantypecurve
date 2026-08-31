@@ -37,7 +37,7 @@ interface Props {
   xMaxOverride?: number;
 }
 
-const PAD = { top: 16, right: 16, bottom: 36, left: 56 };
+const PAD = { top: 16, right: 18, bottom: 42, left: 64 };
 
 export function DeclineChart({
   history,
@@ -106,7 +106,7 @@ export function DeclineChart({
             y={yScale(t.value)}
             textAnchor="end"
             dominantBaseline="middle"
-            fontSize="10"
+            fontSize="12"
             fill="#6b7280"
           >
             {t.label}
@@ -128,7 +128,7 @@ export function DeclineChart({
             x={xScale(t)}
             y={plotArea.y + plotArea.h + 14}
             textAnchor="middle"
-            fontSize="10"
+            fontSize="12"
             fill="#6b7280"
           >
             {t}
@@ -183,7 +183,7 @@ export function DeclineChart({
         x={plotArea.x + plotArea.w / 2}
         y={height - 4}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fill="#374151"
       >
         {xLabel}
@@ -193,7 +193,7 @@ export function DeclineChart({
         y={plotArea.y + plotArea.h / 2}
         transform={`rotate(-90 12 ${plotArea.y + plotArea.h / 2})`}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fill="#374151"
       >
         {yLabel}

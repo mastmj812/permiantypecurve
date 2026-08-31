@@ -378,18 +378,18 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           )}
 
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 12 }}>
-            <label style={{ fontSize: 12 }}>
+            <label style={{ fontSize: 14 }}>
               codename{" "}
               <input value={cfg.codename} size={18}
                 onChange={(e) => edit({ codename: e.target.value })} />
             </label>
-            <label style={{ fontSize: 12 }}>
+            <label style={{ fontSize: 14 }}>
               curve months{" "}
               <input type="number" value={cfg.curve_months} min={12} max={600} step={12}
                 style={{ width: 70 }}
                 onChange={(e) => edit({ curve_months: Number(e.target.value) })} />
             </label>
-            <span style={{ fontSize: 12 }}>
+            <span style={{ fontSize: 14 }}>
               levels{" "}
               {ALL_LEVELS.map((lv) => (
                 <label key={lv} style={{ marginRight: 6 }}>
@@ -398,7 +398,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                 </label>
               ))}
             </span>
-            <label style={{ fontSize: 12 }}>
+            <label style={{ fontSize: 14 }}>
               prepared by{" "}
               <input value={cfg.prepared_by} size={12}
                 onChange={(e) => edit({ prepared_by: e.target.value })} />
@@ -408,20 +408,20 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           <h4 style={{ margin: "10px 0 4px" }}>
             Zones{" "}
             <button type="button" className="link-btn"
-              style={{ fontWeight: 400, fontSize: 11 }}
+              style={{ fontWeight: 400, fontSize: 13 }}
               disabled={cfg.zones.length < 2}
               title="reorder zones shallow → deep by each zone's shallowest bench"
               onClick={sortZonesStrat}>
               sort stratigraphic
             </button>
           </h4>
-          <p className="muted" style={{ fontSize: 11, margin: "0 0 6px" }}>
+          <p className="muted" style={{ margin: "0 0 6px" }}>
             Zone names ship to Blue Ox verbatim (≤26 chars, stable across re-drops).
             Curves may come from any deal. Benches = narvi formation codes mapped into
             the zone (comma-separated, e.g. WCA_1, WCA_2). Row order = tab order in
             the exported workbook (▲▼ or sort stratigraphic).
           </p>
-          <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+          <table style={{ width: "100%", fontSize: 14, borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ textAlign: "left" }}>
                 <th />
@@ -464,7 +464,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                       </select>
                       {crossDeal && (
                         <span className="muted" title="curve assigned to another deal — allowed"
-                          style={{ marginLeft: 4, fontSize: 10 }}>
+                          style={{ marginLeft: 4, fontSize: 12 }}>
                           ↗ cross-deal
                         </span>
                       )}
@@ -518,7 +518,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           {scopeOpen != null && cfg.zones[scopeOpen] && (
             <div
               style={{
-                margin: "4px 0 6px", padding: "6px 8px", fontSize: 12,
+                margin: "4px 0 6px", padding: "6px 8px", fontSize: 14,
                 border: "1px solid var(--line, #e5e7eb)", borderRadius: 5,
               }}
             >
@@ -569,7 +569,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                   </label>
                 );
               })}
-              <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+              <p className="muted" style={{ margin: "4px 0 0" }}>
                 unchecking a scenario narrows this zone to the ones still
                 checked; the same bench may then carry a different curve in
                 another zone scoped to the other scenarios (west/east splits).
@@ -596,12 +596,12 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
 
           <h4 style={{ margin: "14px 0 4px" }}>narvi scenarios</h4>
           {scenarioError && (
-            <div className="alert alert-error" style={{ fontSize: 11 }}>{scenarioError}</div>
+            <div className="alert alert-error" style={{ fontSize: 13 }}>{scenarioError}</div>
           )}
           {scenarios.length === 0 && !scenarioError && (
-            <p className="muted" style={{ fontSize: 11 }}>loading scenario list…</p>
+            <p className="muted">loading scenario list…</p>
           )}
-          <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 12 }}>
+          <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 14 }}>
             {scenarios.map((s) => {
               const checked = cfg.narvi_selections.some(
                 (x) => x.deal_id === s.deal_id && x.scenario_id === s.scenario_id,
@@ -661,7 +661,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
             onClick={() => window.open(`#/deals/${deal.id}/dossier`, "_blank")}>
             Dossier preview
           </button>
-          {dirty && <span className="muted" style={{ fontSize: 11 }}>unsaved changes</span>}
+          {dirty && <span className="muted">unsaved changes</span>}
         </footer>
       </div>
     </div>,

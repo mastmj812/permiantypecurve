@@ -528,7 +528,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
         >
           <h3 style={{ display: "flex", alignItems: "center", gap: 12 }}>
             <span>Observed vs forecast (QC)</span>
-            <span className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
+            <span className="muted" style={{ fontWeight: 400 }}>
               empirical bands from production_monthly; bold line is the
               forecast-aggregated fitted P50
             </span>
@@ -688,7 +688,7 @@ export function TypeCurveWellsPage({ typeCurveId, onExit }: Props) {
               </button>
             </header>
             <div className="modal-body" style={{ display: "grid", gap: 12 }}>
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="muted" style={{ fontSize: 14 }}>
                 The reason lands on the curve&apos;s build-up sheet
                 (post-save removal).
               </span>

@@ -24,7 +24,7 @@ export function RiskingBadge({
         borderRadius: 10,
         background: "#fef3c7",
         color: "#b45309",
-        fontSize: 11,
+        fontSize: 13,
         fontWeight: 600,
         whiteSpace: "nowrap",
       }}

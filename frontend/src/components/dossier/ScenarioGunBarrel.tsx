@@ -25,7 +25,7 @@ interface Point {
   formation: string | null;
 }
 
-const PAD = { top: 16, right: 16, bottom: 44, left: 64 };
+const PAD = { top: 16, right: 18, bottom: 50, left: 72 };
 
 function niceTicks(min: number, max: number, target = 5): number[] {
   if (!(max > min)) return [min];
@@ -85,7 +85,7 @@ export function ScenarioGunBarrel({ wells, width, height }: Props) {
   if (points.length === 0) {
     return (
       <div style={{ width, height, display: "grid", placeItems: "center" }}>
-        <span className="muted" style={{ fontSize: 12 }}>
+        <span className="muted">
           no TVD / offset data for this scenario
         </span>
       </div>
@@ -124,8 +124,8 @@ export function ScenarioGunBarrel({ wells, width, height }: Props) {
             stroke="#e5e7eb" strokeWidth={1}
           />
           <text
-            x={PAD.left - 6} y={sy(t) + 3} textAnchor="end"
-            fontSize={10} fill="#6b7280"
+            x={PAD.left - 6} y={sy(t) + 4} textAnchor="end"
+            fontSize={12} fill="#6b7280"
           >
             {t.toLocaleString()}
           </text>
@@ -138,8 +138,8 @@ export function ScenarioGunBarrel({ wells, width, height }: Props) {
             stroke="#f3f4f6" strokeWidth={1}
           />
           <text
-            x={sx(t)} y={height - PAD.bottom + 14} textAnchor="middle"
-            fontSize={10} fill="#6b7280"
+            x={sx(t)} y={height - PAD.bottom + 15} textAnchor="middle"
+            fontSize={12} fill="#6b7280"
           >
             {t.toLocaleString()}
           </text>
@@ -156,12 +156,12 @@ export function ScenarioGunBarrel({ wells, width, height }: Props) {
       />
       <text
         x={PAD.left + plotW / 2} y={height - 6} textAnchor="middle"
-        fontSize={10} fill="#374151"
+        fontSize={12} fill="#374151"
       >
         cross-section offset (ft)
       </text>
       <text
-        x={12} y={PAD.top + plotH / 2} fontSize={10} fill="#374151"
+        x={12} y={PAD.top + plotH / 2} fontSize={12} fill="#374151"
         transform={`rotate(-90 12 ${PAD.top + plotH / 2})`}
         textAnchor="middle"
       >
@@ -205,18 +205,18 @@ export function ScenarioGunBarrel({ wells, width, height }: Props) {
       })}
 
       {/* legend: formation chips + symbology */}
-      <g transform={`translate(${PAD.left}, ${height - PAD.bottom + 22})`}>
+      <g transform={`translate(${PAD.left}, ${height - PAD.bottom + 30})`}>
         {formations.map((f, i) => (
-          <g key={f} transform={`translate(${i * 78}, 0)`}>
+          <g key={f} transform={`translate(${i * 92}, 0)`}>
             <rect
-              x={0} y={-8} width={10} height={10} rx={2}
+              x={0} y={-9} width={11} height={11} rx={2}
               fill={colorForFormation(f === "(none)" ? null : f)}
             />
-            <text x={14} y={1} fontSize={10} fill="#374151">{f}</text>
+            <text x={15} y={1} fontSize={12} fill="#374151">{f}</text>
           </g>
         ))}
         <text
-          x={plotW} y={1} textAnchor="end" fontSize={10} fill="#6b7280"
+          x={plotW} y={1} textAnchor="end" fontSize={12} fill="#6b7280"
         >
           {`PDP ● · PUD ○ · UPSIDE ☆${skipped > 0 ? ` · ${skipped} well(s) without TVD omitted` : ""}`}
         </text>

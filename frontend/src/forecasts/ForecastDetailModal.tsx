@@ -603,7 +603,7 @@ export function ForecastDetailModal({
               ►
             </button>
             {position && (
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted">
                 {position.index} of {position.total}
               </span>
             )}
@@ -994,7 +994,7 @@ function RatioDiagnostics({ row, stream }: { row: ForecastRow; stream: Stream })
         : `${beta > 0 ? "+" : "−"}${Math.abs(beta).toExponential(2)} /BBL cum oil (${beta > 0 ? "rising" : "falling"})`;
   return (
     <div>
-      <p className="muted" style={{ fontSize: 12, margin: "0 0 6px" }}>
+      <p className="muted" style={{ fontSize: 14, margin: "0 0 6px" }}>
         Arps sliders are disabled — this stream is forecast as a fitted
         ratio of cumulative oil × the oil forecast.
       </p>

@@ -29,7 +29,7 @@ export function ExclusionReasonControl({
         value={code}
         title="Exclusion reason (grouped on the build-up sheet)"
         onChange={(e) => onChange(e.target.value as ReasonCode, note)}
-        style={{ fontSize: 11 }}
+        style={{ fontSize: 13 }}
       >
         {Object.entries(REVIEW_REASON_CODES).map(([value, label]) => (
           <option key={value} value={value}>
@@ -45,7 +45,7 @@ export function ExclusionReasonControl({
         autoFocus={autoFocusNote}
         maxLength={500}
         onChange={(e) => onChange(code, e.target.value)}
-        style={{ fontSize: 11, width: 140 }}
+        style={{ fontSize: 13, width: 150 }}
       />
     </span>
   );

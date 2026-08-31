@@ -106,7 +106,7 @@ export function MapToolbar() {
       </div>
       <div className="toolbar-group">
         <span className="toolbar-label">Acreage:</span>
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted">
           {polygonCount === 0
             ? "no shapefile uploaded"
             : `${polygonCount} polygon${polygonCount === 1 ? "" : "s"}`}
@@ -138,7 +138,7 @@ export function MapToolbar() {
           />
           Sticks
         </label>
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted">
           {narviDealIds.length === 0
             ? "no deals selected"
             : `${narviDealIds.length} deal${narviDealIds.length === 1 ? "" : "s"}${

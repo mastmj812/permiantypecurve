@@ -360,7 +360,7 @@ export function InspectModal({ api10s, onClose }: InspectModalProps) {
                 />
                 <label
                   className="muted"
-                  style={{ fontSize: 11, display: "inline-flex", gap: 4 }}
+                  style={{ display: "inline-flex", gap: 4 }}
                   title="Unfiltered wells of the footprint you drew (any formation/status, map filters ignored) — greyed, display-only, never staged. Falls back to a 3,000-ft radius when the inspected set wasn't drawn."
                 >
                   <input

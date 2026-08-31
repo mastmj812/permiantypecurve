@@ -157,11 +157,11 @@ function Api10Section({
         placeholder="paste api10s (one per line or comma-separated)"
         rows={5}
         spellCheck={false}
-        style={{ width: "100%", fontFamily: "monospace", fontSize: 11 }}
+        style={{ width: "100%", fontFamily: "monospace", fontSize: 13 }}
       />
       <div
         className="muted"
-        style={{ fontSize: 11, marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}
+        style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}
       >
         {parsed.length === 0
           ? <span>no api10s parsed</span>
