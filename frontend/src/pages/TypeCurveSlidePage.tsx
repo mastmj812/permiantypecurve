@@ -244,7 +244,7 @@ export function TypeCurveSlidePage({
           the SlideMap (via key) so the captured snapshot reflects
           the choice. */}
       <div className="slide-preview-controls">
-        <span className="muted" style={{ fontSize: 11 }}>Map overlays:</span>
+        <span className="muted">Map overlays:</span>
         <label className="chk-inline">
           <input
             type="checkbox"
@@ -269,7 +269,7 @@ export function TypeCurveSlidePage({
           />
           Acreage
         </label>
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted">
           — the map is live: drag / scroll-zoom to frame it; the export
           captures the current view
         </span>

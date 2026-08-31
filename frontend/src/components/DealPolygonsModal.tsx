@@ -158,7 +158,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                 if (f) void handleUpload(f);
               }}
             />
-            <span className="muted" style={{ fontSize: 11 }}>
+            <span className="muted">
               Upload a shapefile .zip (.shp + .dbf + .prj) or a GeoPackage
               (.gpkg). Each feature becomes one polygon, shown on the Map and
               Review tabs. Re-uploading a file with the same name replaces its
@@ -188,7 +188,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                 marginBottom: 8,
               }}
             >
-              <span className="muted" style={{ fontSize: 11 }}>
+              <span className="muted">
                 {visibleCount} of {groups.length} shapefiles shown
               </span>
               <button
@@ -248,7 +248,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                     />
                     <strong>{sourceFile}</strong>
                   </label>
-                  <span className="muted" style={{ fontSize: 11 }}>
+                  <span className="muted">
                     {rows.length} polygon{rows.length === 1 ? "" : "s"}
                     {!visible && " · hidden"}
                   </span>
@@ -280,7 +280,7 @@ export function DealPolygonsModal({ onClose }: Props) {
                           <pre
                             style={{
                               margin: 0,
-                              fontSize: 10,
+                              fontSize: 12,
                               maxWidth: 320,
                               maxHeight: 80,
                               overflow: "auto",

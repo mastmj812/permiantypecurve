@@ -353,13 +353,13 @@ export function DealDossierPage({ dealId }: Props) {
             />
           </span>
         )}
-        <span className="muted" style={{ fontSize: 11, marginLeft: 12 }}>
+        <span className="muted" style={{ marginLeft: 12 }}>
           maps are live — drag / scroll-zoom to frame each shot; the export
           captures the current views
         </span>
-        {error && <span style={{ color: "#dc2626", fontSize: 12, marginLeft: 12 }}>{error}</span>}
+        {error && <span style={{ color: "#dc2626", fontSize: 14, marginLeft: 12 }}>{error}</span>}
         {notice && !error && (
-          <span style={{ color: "#15803d", fontSize: 12, marginLeft: 12 }}>{notice}</span>
+          <span style={{ color: "#15803d", fontSize: 14, marginLeft: 12 }}>{notice}</span>
         )}
       </div>
 
@@ -368,12 +368,12 @@ export function DealDossierPage({ dealId }: Props) {
       {overview && (
         <section style={{ marginTop: 16 }}>
           <h1 className="slide-title">Curve assignment overview</h1>
-          <p className="muted" style={{ margin: "2px 0 6px", fontSize: 13 }}>
+          <p className="muted" style={{ margin: "2px 0 6px", fontSize: 15 }}>
             every selected scenario on one map — planned wells colored by
             the type curve their zone assigns under the saved config; gray
             = PDP context or a well no zone captures
           </p>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "0 0 6px", fontSize: 12 }}>
+          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "0 0 6px", fontSize: 14 }}>
             {cfg.zones.map((z, i) => (
               <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
                 <span style={{
@@ -411,7 +411,7 @@ export function DealDossierPage({ dealId }: Props) {
       {scenarios?.map((sd, i) => (
         <section key={`${sd.deal_id}/${sd.scenario_id}`} style={{ marginTop: 20 }}>
           <h1 className="slide-title">{sd.name ?? sd.scenario_id}</h1>
-          <p className="muted" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+          <p className="muted" style={{ margin: "2px 0 8px", fontSize: 15 }}>
             {scenarioSubtitle(sd)}
           </p>
           <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
@@ -450,7 +450,7 @@ export function DealDossierPage({ dealId }: Props) {
       {comparisonError && (
         <section style={{ marginTop: 20 }}>
           <h1 className="slide-title">Type Curve vs Novi ML</h1>
-          <p style={{ color: "#dc2626", fontSize: 13 }}>
+          <p style={{ color: "#dc2626", fontSize: 15 }}>
             comparison unavailable — {comparisonError}
           </p>
         </section>
@@ -470,7 +470,7 @@ export function DealDossierPage({ dealId }: Props) {
             <h1 className="slide-title">
               {z.zone_name} — Type Curve vs Novi ML
             </h1>
-            <p className="muted" style={{ fontSize: 13, maxWidth: 900 }}>
+            <p className="muted" style={{ fontSize: 15, maxWidth: 900 }}>
               no comparison: none of the zone&apos;s{" "}
               {z.n_wells_no_set} planned well
               {z.n_wells_no_set === 1 ? "" : "s"} has a representative
@@ -685,7 +685,7 @@ function NoviComparisonSection({ zone, idx }: NoviComparisonSectionProps) {
         {zone.zone_name} — Type Curve vs Novi ML (n={zone.n_sticks}:{" "}
         {zone.n_pud} PUD / {zone.n_res} RES)
       </h1>
-      <p className="muted" style={{ margin: "2px 0 8px", fontSize: 13 }}>
+      <p className="muted" style={{ margin: "2px 0 8px", fontSize: 15 }}>
         {comparisonSubtitle(zone)}
       </p>
       <div className="slide-panel" data-dossier-panel={`n${idx}_figure`}>

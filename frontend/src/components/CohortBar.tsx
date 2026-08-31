@@ -163,13 +163,13 @@ export function CohortBar() {
         </div>
         <div className="cohort-bar-actions">
           {dupCount > 0 && (
-            <span className="muted" style={{ fontSize: 11 }}>
+            <span className="muted">
               {dupCount} staged well{dupCount === 1 ? "" : "s"} already in TC
               (will be ignored)
             </span>
           )}
           {addErr && (
-            <span className="alert alert-error" style={{ fontSize: 11 }}>
+            <span className="alert alert-error" style={{ fontSize: 13 }}>
               {addErr}
             </span>
           )}
@@ -208,7 +208,7 @@ export function CohortBar() {
           >
             + New cohort
           </button>
-          <span className="muted" style={{ fontSize: 11 }}>
+          <span className="muted">
             no cohort active — current selection will forecast directly
           </span>
         </div>
@@ -517,7 +517,7 @@ function CohortOverflow({
         Rename
       </button>
       <div className="cohort-overflow-deal">
-        <label className="muted" style={{ fontSize: 11 }}>
+        <label className="muted">
           Deal
         </label>
         <select
@@ -639,7 +639,7 @@ function NewCohortModal({
               style={{ marginTop: 4 }}
             />
             {nameTaken && (
-              <span className="muted err" style={{ fontSize: 11 }}>
+              <span className="muted err">
                 A cohort with this name already exists.
               </span>
             )}

@@ -261,7 +261,7 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
         <div>
           <strong>Build-up — {cohort.name}</strong>
           {preview && !preview.no_aoi && (
-            <span className="muted" style={{ marginLeft: 8, fontSize: 11 }}>
+            <span className="muted" style={{ marginLeft: 8 }}>
               universe {preview.universe_count}
               {preview.universe_truncated ? " (truncated!)" : ""} ·{" "}
               {preview.aoi_polygon_count} AOI polygon
@@ -339,7 +339,7 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
             </div>
           )}
           {error && (
-            <div className="alert alert-error" style={{ fontSize: 11 }}>
+            <div className="alert alert-error" style={{ fontSize: 13 }}>
               {error}
             </div>
           )}
@@ -410,7 +410,7 @@ export function BuildupDrawer({ onClose }: { onClose: () => void }) {
                         {r.reason_label && (
                           <span
                             className="muted"
-                            style={{ marginLeft: 4, fontSize: 10 }}
+                            style={{ marginLeft: 4, fontSize: 12 }}
                             title={r.note ?? undefined}
                           >
                             {r.reason_label}

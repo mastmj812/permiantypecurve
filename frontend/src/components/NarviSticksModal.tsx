@@ -155,7 +155,7 @@ export function NarviSticksModal({ onClose }: Props) {
                 }}
               >
                 {shown.length === 0 && (
-                  <p className="muted" style={{ fontSize: 11, margin: 0 }}>
+                  <p className="muted" style={{ margin: 0 }}>
                     no narvi deals match “{filter}”
                   </p>
                 )}
@@ -171,7 +171,7 @@ export function NarviSticksModal({ onClose }: Props) {
                       onChange={(e) => toggleDeal(d.dealId, e.target.checked)}
                     />
                     {d.dealId}
-                    <span className="muted" style={{ fontSize: 11 }}>
+                    <span className="muted">
                       {d.wells} wells
                       {d.scenarios > 1 ? ` · ${d.scenarios} scenarios` : ""}
                     </span>
@@ -181,7 +181,7 @@ export function NarviSticksModal({ onClose }: Props) {
 
               {narviDealIds.length > 0 && (
                 <>
-                  <p className="muted" style={{ fontSize: 11, marginTop: 0 }}>
+                  <p className="muted" style={{ marginTop: 0 }}>
                     {narviDealIds.length} deal
                     {narviDealIds.length === 1 ? "" : "s"} selected. Planned
                     sticks only (PUD / UPSIDE) — existing producers are the
@@ -197,19 +197,19 @@ export function NarviSticksModal({ onClose }: Props) {
                   )}
 
                   <div style={{ marginBottom: 8 }}>
-                    <strong style={{ fontSize: 12 }}>
+                    <strong style={{ fontSize: 14 }}>
                       Benches
                       {narviSticks ? ` (${narviSticks.wells.length} planned wells)` : ""}
                     </strong>
                     {!narviSticks && (
-                      <p className="muted" style={{ fontSize: 11 }}>
+                      <p className="muted">
                         {showNarviSticks
                           ? "loading sticks…"
                           : "enable “Show on map” to load benches"}
                       </p>
                     )}
                     {narviSticks && benchKeys.length === 0 && (
-                      <p className="muted" style={{ fontSize: 11 }}>
+                      <p className="muted">
                         no planned sticks in the selected deals
                       </p>
                     )}
@@ -242,7 +242,7 @@ export function NarviSticksModal({ onClose }: Props) {
                             }}
                           />
                           {key}
-                          <span className="muted" style={{ fontSize: 11 }}>
+                          <span className="muted">
                             {n} well{n === 1 ? "" : "s"}
                           </span>
                         </label>

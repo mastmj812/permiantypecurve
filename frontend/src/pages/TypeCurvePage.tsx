@@ -1067,7 +1067,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 Projected EUR per 1,000 lateral ft ({units.cum})
                 <span
                   className="muted"
-                  style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}
+                  style={{ fontWeight: 400, marginLeft: 8 }}
                   title="Each cell: Arps fit to that percentile's rate series, projected to 50 years (or economic limit). Empty cell = series too short to fit."
                 >
                   50-yr Arps projection per percentile
@@ -1126,7 +1126,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 cleanStream?.fitted && (
                   <>
                     {streamMul !== 1.0 && (
-                      <p className="muted" style={{ margin: "4px 0 0", fontSize: 11 }}>
+                      <p className="muted" style={{ margin: "4px 0 0" }}>
                         tweak panel edits the pre-risking fit — the preview
                         line and EUR above already include ×{streamMul.toFixed(2)}
                       </p>
@@ -1166,7 +1166,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   Probit — {stream.charAt(0).toUpperCase() + stream.slice(1)} EUR / ft
                   <span
                     className="muted"
-                    style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}
+                    style={{ fontWeight: 400, marginLeft: 8 }}
                     title="Lognormal probit of per-well 50-yr EUR / lateral_ft for the wells in scope. The vertical Type Curve line is the displayed fit's EUR / ft."
                   >
                     per-well distribution vs. type curve
@@ -1174,7 +1174,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 </span>
                 <label
                   className="chk-inline"
-                  style={{ fontSize: 12, fontWeight: 400 }}
+                  style={{ fontWeight: 400 }}
                   title="When checked, the probit chart appears bottom-right on each stream slide of the PowerPoint export (oil/gas/water). The map shrinks to fit."
                 >
                   <input
@@ -1531,7 +1531,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             <button
               type="button"
               className="link-btn"
-              style={{ fontSize: 11, textAlign: "left" }}
+              style={{ fontSize: 13, textAlign: "left" }}
               title="Open these wells in the Review tab to QC the global forecasts (probit, Novi divergence, per-well fits) before saving a new version. No re-fit runs — Review only fits on the map-tab Forecast button."
               onClick={() => {
                 const st = useMapStore.getState();
@@ -1766,7 +1766,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                   </button>
                   <a
                     className="link-btn"
-                    style={{ fontSize: 11, marginLeft: 8 }}
+                    style={{ fontSize: 13, marginLeft: 8 }}
                     href={`#/type-curves/${tc.id}/wells`}
                     title="Open the wells this curve was derived from"
                   >
@@ -2108,7 +2108,7 @@ function RatioModePanel({
           ratio vs cum oil
         </span>
       </div>
-      <p className="muted" style={{ margin: "4px 0 6px", fontSize: 12 }}>
+      <p className="muted" style={{ margin: "4px 0 6px", fontSize: 14 }}>
         Arps sliders are disabled — this stream is published as a fitted
         ratio of cumulative oil × the TC oil stream.
       </p>
@@ -2161,7 +2161,7 @@ function RatioStat({ label, value }: { label: string; value: string }) {
 // "Add staged" to stamp the AOI, then re-aggregate from Review.
 function BuildupStatusLine({ versionOf }: { versionOf: string | null }) {
   const draft = useMapStore((s) => s.buildupDraft);
-  const style = { fontSize: 11, marginTop: 8, marginBottom: 4 };
+  const style = { marginTop: 8, marginBottom: 4 };
   if (!draft) {
     return (
       <div className="muted" style={style}>

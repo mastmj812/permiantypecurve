@@ -691,17 +691,17 @@ export function ReviewMap({ forecasts, excludedApi10s, formationFilter }: Props)
       />
       <header style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 6 }}>
         <strong>Map</strong>
-        <span className="muted" style={{ fontSize: 11 }}>
+        <span className="muted">
           wells colored by oil EUR / lateral ft — hover for well info
         </span>
         {error && <span className="muted err">{error}</span>}
         {blocksError && (
-          <span className="muted err" style={{ fontSize: 11 }}>
+          <span className="muted err">
             blocks: {blocksError}
           </span>
         )}
         {sectionsError && (
-          <span className="muted err" style={{ fontSize: 11 }}>
+          <span className="muted err">
             sections: {sectionsError}
           </span>
         )}

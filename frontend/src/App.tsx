@@ -267,7 +267,7 @@ export function App() {
           <div className="app-user">
             <HealthBadge />
             {tcAddWellsMode && (
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="muted" style={{ fontSize: 14 }}>
                 adding wells to <strong>{tcAddWellsMode.tcName}</strong>
               </span>
             )}

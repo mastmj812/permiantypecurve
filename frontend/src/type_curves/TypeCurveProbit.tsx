@@ -225,7 +225,7 @@ export function TypeCurveProbit({
           x={width / 2}
           y={height / 2}
           textAnchor="middle"
-          fontSize="12"
+          fontSize="14"
           fill="#6b7280"
         >
           Need ≥3 wells with valid EUR/ft for probit ({wellEurPerFt.length} available)
@@ -323,7 +323,7 @@ export function TypeCurveProbit({
               x={PAD.left + plotW + 6}
               y={y}
               dominantBaseline="middle"
-              fontSize="10"
+              fontSize="12"
               fill="#6b7280"
             >
               {lab.label}
@@ -345,7 +345,7 @@ export function TypeCurveProbit({
             x={xScale(t)}
             y={PAD.top + plotH + 14}
             textAnchor="middle"
-            fontSize="10"
+            fontSize="12"
             fill="#6b7280"
           >
             {fmtTick(t)}
@@ -425,61 +425,61 @@ export function TypeCurveProbit({
         x={PAD.left + plotW / 2}
         y={height - 4}
         textAnchor="middle"
-        fontSize="11"
+        fontSize="13"
         fill="#374151"
       >
         {`${stream.charAt(0).toUpperCase()}${stream.slice(1)} EUR / ft (${unitLabel})`}
       </text>
 
       <g transform={`translate(${PAD.left + 8}, ${PAD.top + 8})`}>
-        <rect width="140" height={prevVal != null ? 106 : 90} fill="#ffffff" stroke="#e5e7eb" />
-        <circle cx={10} cy={12} r={4} fill="#16a34a" />
-        <text x={20} y={15} fontSize="10" fill="#374151">
+        <rect width="168" height={prevVal != null ? 124 : 104} fill="#ffffff" stroke="#e5e7eb" />
+        <circle cx={10} cy={14} r={4} fill="#16a34a" />
+        <text x={20} y={17} fontSize="12" fill="#374151">
           Wells (n={n})
         </text>
-        <line x1={4} y1={28} x2={16} y2={28} stroke="#6b7280" strokeWidth={1} />
-        <text x={20} y={31} fontSize="10" fill="#374151">
+        <line x1={4} y1={33} x2={16} y2={33} stroke="#6b7280" strokeWidth={1} />
+        <text x={20} y={36} fontSize="12" fill="#374151">
           Probit Fit
         </text>
         <line
           x1={4}
-          y1={44}
+          y1={52}
           x2={16}
-          y2={44}
+          y2={52}
           stroke="#ea580c"
           strokeWidth={1.25}
         />
-        <text x={20} y={47} fontSize="10" fill="#374151">
+        <text x={20} y={55} fontSize="12" fill="#374151">
           Wells Median ({wellMedian.toFixed(1)})
         </text>
         <line
           x1={4}
-          y1={60}
+          y1={71}
           x2={16}
-          y2={60}
+          y2={71}
           stroke="#f59e0b"
           strokeWidth={1.0}
           strokeDasharray="3 2"
         />
-        <text x={20} y={63} fontSize="10" fill="#374151">
+        <text x={20} y={74} fontSize="12" fill="#374151">
           Wells Avg ({wellMean.toFixed(1)})
         </text>
-        <line x1={4} y1={76} x2={16} y2={76} stroke="#0f172a" strokeWidth={2} />
-        <text x={20} y={79} fontSize="10" fill="#374151">
+        <line x1={4} y1={90} x2={16} y2={90} stroke="#0f172a" strokeWidth={2} />
+        <text x={20} y={93} fontSize="12" fill="#374151">
           {tcVal != null ? `Type Curve (${tcVal.toFixed(1)})` : "Type Curve (—)"}
         </text>
         {prevVal != null && (
           <>
             <line
               x1={4}
-              y1={92}
+              y1={109}
               x2={16}
-              y2={92}
+              y2={109}
               stroke="#6b7280"
               strokeWidth={1.5}
               strokeDasharray="2 3"
             />
-            <text x={20} y={95} fontSize="10" fill="#374151">
+            <text x={20} y={112} fontSize="12" fill="#374151">
               {prevLabel ? `Prev: ${prevLabel}` : "Previous TC"}
             </text>
           </>
