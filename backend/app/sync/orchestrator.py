@@ -181,10 +181,15 @@ def _reconcile_production_deletions(
     handful on a routine night) and delete rows outside it. Returns the
     number of rows deleted.
     """
+    # .tuples().all() so dict() sees a plain list of pairs — passing the
+    # Result object directly takes dict()'s MAPPING path (Result has a
+    # .keys() method) and crashes with "object is not subscriptable".
     local_counts: dict[str, int] = dict(
         session.execute(
             select(ProductionMonthly.api10, func.count()).group_by(ProductionMonthly.api10)
-        ).tuples()
+        )
+        .tuples()
+        .all()
     )
     targets = _production_reconcile_targets(local_counts, fetched_counts)
     if not targets:
