@@ -4,11 +4,23 @@ Holds the SQLAlchemy engine + sessionmaker pair for the warehouse,
 mirroring ``app/db/session.py`` but pointed at a different DSN and
 locked to read-only.
 
-Read-only is enforced at the Postgres connection level via
-``default_transaction_read_only=on``. Any attempted INSERT / UPDATE /
-DELETE against the warehouse raises ``ReadOnlySqlTransaction`` from
-Postgres with a clear error message — much harder to violate by
-accident than a code-side discipline.
+Read-only is enforced at the Postgres level via a per-transaction
+``SET TRANSACTION READ ONLY``. Any attempted INSERT / UPDATE / DELETE
+against the warehouse raises ``ReadOnlySqlTransaction`` from Postgres
+with a clear error message — much harder to violate by accident than a
+code-side discipline.
+
+The DSN points at Supabase's Supavisor TRANSACTION pooler (port 6543)
+— the mandated app-tier endpoint (the 5432 session pooler is reserved
+for ETL; apps stranding sessions there on backend reloads is the
+15-slot-hang failure mode). Transaction pooling constrains how GUCs
+can be applied: server connections are multiplexed between
+transactions, so a session-level ``SET`` issued at connect time lands
+on whichever server connection happened to serve it and silently does
+not follow this client. Hence the per-transaction "begin" hook below
+(erebor's ``backend/app/db.py`` is the reference implementation) and
+``prepare_threshold=None`` (server-side prepared statements target a
+specific server connection and break under multiplexing).
 
 The engine is created lazily (on first ``get_warehouse_session`` call)
 so the app still boots when ``WAREHOUSE_DATABASE_URL`` is unset.
@@ -20,7 +32,7 @@ from collections.abc import Iterator
 from functools import lru_cache
 
 from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
@@ -49,6 +61,11 @@ def _engine() -> Engine:
             # Fail fast if the warehouse is unreachable rather than hanging
             # on the default ~75s TCP timeout.
             "connect_timeout": 5,
+            # Mandatory on the 6543 transaction pooler: psycopg's automatic
+            # server-side prepared statements pin to one server connection,
+            # which the pooler swaps between transactions -> "prepared
+            # statement does not exist". Harmless on direct connections.
+            "prepare_threshold": None,
             # Keep long, quiet reads alive through a connection pooler.
             "keepalives": 1,
             "keepalives_idle": 30,
@@ -57,33 +74,29 @@ def _engine() -> Engine:
         },
     )
 
-    @event.listens_for(engine, "connect")
-    def _warehouse_session_setup(dbapi_conn, _record):
-        # Apply per-session GUCs explicitly. We can't use libpq startup
-        # `options` for these because a transaction pooler (Supabase/pgbouncer)
-        # strips it; and we run them in autocommit so they persist for the
-        # connection's whole life regardless of later rollbacks:
-        #  - default_transaction_read_only: every txn is read-only — writes raise
-        #    ReadOnlySqlTransaction (SQLSTATE 25006). Safer than code discipline.
-        #  - statement_timeout=0: large curated.* reads (e.g. production_forecast,
-        #    ~17M rows) must not hit a hosted instance's short default timeout.
-        #  - search_path includes `extensions` so PostGIS types resolve (Supabase
-        #    installs PostGIS into the extensions schema).
-        prev = dbapi_conn.autocommit
-        dbapi_conn.autocommit = True
-        try:
-            with dbapi_conn.cursor() as cur:
-                cur.execute("SET default_transaction_read_only = on")
-                cur.execute("SET statement_timeout = 0")
-                cur.execute("SET search_path TO public, extensions")
-        finally:
-            dbapi_conn.autocommit = prev
+    @event.listens_for(engine, "begin")
+    def _warehouse_txn_setup(conn: Connection) -> None:
+        # Per-TRANSACTION GUCs — the only kind that reliably stick through
+        # the 6543 transaction pooler (session-level SETs land on a server
+        # connection the pooler may hand to someone else; Supavisor forwards
+        # startup `options` search_path but drops statement_timeout and
+        # read-only). SET TRANSACTION / SET LOCAL scope to the current
+        # transaction, which the pooler pins to one server connection:
+        #  - READ ONLY: writes raise ReadOnlySqlTransaction (SQLSTATE 25006).
+        #  - statement_timeout=0: large curated.* streams (production ~4M
+        #    rows, production_forecast ~19M) must not be killed mid-read;
+        #    SET LOCAL overrides the hosted platform default for this txn.
+        #  - search_path includes `extensions` so PostGIS types resolve
+        #    (Supabase installs PostGIS into the extensions schema).
+        conn.exec_driver_sql("SET TRANSACTION READ ONLY")
+        conn.exec_driver_sql("SET LOCAL statement_timeout = 0")
+        conn.exec_driver_sql("SET LOCAL search_path TO public, extensions")
 
     return engine
 
 
 @lru_cache(maxsize=1)
-def _sessionmaker() -> sessionmaker:
+def _sessionmaker() -> sessionmaker[Session]:
     return sessionmaker(
         bind=_engine(),
         autoflush=False,

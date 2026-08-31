@@ -60,3 +60,4 @@ infra/postgres/data/
 # Operational logs from real syncs (multi-MB, regenerable).
 seed.log
 *.seed.log
+logs/
