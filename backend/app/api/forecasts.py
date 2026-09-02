@@ -231,6 +231,10 @@ class ForecastRow(BaseModel):
     well_operator: str | None = None
     well_formation: str | None = None
     well_lateral_ft: float | None = None
+    # Total proppant pumped (lbs). The Review table derives PPF
+    # (proppant lb per lateral ft) from this and well_lateral_ft —
+    # same convention as exports/well_rows.py.
+    well_proppant_lbs: float | None = None
     well_vintage_year: int | None = None
     # ISO date string. The Review tab shows this directly; vintage_year
     # is the legacy field kept for the map-tab vintage histogram which
@@ -906,6 +910,7 @@ def list_forecasts(
             Well.operator,
             Well.formation_blueox.label("formation"),
             Well.lateral_ft,
+            Well.proppant_lbs,
             Well.vintage_year,
             Well.first_prod_date,
             Well.county,
@@ -930,6 +935,7 @@ def list_forecasts(
         operator,
         formation,
         lateral_ft,
+        proppant_lbs,
         vintage_year,
         first_prod_date,
         county,
@@ -947,6 +953,7 @@ def list_forecasts(
         row.well_operator = operator
         row.well_formation = formation
         row.well_lateral_ft = float(lateral_ft) if lateral_ft is not None else None
+        row.well_proppant_lbs = float(proppant_lbs) if proppant_lbs is not None else None
         row.well_vintage_year = int(vintage_year) if vintage_year is not None else None
         row.well_first_prod_date = first_prod_date
         row.well_county = county
@@ -991,6 +998,9 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         # Save Override / Lock (PATCH splices this response back in-place).
         row.well_formation = well.formation_blueox
         row.well_lateral_ft = float(well.lateral_ft) if well.lateral_ft is not None else None
+        row.well_proppant_lbs = (
+            float(well.proppant_lbs) if well.proppant_lbs is not None else None
+        )
         row.well_vintage_year = int(well.vintage_year) if well.vintage_year is not None else None
         row.well_first_prod_date = well.first_prod_date
         row.well_county = well.county

@@ -179,6 +179,7 @@ mvtgeom AS (
     w.operator,
     w.status::text AS status,
     w.lateral_ft,
+    w.proppant_lbs,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
     ST_AsMVTGeom(
       ST_Transform(
@@ -226,6 +227,7 @@ mvtgeom AS (
     w.operator,
     w.status::text AS status,
     w.lateral_ft,
+    w.proppant_lbs,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
     ST_AsMVTGeom(
       ST_Transform(w.wellstick, 3857),

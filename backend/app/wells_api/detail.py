@@ -74,6 +74,9 @@ class WellDetailLite(BaseModel):
     basin_blueox: str | None = None
     operator: str | None
     lateral_ft: float | None
+    # Total proppant (lbs) — lets stub Review rows carry the same PPF
+    # column as forecast-joined rows.
+    proppant_lbs: float | None = None
     tvd_ft: float | None
     sh_lat: float | None
     sh_lon: float | None
@@ -145,6 +148,7 @@ _LITE_COLUMNS = (
     Well.basin_blueox,
     Well.operator,
     Well.lateral_ft,
+    Well.proppant_lbs,
     Well.tvd_ft,
     func.ST_Y(Well.sh_geom).label("sh_lat"),
     func.ST_X(Well.sh_geom).label("sh_lon"),
@@ -167,6 +171,7 @@ def _row_to_lite(r: Any) -> WellDetailLite:
         basin_blueox=r.basin_blueox,
         operator=r.operator,
         lateral_ft=float(r.lateral_ft) if r.lateral_ft is not None else None,
+        proppant_lbs=float(r.proppant_lbs) if r.proppant_lbs is not None else None,
         tvd_ft=float(r.tvd_ft) if r.tvd_ft is not None else None,
         sh_lat=r.sh_lat,
         sh_lon=r.sh_lon,

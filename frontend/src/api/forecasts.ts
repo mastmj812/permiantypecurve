@@ -116,6 +116,9 @@ export interface ForecastRow {
   // curated.wells_enriched.eur_50yr_oil_bbl. Null when Novi hasn't
   // forecasted the well.
   well_novi_oil_eur: number | null;
+  // Total proppant pumped (lbs); PPF (lb/ft) is derived client-side as
+  // well_proppant_lbs / well_lateral_ft.
+  well_proppant_lbs: number | null;
   // Water-stream provenance flag (wells.water_source): "measured" |
   // "calculated" | "indeterminate" | "insufficient" | null (no data).
   // "calculated" = the vendor water series is a formula (static WOR x

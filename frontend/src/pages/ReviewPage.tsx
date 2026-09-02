@@ -26,12 +26,14 @@ import { ForecastDetailModal } from "../forecasts/ForecastDetailModal";
 import { computeOutliers } from "../forecasts/outliers";
 import { Stat, Th, type SortDir } from "../forecasts/reviewTable";
 import {
+  buildReviewTsv,
   effDiFor,
   fmtDi,
   fmtInt,
   fmtVol,
   indexFitsByWellStream,
   median,
+  ppfOf,
 } from "../forecasts/reviewTableHelpers";
 import { ExclusionReasonControl } from "../components/ExclusionReasonControl";
 import { ReviewMap } from "../components/ReviewMap";
@@ -48,6 +50,7 @@ type SortKey =
   | "operator"
   | "first_prod_date"
   | "lateral"
+  | "ppf"
   | "eur"
   | "novi_oil_eur"
   | "eur_per_ft"
@@ -109,6 +112,8 @@ export function ReviewPage() {
   const [formationFilter, setFormationFilter] = useState<string>("all");
   const [showOnlyOutliers, setShowOnlyOutliers] = useState(false);
   const [openApi10, setOpenApi10] = useState<string | null>(null);
+  // Transient "copied N rows" note next to the copy button.
+  const [copyNote, setCopyNote] = useState<string | null>(null);
 
   // ---- Cohort transfer state (transient, stays local) ----
   // See the Autoforecast section in the right panel — status pill,
@@ -397,6 +402,7 @@ export function ReviewPage() {
         // compare is correct here without a Date parse.
         case "first_prod_date": return r.well_first_prod_date ?? "";
         case "lateral": return r.well_lateral_ft ?? 0;
+        case "ppf": return ppfOf(r) ?? 0;
         case "eur": return r.eur ?? 0;
         case "novi_oil_eur": return r.well_novi_oil_eur ?? 0;
         case "eur_per_ft":
@@ -457,6 +463,24 @@ export function ReviewPage() {
     };
   }, [oilRows, excluded, fitsByWellStream]);
 
+  async function copyTable() {
+    // Copy exactly what's on screen: current filters + sort order.
+    const tsv = buildReviewTsv(sorted, {
+      fits: fitsByWellStream,
+      excluded,
+      outliers: outliers.outlierApi10s,
+      pendingTransfer: shortApi10sSet,
+      exclusionReasons: exclusions,
+    });
+    try {
+      await navigator.clipboard.writeText(tsv);
+      setCopyNote(`copied ${sorted.length} row${sorted.length === 1 ? "" : "s"}`);
+    } catch {
+      setCopyNote("copy failed — browser blocked clipboard access");
+    }
+    window.setTimeout(() => setCopyNote(null), 3000);
+  }
+
   return (
     <div className="page page-two-col">
       <div className="review-table-wrap">
@@ -481,6 +505,16 @@ export function ReviewPage() {
             />
             outliers only
           </label>
+          <button
+            type="button"
+            className="tb-btn"
+            disabled={sorted.length === 0}
+            onClick={() => void copyTable()}
+            title="Copy the visible table (current filters + sort) as tab-separated text — paste straight into Excel"
+          >
+            copy table
+          </button>
+          {copyNote && <span className="muted">{copyNote}</span>}
           {loading && <span className="muted">loading…</span>}
         </header>
 
@@ -511,6 +545,9 @@ export function ReviewPage() {
                 </Th>
                 <Th k="lateral" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   lateral (ft)
+                </Th>
+                <Th k="ppf" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
+                  PPF (lb/ft)
                 </Th>
                 <Th k="eur" sortKey={sortKey} sortDir={sortDir} onClick={clickHeader}>
                   EUR (BBL)
@@ -606,6 +643,7 @@ export function ReviewPage() {
                     <td>{r.well_operator ?? "—"}</td>
                     <td>{r.well_first_prod_date ?? "—"}</td>
                     <td>{fmtInt(r.well_lateral_ft)}</td>
+                    <td>{fmtInt(ppfOf(r))}</td>
                     <td className={eurDivClass} title={eurDivTitle}>
                       {fmtVol(r.eur)}
                     </td>
@@ -706,7 +744,7 @@ export function ReviewPage() {
               })}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={16} className="muted" style={{ textAlign: "center" }}>
+                  <td colSpan={17} className="muted" style={{ textAlign: "center" }}>
                     {api10s.length === 0
                       ? "select wells on the map and forecast them before reviewing"
                       : "no rows match the current filters"}
@@ -984,6 +1022,7 @@ function stubRowFromWellDetail(w: WellDetailLite): ForecastRow {
     // which surface formation_blueox as `well_formation`.
     well_formation: w.formation_blueox,
     well_lateral_ft: w.lateral_ft,
+    well_proppant_lbs: w.proppant_lbs,
     well_vintage_year: w.vintage_year,
     well_first_prod_date: w.first_prod_date,
     well_county: w.county,

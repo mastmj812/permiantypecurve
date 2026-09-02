@@ -945,6 +945,17 @@ function fmtIntHtml(v: unknown): string {
   return Math.round(Number(v)).toLocaleString();
 }
 
+// PPF = proppant lb per lateral ft (exports/well_rows.py convention).
+// MVT omits null properties entirely, so either input may be undefined.
+function ppfHtml(proppantLbs: unknown, lateralFt: unknown): string {
+  const prop = Number(proppantLbs);
+  const lat = Number(lateralFt);
+  if (!Number.isFinite(prop) || !Number.isFinite(lat) || prop <= 0 || lat <= 0) {
+    return "—";
+  }
+  return `${Math.round(prop / lat).toLocaleString()} lb/ft`;
+}
+
 function buildWellPopupHtml(p: Record<string, unknown>): string {
   // Headline is the human-readable name; API10 demotes into the table.
   // Falls back to API10 in the headline when the well's name is missing
@@ -966,6 +977,7 @@ function buildWellPopupHtml(p: Record<string, unknown>): string {
         <tr><td>Status</td><td>${escHtml(p.status)}</td></tr>
         <tr><td>Vintage</td><td>${escHtml(p.vintage_year)}</td></tr>
         <tr><td>Lateral</td><td>${fmtIntHtml(p.lateral_ft)} ft</td></tr>
+        <tr><td>PPF</td><td>${ppfHtml(p.proppant_lbs, p.lateral_ft)}</td></tr>
       </table>
     </div>`;
 }
