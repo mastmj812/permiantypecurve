@@ -113,6 +113,7 @@ export interface WellDetailLite {
   basin_blueox: string | null;
   operator: string | null;
   lateral_ft: number | null;
+  proppant_lbs: number | null;
   tvd_ft: number | null;
   sh_lat: number | null;
   sh_lon: number | null;

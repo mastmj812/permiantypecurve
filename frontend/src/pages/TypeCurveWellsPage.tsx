@@ -124,6 +124,7 @@ function buildModalForecasts(row: WorkspaceWell): ForecastRow[] {
       well_operator: row.well_operator,
       well_formation: row.well_formation,
       well_lateral_ft: row.well_lateral_ft,
+      well_proppant_lbs: null,
       well_vintage_year: null,
       well_first_prod_date: row.well_first_prod_date,
       well_county: row.well_county,
