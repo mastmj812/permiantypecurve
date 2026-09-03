@@ -286,13 +286,19 @@ class NarviScenarioDetail:
     scenario_id: str
     name: str | None
     well_type: str
+    # Gunbarrel frame azimuth of record (scenario header, axial,
+    # [0, 180)) — every persisted gunbarrel_x_ft projects onto the axis
+    # 90° clockwise of it. Lets the dossier orient/label the
+    # cross-section axis (W→E vs N→S). None on legacy saves.
+    azimuth_deg: float | None
     aoi_geojson: str | None  # parcel Polygon/MultiPolygon, WGS84
     wells: tuple[NarviScenarioWellGeo, ...]
 
 
 _DETAIL_HEADER_SQL = text(
     """
-    SELECT name, well_type, ST_AsGeoJSON(aoi_geom) AS aoi_geojson
+    SELECT name, well_type, azimuth_deg,
+           ST_AsGeoJSON(aoi_geom) AS aoi_geojson
     FROM narvi.scenario
     WHERE deal_id = :deal_id AND scenario_id = :scenario_id
     """
@@ -362,6 +368,7 @@ def fetch_narvi_scenario_detail(
         scenario_id=scenario_id,
         name=header.name,
         well_type=header.well_type,
+        azimuth_deg=(float(header.azimuth_deg) if header.azimuth_deg is not None else None),
         aoi_geojson=header.aoi_geojson,
         wells=tuple(wells),
     )

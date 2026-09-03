@@ -1625,6 +1625,8 @@ class NarviScenarioDetailOut(BaseModel):
     scenario_id: str
     name: str | None
     well_type: str
+    # Gunbarrel frame azimuth (axial, [0, 180)); None on legacy saves.
+    azimuth_deg: float | None
     aoi_geojson: str | None
     wells: list[NarviWellGeoOut]
 
@@ -1648,6 +1650,7 @@ def get_narvi_scenario_detail(deal_id: str, scenario_id: str) -> NarviScenarioDe
         scenario_id=detail.scenario_id,
         name=detail.name,
         well_type=detail.well_type,
+        azimuth_deg=detail.azimuth_deg,
         aoi_geojson=detail.aoi_geojson,
         wells=[
             NarviWellGeoOut(
