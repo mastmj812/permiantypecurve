@@ -427,6 +427,7 @@ export function DealDossierPage({ dealId }: Props) {
             <div className="slide-panel" data-dossier-panel={`s${i}_gunbarrel`}>
               <ScenarioGunBarrel
                 wells={sd.wells}
+                azimuthDeg={sd.azimuth_deg}
                 width={SCENARIO_PANEL_W}
                 height={SCENARIO_PANEL_H}
               />
