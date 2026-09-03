@@ -25,6 +25,10 @@ export interface NarviScenarioDetail {
   scenario_id: string;
   name: string | null;
   well_type: string;
+  // Gunbarrel frame azimuth of record (axial, [0, 180)) — every
+  // gunbarrel_x_ft projects onto the axis 90° clockwise of it. Null on
+  // legacy saves.
+  azimuth_deg: number | null;
   aoi_geojson: string | null; // parcel Polygon/MultiPolygon, WGS84
   wells: NarviWellGeo[];
 }
