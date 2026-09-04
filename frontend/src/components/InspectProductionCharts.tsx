@@ -3,11 +3,16 @@
 // one set of axes, first-prod-aligned (x = months since first prod),
 // colored to match the gun-barrel circles (by formation).
 //
-// Toggle: plot mode (oil/gas/water streams, plus GOR/WOR ratios) and
-// normalize-per-10kft. The user asked for per-10,000-ft lateral as the
+// Toggle: plot mode (oil/gas/water streams, plus GOR/WOR ratios),
+// normalize-per-10kft, and the x-axis basis (months since first prod
+// vs calendar date). The user asked for per-10,000-ft lateral as the
 // default — the documented trap is that raw rates make longer laterals
 // look like better wells when they're really just longer. Ratio modes
 // ignore (and hide) the normalize toggle: lateral length cancels.
+// Date mode positions each point at its OWN prod month (from the
+// curves bundle's `months` dates), so wells plot on a shared calendar
+// axis and any months missing a production row show as real gaps
+// instead of silently compressing the index axis.
 
 import { useEffect, useId, useMemo, useState } from "react";
 
@@ -67,6 +72,16 @@ function streamRatio(
   return (num * scale) / denom;
 }
 
+// Absolute month index (year*12 + month-1) of an ISO "YYYY-MM-DD"
+// prod-date string. String math on purpose: `new Date("2021-07-01")`
+// parses as UTC midnight and can shift a month under a western-
+// hemisphere local timezone.
+function monthIndex(iso: string): number {
+  return Number(iso.slice(0, 4)) * 12 + (Number(iso.slice(5, 7)) - 1);
+}
+
+type XAxisMode = "months" | "date";
+
 interface WellSeries {
   api10: string;
   formation: string | null;
@@ -75,6 +90,10 @@ interface WellSeries {
   // have, so the polyline breaks cleanly across them.
   rate: Array<number | null>;
   cum: Array<number | null>;
+  // Absolute month index per point (same length as rate/cum) — the X
+  // position in date mode. From the curves bundle's own `months`
+  // dates, so a well needs no separate first-prod lookup.
+  monthIdx: number[];
 }
 
 export function InspectProductionCharts({
@@ -89,6 +108,7 @@ export function InspectProductionCharts({
 }: InspectProductionChartsProps) {
   const [mode, setMode] = useState<PlotMode>("oil");
   const [normalize, setNormalize] = useState<boolean>(true);
+  const [xAxisMode, setXAxisMode] = useState<XAxisMode>("months");
   const [curves, setCurves] = useState<
     Map<string, WellCurvesResponse> | null
   >(null);
@@ -143,6 +163,7 @@ export function InspectProductionCharts({
 
       let rate: Array<number | null>;
       let cum: Array<number | null>;
+      let monthDates: string[];
       if (mode === "gor" || mode === "wor") {
         // Index-wise zip is safe: the backend builds all three streams
         // from the same prod_rows loop, so `months` is identical across
@@ -162,6 +183,7 @@ export function InspectProductionCharts({
         cum = oil.history_cum.map((o, i) =>
           streamRatio(num.history_cum[i], o, scale),
         );
+        monthDates = oil.months;
       } else {
         const sc = resp.streams.find((s) => s.stream === mode);
         if (!sc) continue;
@@ -174,6 +196,7 @@ export function InspectProductionCharts({
           normalize && lateralFt && lateralFt > 0 ? 10_000 / lateralFt : 1;
         rate = sc.history_rate.map((v) => (v == null ? null : v * norm));
         cum = sc.history_cum.map((v) => (v == null ? null : v * norm));
+        monthDates = sc.months;
       }
 
       out.push({
@@ -183,6 +206,7 @@ export function InspectProductionCharts({
         formation: meta?.formation_blueox ?? null,
         rate,
         cum,
+        monthIdx: monthDates.map(monthIndex),
       });
     }
     return out;
@@ -251,14 +275,35 @@ export function InspectProductionCharts({
             </button>
           </div>
         )}
+        <div className="inspect-charts-control-group">
+          <span className="inspect-charts-control-label">X axis</span>
+          <button
+            type="button"
+            className={`inspect-charts-pill ${
+              xAxisMode === "months" ? "is-active" : ""
+            }`}
+            onClick={() => setXAxisMode("months")}
+          >
+            months since first prod
+          </button>
+          <button
+            type="button"
+            className={`inspect-charts-pill ${
+              xAxisMode === "date" ? "is-active" : ""
+            }`}
+            onClick={() => setXAxisMode("date")}
+          >
+            date
+          </button>
+        </div>
       </div>
 
       <div className="inspect-charts-row">
         <OverlayChart
           title={
             isRatio
-              ? `${mode.toUpperCase()} vs. months from first prod`
-              : `${mode.toUpperCase()} rate vs. months from first prod`
+              ? `${mode.toUpperCase()} vs. ${xAxisMode === "date" ? "date" : "months from first prod"}`
+              : `${mode.toUpperCase()} rate vs. ${xAxisMode === "date" ? "date" : "months from first prod"}`
           }
           yLabel={
             isRatio
@@ -269,6 +314,7 @@ export function InspectProductionCharts({
           }
           series={wellsWithData}
           accessor={(s) => s.rate}
+          xMode={xAxisMode}
           robustScale={isRatio}
           selectedApi10s={selectedApi10s}
           cohortApi10s={cohortApi10s}
@@ -280,8 +326,8 @@ export function InspectProductionCharts({
         <OverlayChart
           title={
             isRatio
-              ? `Cum ${mode.toUpperCase()} vs. months from first prod`
-              : `${mode.toUpperCase()} cum vs. months from first prod`
+              ? `Cum ${mode.toUpperCase()} vs. ${xAxisMode === "date" ? "date" : "months from first prod"}`
+              : `${mode.toUpperCase()} cum vs. ${xAxisMode === "date" ? "date" : "months from first prod"}`
           }
           yLabel={
             isRatio
@@ -292,6 +338,7 @@ export function InspectProductionCharts({
           }
           series={wellsWithData}
           accessor={(s) => s.cum}
+          xMode={xAxisMode}
           robustScale={isRatio}
           selectedApi10s={selectedApi10s}
           cohortApi10s={cohortApi10s}
@@ -312,6 +359,7 @@ function OverlayChart({
   yLabel,
   series,
   accessor,
+  xMode,
   robustScale = false,
   selectedApi10s,
   cohortApi10s,
@@ -324,6 +372,10 @@ function OverlayChart({
   yLabel: string;
   series: WellSeries[];
   accessor: (s: WellSeries) => Array<number | null>;
+  // X basis: "months" plots each point at its array index (months since
+  // first prod, the classic aligned overlay); "date" plots at the
+  // point's own absolute calendar month (WellSeries.monthIdx).
+  xMode: XAxisMode;
   // Percentile-fit the Y axis instead of max-fit. Used by the GOR/WOR
   // ratio modes, where one dirty month (near-zero oil against normal
   // gas/water) can put a 10^5–10^6 point on a linear axis and flatten
@@ -347,21 +399,33 @@ function OverlayChart({
     h: height - PAD.top - PAD.bottom,
   };
 
-  // X = max series length across the cohort (months since first
-  // prod). Auto-fit Y to the visible max (with a small headroom).
+  // X domain: months mode spans 0..max series length (months since
+  // first prod); date mode spans the earliest..latest absolute prod
+  // month across the cohort. Auto-fit Y to the visible max (with a
+  // small headroom).
+  let xMin = 0;
   let xMax = 0;
   let dataMax = 0;
   const pooled: number[] = [];
+  let first = true;
   for (const s of series) {
     const arr = accessor(s);
-    if (arr.length > xMax) xMax = arr.length;
+    if (xMode === "months") {
+      if (arr.length > xMax) xMax = arr.length;
+    } else if (s.monthIdx.length > 0) {
+      const lo = s.monthIdx[0]!;
+      const hi = s.monthIdx[s.monthIdx.length - 1]!;
+      if (first || lo < xMin) xMin = lo;
+      if (first || hi > xMax) xMax = hi;
+      first = false;
+    }
     for (const v of arr) {
       if (v == null) continue;
       if (v > dataMax) dataMax = v;
       if (robustScale) pooled.push(v);
     }
   }
-  if (xMax === 0) xMax = 1;
+  if (xMax <= xMin) xMax = xMin + 1;
 
   // Smart scaling: fit the axis to the P98 of all plotted points when
   // the true max sits well above it (dirty data), otherwise keep the
@@ -377,12 +441,15 @@ function OverlayChart({
     ? pooled.reduce((n, v) => (v > yMax ? n + 1 : n), 0)
     : 0;
 
-  const xScale = (v: number) => plot.x + (v / xMax) * plot.w;
+  const xScale = (v: number) =>
+    plot.x + ((v - xMin) / (xMax - xMin)) * plot.w;
   const yScale = (v: number) =>
     plot.y + plot.h - (v / yMax) * plot.h;
 
-  const xTicks = niceTicks(0, xMax, 6);
+  const xTicks =
+    xMode === "months" ? niceTicks(0, xMax, 6) : dateTicks(xMin, xMax, 6);
   const yTicks = niceTicks(0, yMax, 5);
+  const xTickStep = xTicks.length >= 2 ? xTicks[1]! - xTicks[0]! : 12;
 
   return (
     <svg
@@ -451,7 +518,9 @@ function OverlayChart({
             fontSize="11"
             fill="#6b7280"
           >
-            {Math.round(t)}
+            {xMode === "months"
+              ? Math.round(t)
+              : formatMonthTick(t, xTickStep)}
           </text>
         </g>
       ))}
@@ -485,11 +554,12 @@ function OverlayChart({
           let current: Array<[number, number]> = [];
           for (let i = 0; i < arr.length; i++) {
             const v = arr[i];
-            if (v == null) {
+            const x = xMode === "months" ? i : s.monthIdx[i];
+            if (v == null || x == null) {
               if (current.length > 0) segments.push(current);
               current = [];
             } else {
-              current.push([i, v]);
+              current.push([x, v]);
             }
           }
           if (current.length > 0) segments.push(current);
@@ -574,7 +644,7 @@ function OverlayChart({
         fontSize="12"
         fill="#374151"
       >
-        months since first prod
+        {xMode === "months" ? "months since first prod" : "prod month"}
       </text>
       <text
         x={14}
@@ -602,6 +672,31 @@ function quantile(values: number[], q: number): number {
   const hi = Math.ceil(pos);
   const frac = pos - lo;
   return sorted[lo]! * (1 - frac) + sorted[hi]! * frac;
+}
+
+// Calendar ticks for date mode, in absolute month-index space. Steps
+// are month-friendly (quarters, half-years, years, ...) so ticks land
+// on natural boundaries — a 12-multiple index is a January, so
+// year-step ticks label as bare years.
+const DATE_TICK_STEPS = [1, 2, 3, 6, 12, 24, 60, 120] as const;
+
+function dateTicks(minIdx: number, maxIdx: number, count: number): number[] {
+  const span = Math.max(maxIdx - minIdx, 1);
+  const step = DATE_TICK_STEPS.find((s) => span / s <= count) ?? 120;
+  const out: number[] = [];
+  for (let t = Math.ceil(minIdx / step) * step; t <= maxIdx; t += step) {
+    out.push(t);
+  }
+  return out.length > 0 ? out : [minIdx];
+}
+
+function formatMonthTick(idx: number, stepMonths: number): string {
+  const y = Math.floor(idx / 12);
+  const m = (idx % 12) + 1;
+  // Year-or-coarser steps tick on Januaries — the year alone reads
+  // cleaner than a redundant "01/".
+  if (stepMonths >= 12) return String(y);
+  return `${String(m).padStart(2, "0")}/${String(y).slice(2)}`;
 }
 
 function formatTick(v: number): string {
