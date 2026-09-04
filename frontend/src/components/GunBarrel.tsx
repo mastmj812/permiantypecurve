@@ -126,15 +126,15 @@ function computeFrame(usable: WellDetailLite[]): Frame | null {
   const lateralLen = Math.hypot(mx, my) || 1;
   const lateralX = mx / lateralLen;
   const lateralY = my / lateralLen;
-  // Perpendicular vector (90° rotation). Canonicalize +X to point East
-  // — or South when the lateral runs E-W and the section is N-S — so the
-  // cross-section defaults to a West→East read. This matches the
-  // erebor/narvi "+offset = E/S" convention; the flip toggle in the
+  // Perpendicular vector (90° rotation). Canonicalize by the DOMINANT
+  // compass component — the suite-wide gunbarrel reading: a ~N-S cohort
+  // (cross-section runs E-W) reads W → E (+X east), a ~E-W cohort
+  // (cross-section runs N-S) reads N → S (+X south). Same rule as the
+  // dossier gunbarrel and narvi's panel; the flip toggle in the
   // component mirrors it when a given pad reads better the other way.
   let perpX = -lateralY;
   let perpY = lateralX;
-  const EPS = 1e-9;
-  if (perpX < -EPS || (Math.abs(perpX) <= EPS && perpY > 0)) {
+  if (Math.abs(perpX) >= Math.abs(perpY) ? perpX < 0 : perpY > 0) {
     perpX = -perpX;
     perpY = -perpY;
   }
@@ -670,7 +670,8 @@ export function GunBarrel({
         />
       )}
 
-      {/* Axis labels */}
+      {/* Axis labels — same left → right compass read as the dossier
+          gunbarrel, with bold end letters at the axis extents. */}
       <text
         x={plotArea.x + plotArea.w / 2}
         y={height - 6}
@@ -678,7 +679,27 @@ export function GunBarrel({
         fontSize="13"
         fill="#374151"
       >
-        Cross-section offset (ft) — +X is {axisLabel}
+        Cross-section offset (ft) — {leftLabel} → {axisLabel}
+      </text>
+      <text
+        x={plotArea.x}
+        y={height - 6}
+        textAnchor="start"
+        fontSize="13"
+        fontWeight={600}
+        fill="#374151"
+      >
+        {leftLabel}
+      </text>
+      <text
+        x={plotArea.x + plotArea.w}
+        y={height - 6}
+        textAnchor="end"
+        fontSize="13"
+        fontWeight={600}
+        fill="#374151"
+      >
+        {axisLabel}
       </text>
       <text
         x={14}
