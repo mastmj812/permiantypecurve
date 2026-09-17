@@ -499,6 +499,11 @@ function comparisonSubtitle(z: NoviComparisonZone): string {
     `selected within ${(z.radius_m / 1609).toFixed(0)} mi, ±${Math.round(z.lateral_tol * 100)}% ll`,
   ];
   if (z.intel_vintage) parts.push(`intel vintage ${z.intel_vintage}`);
+  if (z.prev_intel_vintage && z.prev_n_sticks > 0) {
+    parts.push(
+      `prior-vintage overlay ${z.prev_intel_vintage} (drop-time set, ${z.prev_n_sticks} sticks)`,
+    );
+  }
   if (z.low_n) parts.push("LOW N");
   if (z.stale_vintage) parts.push("STALE VINTAGE");
   if (z.n_wells_no_set > 0) {

@@ -1523,6 +1523,35 @@ def test_novi_comparison_vector_rules() -> None:
         )
 
 
+def test_novi_comparison_prev_vintage_fields_never_reach_workbook() -> None:
+    """The previous-vintage overlay (2026-09) is dossier/API only: the
+    frozen workbook contract must be byte-shape identical whether or not
+    the prev_* fields are populated (sheet/column names are FINAL once
+    shipped — the ledger has no prev-vintage amendment)."""
+    data = _data()
+    plain = (_novi_zone("WOLFCAMP A"), _novi_zone("THIRD BONE SPRING", n_sticks=0))
+    with_prev = tuple(
+        NoviComparisonZone(
+            **{
+                **z.__dict__,
+                "prev_intel_vintage": "2025-06-30",
+                "prev_n_sticks": 7,
+                "prev_oil_bbl": z.oil_bbl,
+                "prev_gas_mcf": z.gas_mcf,
+                "prev_water_bbl": z.water_bbl,
+            }
+        )
+        for z in plain
+    )
+    wb_plain = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, plain))))
+    wb_prev = load_workbook(io.BytesIO(build_blueox_workbook(_with_novi(data, with_prev))))
+    assert wb_prev.sheetnames == wb_plain.sheetnames
+    for name in ("novi_comparison", "novi_comparison_meta"):
+        rows_plain = [tuple(r) for r in wb_plain[name].iter_rows(values_only=True)]
+        rows_prev = [tuple(r) for r in wb_prev[name].iter_rows(values_only=True)]
+        assert rows_prev == rows_plain
+
+
 # ==================== pre-send value sweep (2026-08-17) ====================
 #
 # Each historical defect Blue Ox caught after a send has a fixture here

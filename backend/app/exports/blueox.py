@@ -205,6 +205,15 @@ class NoviComparisonZone:
     oil_bbl: tuple[float, ...] = ()
     gas_mcf: tuple[float, ...] = ()
     water_bbl: tuple[float, ...] = ()
+    # Previous-vintage overlay (2026-09 quarterly-reload feature): the
+    # persisted drop-time stick set's OWN vintage forecasts, read from
+    # the retained raw slices (engineering_db sql/42). Dossier/API only —
+    # deliberately NOT written to any workbook sheet (contract frozen).
+    prev_intel_vintage: str | None = None
+    prev_n_sticks: int = 0
+    prev_oil_bbl: tuple[float, ...] = ()
+    prev_gas_mcf: tuple[float, ...] = ()
+    prev_water_bbl: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
