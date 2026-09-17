@@ -266,9 +266,12 @@ def test_arps_tail_splices_after_last_forecast_period() -> None:
     wh = _StubSession(routes)
     s = fetch_intel_median_series(wh, (1, 2))
     assert s is not None
-    # month 3 (day 90): stick 1 has no tail (0), stick 2 tail rate =
-    # 70*exp(-0.05*(90-60)/365) per day / 5 per-1000ft.
-    expected_b = 70.0 * math.exp(-0.05 * 30.0 / 365.0) / 5.0
+    # month 3 (day 90): stick 1 has no tail (0). Stick 2's tail takes the
+    # segment's SHAPE anchored to the forecast's LEVEL (2026-09-17): the
+    # forecast ends at 72.0 (day 60) while the segment evaluates to 70.0
+    # there, so the tail is scaled by 72/70 — level-continuous at the seam:
+    # 72*exp(-0.05*(90-60)/365) per day / 5 per-1000ft.
+    expected_b = 72.0 * math.exp(-0.05 * 30.0 / 365.0) / 5.0
     assert s.oil_bbl[2] == pytest.approx((0.0 + expected_b) / 2.0 * STEP_DAYS, rel=1e-9)
 
 
