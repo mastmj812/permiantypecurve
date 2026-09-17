@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 from statistics import median
 from typing import Any
@@ -141,6 +142,73 @@ _ARPS_SQL = text(
     """
 )
 
+# --- by-report variants (engineering_db sql/42) -------------------------
+# Same column shapes as the curated-view queries above, sourced from a
+# NAMED vintage retained in raw_intel. Persisted novi_rep stick_ids from
+# a superseded vintage never join the current views (Novi renumbers
+# planned wells every report); these are how their curves stay readable
+# for the dossier's previous-vintage overlay.
+
+_AVAILABLE_REPORTS_SQL = text(
+    """
+    SELECT report_name, basin_slug, report_version, vintage_date::text,
+           is_latest
+    FROM curated.intel_available_reports()
+    ORDER BY report_name
+    """
+)
+
+_STICK_META_BY_REPORT_SQL = text(
+    """
+    SELECT stick_id, unique_id, category, ll_ft, basin
+    FROM curated.intel_stick_meta_by_report(
+        :report, CAST(:ids AS bigint[]))
+    """
+)
+
+_FORECAST_BY_REPORT_SQL = text(
+    """
+    SELECT novi_wellname, mop, oil, gas, water
+    FROM curated.intel_forecast_by_report(:report, CAST(:ids AS bigint[]))
+    ORDER BY novi_wellname, mop
+    """
+)
+
+_ARPS_BY_REPORT_SQL = text(
+    """
+    SELECT novi_wellname, production_stream, segment_curve_type,
+           b, d_nom, q_start, day_start, day_stop
+    FROM curated.intel_arps_by_report(:report, CAST(:ids AS bigint[]))
+    ORDER BY novi_wellname, production_stream, segment
+    """
+)
+
+
+@dataclass(frozen=True)
+class IntelReport:
+    """One vintage held in raw_intel (superseded slices are retained)."""
+
+    report_name: str
+    basin_slug: str
+    report_version: str  # '2025Q3' share format
+    vintage_date: str  # quarter-end, ISO — comparable to RepSet.intel_vintage
+    is_latest: bool
+
+
+def fetch_available_reports(wh: Session) -> tuple[IntelReport, ...]:
+    """Every intel vintage the warehouse still holds, per basin family."""
+    rows = wh.execute(_AVAILABLE_REPORTS_SQL).all()
+    return tuple(
+        IntelReport(
+            report_name=str(r[0]),
+            basin_slug=str(r[1]),
+            report_version=str(r[2]),
+            vintage_date=str(r[3]),
+            is_latest=bool(r[4]),
+        )
+        for r in rows
+    )
+
 
 def fetch_intel_vintage(wh: Session) -> str | None:
     """Current warehouse intel vintage (quarter-end date as ISO text)."""
@@ -158,7 +226,9 @@ def _legs_ewkt(quads: tuple[tuple[float, float, float, float], ...]) -> str:
     return "SRID=4326;MULTILINESTRING(" + ", ".join(parts) + ")"
 
 
-def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
+def resolve_rep_set(
+    wh: Session, well: NarviInventoryWell, *, ignore_persisted: bool = False
+) -> RepSet | None:
     """The representative stick set for one narvi well.
 
     Persisted ``novi_rep`` wins (narvi computed it at save, the engineer
@@ -166,12 +236,18 @@ def resolve_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
     pass-throughs resolve their own stick via ``unique_id`` (mode
     'self'); generated wells call the sql/35 function. PDP producers
     return None — no intel ML forecast exists for producers.
+
+    ``ignore_persisted=True`` forces the warehouse fallback even when a
+    persisted set exists — used to re-select against the CURRENT vintage
+    when the persisted set was saved under a superseded one (its
+    stick_ids no longer join the current views; the persisted set is
+    then plotted as the previous-vintage series instead).
     """
     provenance = (well.category or "").lower()
     if provenance == "pdp":
         return None
 
-    rep = well.novi_rep
+    rep = None if ignore_persisted else well.novi_rep
     if rep and isinstance(rep.get("stick_ids"), list):
         ids = tuple(int(s) for s in rep["stick_ids"])
         raw_tol = rep.get("lateral_tol")
@@ -267,37 +343,74 @@ def _tail_rates(segs: list[dict[str, Any]], days: list[float]) -> list[float]:
 
 
 def fetch_intel_median_series(wh: Session, stick_ids: tuple[int, ...]) -> IntelMedianSeries | None:
-    """Median per-1,000-ft forecast across ``stick_ids``, or None when
-    no stick yields a usable normalized series."""
+    """Median per-1,000-ft forecast across ``stick_ids`` from the CURRENT
+    vintage (curated views), or None when no stick yields a usable
+    normalized series."""
     if not stick_ids:
         return None
     meta = wh.execute(_STICK_META_SQL, {"ids": list(stick_ids)}).all()
+    by_name, dropped = _process_meta(stick_ids, meta)
+    if not by_name:
+        return None
+    names = list(by_name)
+    fc_rows = wh.execute(_FORECAST_SQL, {"names": names}).all()
+    arps_rows = wh.execute(_ARPS_SQL, {"names": names}).mappings().all()
+    return _median_series_from_rows(by_name, dropped, fc_rows, arps_rows)
+
+
+def fetch_intel_median_series_by_report(
+    wh: Session, report_name: str, stick_ids: tuple[int, ...]
+) -> IntelMedianSeries | None:
+    """Median per-1,000-ft forecast across ``stick_ids`` from a NAMED
+    vintage retained in raw_intel (engineering_db sql/42) — same math as
+    :func:`fetch_intel_median_series`, different source. Sticks absent
+    from that report drop loudly, exactly like the current-vintage path.
+    """
+    if not stick_ids:
+        return None
+    params = {"report": report_name, "ids": list(stick_ids)}
+    meta = wh.execute(_STICK_META_BY_REPORT_SQL, params).all()
+    by_name, dropped = _process_meta(stick_ids, meta)
+    if not by_name:
+        return None
+    fc_rows = wh.execute(_FORECAST_BY_REPORT_SQL, params).all()
+    arps_rows = wh.execute(_ARPS_BY_REPORT_SQL, params).mappings().all()
+    return _median_series_from_rows(by_name, dropped, fc_rows, arps_rows)
+
+
+def _process_meta(
+    stick_ids: tuple[int, ...], meta: Sequence[Any]
+) -> tuple[dict[str, tuple[int, str, float]], list[int]]:
+    """Meta rows -> {novi_wellname: (stick_id, category, ll_ft)} plus the
+    loudly-dropped ids (no lateral, or absent from the queried vintage)."""
     by_name: dict[str, tuple[int, str, float]] = {}
     dropped: list[int] = []
-    n_pud = n_res = 0
     for sid, uid, category, ll_ft, _basin in meta:
         if not ll_ft or float(ll_ft) <= 0.0:
             dropped.append(int(sid))
             log.info("novi_median_stick_no_lateral", stick_id=int(sid))
             continue
         by_name[str(uid)] = (int(sid), str(category), float(ll_ft))
-        if str(category) == "PUD":
-            n_pud += 1
-        else:
-            n_res += 1
     missing_meta = set(stick_ids) - {int(r[0]) for r in meta}
     for sid in sorted(missing_meta):
-        # A persisted stick_id absent from the current vintage's
-        # intel_locations (stick_id_map is append-only, membership is
-        # not) — dropped and visible, never silent.
+        # A stick_id absent from the queried vintage (stick_id_map is
+        # append-only, membership is not) — dropped and visible, never
+        # silent.
         dropped.append(sid)
         log.info("novi_median_stick_not_in_vintage", stick_id=sid)
-    if not by_name:
-        return None
+    return by_name, dropped
 
+
+def _median_series_from_rows(
+    by_name: dict[str, tuple[int, str, float]],
+    dropped: list[int],
+    fc_rows: Sequence[Any],
+    arps_rows: Sequence[Any],
+) -> IntelMedianSeries | None:
+    """The shared series math: per-stick 30-day rate grids (forecast rows
+    continued by the Arps tail), per-1,000-ft normalized BEFORE the
+    per-month median, volumes = median rate x STEP_DAYS."""
     names = list(by_name)
-    fc_rows = wh.execute(_FORECAST_SQL, {"names": names}).all()
-    arps_rows = wh.execute(_ARPS_SQL, {"names": names}).mappings().all()
 
     # Per-stick per-stream rate grid on 30-day periods, IP-aligned.
     rates: dict[str, dict[str, list[float]]] = {

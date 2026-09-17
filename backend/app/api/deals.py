@@ -20,6 +20,7 @@ import json
 import math
 import re
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
@@ -83,7 +84,9 @@ from app.warehouse_client.intel_forecast import (
     REP_LOW_N,
     REP_RADIUS_M,
     STEP_DAYS,
+    fetch_available_reports,
     fetch_intel_median_series,
+    fetch_intel_median_series_by_report,
     fetch_intel_vintage,
     resolve_rep_set,
 )
@@ -762,6 +765,11 @@ def _collect_novi_comparison(
     low_n = False
     stale = False
     n_no_set = 0
+    # Persisted sets saved under a SUPERSEDED vintage: their stick_ids
+    # never join the current curated views (Novi renumbers planned wells
+    # each report), so they become the previous-vintage series and the
+    # current series re-selects fresh (2026-09 quarterly-reload fix).
+    prev_ids_by_vintage: dict[str, set[int]] = defaultdict(set)
     # ll tolerance the zone's neighborhoods actually selected with —
     # per-basin since the 2026-07-30 amendment. Wells in one zone share a
     # basin in practice; max() keeps a mixed zone deterministic (the most
@@ -771,6 +779,17 @@ def _collect_novi_comparison(
         if (w.category or "").lower() == "pdp":
             continue
         rep = resolve_rep_set(wh, w)
+        if (
+            rep is not None
+            and rep.stick_ids
+            and rep.source == "persisted"
+            and rep.intel_vintage
+            and vintage
+            and rep.intel_vintage != vintage
+        ):
+            stale = True
+            prev_ids_by_vintage[rep.intel_vintage].update(rep.stick_ids)
+            rep = resolve_rep_set(wh, w, ignore_persisted=True)
         if rep is not None and rep.lateral_tol is not None:
             zone_tol = max(zone_tol or 0.0, rep.lateral_tol)
         if rep is None or not rep.stick_ids:
@@ -795,6 +814,42 @@ def _collect_novi_comparison(
             dropped=list(series.dropped_sticks),
         )
     n_sticks = series.n_sticks if series is not None else 0
+
+    # Previous-vintage series from the persisted drop-time stick sets,
+    # read from the retained raw slices (engineering_db sql/42). A zone
+    # with mixed persisted vintages (partial re-save) uses the largest
+    # set and logs the rest.
+    prev_vintage: str | None = None
+    prev_series = None
+    if prev_ids_by_vintage:
+        if len(prev_ids_by_vintage) > 1:
+            log.info(
+                "blueox_novi_comparison_mixed_prev_vintages",
+                zone=zone_name,
+                vintages=sorted(prev_ids_by_vintage),
+            )
+        prev_vintage, prev_ids = max(
+            prev_ids_by_vintage.items(), key=lambda kv: (len(kv[1]), kv[0])
+        )
+        candidates = [
+            r.report_name
+            for r in fetch_available_reports(wh)
+            if r.vintage_date == prev_vintage and not r.is_latest
+        ]
+        for report_name in candidates:
+            s = fetch_intel_median_series_by_report(
+                wh, report_name, tuple(sorted(prev_ids))
+            )
+            if s is not None and s.n_sticks > 0:
+                prev_series = s
+                break
+        if prev_series is None:
+            log.info(
+                "blueox_novi_comparison_prev_vintage_unresolved",
+                zone=zone_name,
+                prev_vintage=prev_vintage,
+                candidates=candidates,
+            )
     return NoviComparisonZone(
         zone_name=zone_name,
         n_sticks=n_sticks,
@@ -812,6 +867,11 @@ def _collect_novi_comparison(
         oil_bbl=series.oil_bbl if series is not None else (),
         gas_mcf=series.gas_mcf if series is not None else (),
         water_bbl=series.water_bbl if series is not None else (),
+        prev_intel_vintage=prev_vintage if prev_series is not None else None,
+        prev_n_sticks=prev_series.n_sticks if prev_series is not None else 0,
+        prev_oil_bbl=prev_series.oil_bbl if prev_series is not None else (),
+        prev_gas_mcf=prev_series.gas_mcf if prev_series is not None else (),
+        prev_water_bbl=prev_series.water_bbl if prev_series is not None else (),
     )
 
 
@@ -1404,6 +1464,14 @@ class NoviComparisonZoneOut(BaseModel):
     oil_rate: list[float]
     gas_rate: list[float]
     water_rate: list[float]
+    # Previous-vintage overlay: the persisted drop-time stick set plotted
+    # against its OWN (superseded) vintage. None/empty when every
+    # contributing set was saved under the current vintage.
+    prev_intel_vintage: str | None = None
+    prev_n_sticks: int = 0
+    prev_oil_rate: list[float] = []
+    prev_gas_rate: list[float] = []
+    prev_water_rate: list[float] = []
 
 
 class NoviComparisonResponse(BaseModel):
@@ -1482,6 +1550,11 @@ def get_novi_comparison(
                         oil_rate=[v / STEP_DAYS for v in comp.oil_bbl],
                         gas_rate=[v / STEP_DAYS for v in comp.gas_mcf],
                         water_rate=[v / STEP_DAYS for v in comp.water_bbl],
+                        prev_intel_vintage=comp.prev_intel_vintage,
+                        prev_n_sticks=comp.prev_n_sticks,
+                        prev_oil_rate=[v / STEP_DAYS for v in comp.prev_oil_bbl],
+                        prev_gas_rate=[v / STEP_DAYS for v in comp.prev_gas_mcf],
+                        prev_water_rate=[v / STEP_DAYS for v in comp.prev_water_bbl],
                     )
                 )
     except HTTPException:

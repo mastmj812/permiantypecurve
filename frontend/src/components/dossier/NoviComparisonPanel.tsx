@@ -58,12 +58,14 @@ interface StreamData {
   lo: number[]; // SPE P90 (low)
   p50: number[];
   mean: number[];
-  novi: number[]; // median Novi ML rates
+  novi: number[]; // median Novi ML rates (current vintage)
+  prevNovi: number[]; // drop-time stick set under its own (prior) vintage
   cumP50: number[];
   cumHi: number[];
   cumLo: number[];
   cumMean: number[];
   cumNovi: number[];
+  cumPrevNovi: number[];
 }
 
 function cumFrom(rates: number[], dt: number): number[] {
@@ -99,6 +101,11 @@ function buildStreamData(curve: TypeCurveRow, zone: NoviComparisonZone): StreamD
     gas: zone.gas_rate,
     water: zone.water_rate,
   };
+  const prevNoviByStream: Record<StreamKey, number[]> = {
+    oil: zone.prev_oil_rate ?? [],
+    gas: zone.prev_gas_rate ?? [],
+    water: zone.prev_water_rate ?? [],
+  };
   return STREAMS.map(({ key, label, rateUnit, cumUnit }) => {
     const raw = streams[key];
     const s = raw ? riskStreamSeries(raw, muls[key]) : null;
@@ -107,6 +114,7 @@ function buildStreamData(curve: TypeCurveRow, zone: NoviComparisonZone): StreamD
     const p50 = s ? fullRates(s, "p50") : [];
     const mean = s ? fullRates(s, "mean") : [];
     const novi = noviByStream[key] ?? [];
+    const prevNovi = prevNoviByStream[key] ?? [];
     return {
       label,
       rateUnit,
@@ -116,6 +124,7 @@ function buildStreamData(curve: TypeCurveRow, zone: NoviComparisonZone): StreamD
       p50,
       mean,
       novi,
+      prevNovi,
       cumHi: cumFrom(hi, DAYS_PER_MONTH),
       cumLo: cumFrom(lo, DAYS_PER_MONTH),
       cumP50: cumFrom(p50, DAYS_PER_MONTH),
@@ -123,8 +132,17 @@ function buildStreamData(curve: TypeCurveRow, zone: NoviComparisonZone): StreamD
       // Novi cums integrate on the Novi-native 30-day grid so the
       // chart's asymptote equals the workbook sheet's column sum.
       cumNovi: cumFrom(novi, zone.step_days),
+      cumPrevNovi: cumFrom(prevNovi, zone.step_days),
     };
   });
+}
+
+// Quarter label for legend rows: "2025-09-30" -> "2025Q3".
+function vintageQuarter(vintage: string | null): string {
+  if (!vintage) return "prior";
+  const m = /^(\d{4})-(\d{2})/.exec(vintage);
+  if (!m) return vintage;
+  return `${m[1]}Q${Math.ceil(Number(m[2]) / 3)}`;
 }
 
 const fmt = (v: number): string =>
@@ -226,13 +244,21 @@ export function NoviComparisonPanel({
   const riskedNote = isRisked(curve.risk_multipliers)
     ? `TC risked ${riskingFactorLabel(curve.risk_multipliers)}`
     : null;
+  // Previous-vintage overlay row (2026-09): drop-time stick set under
+  // its own superseded vintage — only when the backend resolved one.
+  const hasPrev = zone.prev_intel_vintage != null && zone.prev_n_sticks > 0;
+  const prevLabel = `Novi ${vintageQuarter(zone.prev_intel_vintage)} (drop-time)`;
+  const noviLabel = hasPrev
+    ? `Novi ${vintageQuarter(zone.intel_vintage)} median`
+    : "Novi ML median";
   // Legend box sizing — the default 128px fits the four fixed rows;
   // a mixed per-stream note ("TC risked ×0.85 oil · ×0.90 gas") needs
   // more width (~5.3 px/char at fontSize 9.5).
-  const legendW = riskedNote
-    ? Math.max(128, Math.round(riskedNote.length * 5.3) + 30)
-    : 128;
-  const legendH = riskedNote ? 66 : 54;
+  const legendW = Math.max(
+    riskedNote ? Math.round(riskedNote.length * 5.3) + 30 : 128,
+    hasPrev ? Math.round(prevLabel.length * 5.3) + 41 : 128,
+  );
+  const legendH = (riskedNote ? 66 : 54) + (hasPrev ? 12 : 0);
 
   const cols = 2;
   const rows = 3;
@@ -253,7 +279,9 @@ export function NoviComparisonPanel({
         w: cellW - mL - 18,
         h: cellH - mT - mB,
       };
-      const allVals = [...sd.hi, ...sd.novi].filter((v) => Number.isFinite(v) && v > 0);
+      const allVals = [...sd.hi, ...sd.novi, ...sd.prevNovi].filter(
+        (v) => Number.isFinite(v) && v > 0,
+      );
       const rawMax = allVals.length ? Math.max(...allVals) : 1;
       const yMax = 10 ** Math.ceil(Math.log10(rawMax));
       const yMin = Math.max(10 ** (Math.ceil(Math.log10(rawMax)) - 4), 1e-3);
@@ -305,6 +333,9 @@ export function NoviComparisonPanel({
           <path d={bandPath(sd.hi, sd.lo, frame, yMin, yMax, xMax)} fill={TC_BAND} fillOpacity={0.55} stroke="none" />
           <path d={logPath(sd.mean, frame, yMin, yMax, xMax)} fill="none" stroke={TC_MEAN} strokeWidth={1.2} strokeDasharray="5 3" />
           <path d={logPath(sd.p50, frame, yMin, yMax, xMax)} fill="none" stroke={TC_P50} strokeWidth={2} />
+          {hasPrev && (
+            <path d={logPath(sd.prevNovi, frame, yMin, yMax, xMax)} fill="none" stroke={NOVI_RED} strokeWidth={1.4} strokeDasharray="4 3" />
+          )}
           <path d={logPath(sd.novi, frame, yMin, yMax, xMax)} fill="none" stroke={NOVI_RED} strokeWidth={1.8} />
           {row === 0 && (
             <g fontSize={9.5} fill="#374151">
@@ -316,9 +347,15 @@ export function NoviComparisonPanel({
               <line x1={frame.x + 14} y1={frame.y + 41} x2={frame.x + 30} y2={frame.y + 41} stroke={TC_MEAN} strokeWidth={1.2} strokeDasharray="5 3" />
               <text x={frame.x + 35} y={frame.y + 44}>TC mean</text>
               <line x1={frame.x + 14} y1={frame.y + 53} x2={frame.x + 30} y2={frame.y + 53} stroke={NOVI_RED} strokeWidth={1.8} />
-              <text x={frame.x + 35} y={frame.y + 56}>Novi ML median</text>
+              <text x={frame.x + 35} y={frame.y + 56}>{noviLabel}</text>
+              {hasPrev && (
+                <>
+                  <line x1={frame.x + 14} y1={frame.y + 65} x2={frame.x + 30} y2={frame.y + 65} stroke={NOVI_RED} strokeWidth={1.4} strokeDasharray="4 3" />
+                  <text x={frame.x + 35} y={frame.y + 68}>{prevLabel}</text>
+                </>
+              )}
               {riskedNote && (
-                <text x={frame.x + 14} y={frame.y + 68} fontStyle="italic" fill={TC_P50}>
+                <text x={frame.x + 14} y={frame.y + (hasPrev ? 80 : 68)} fontStyle="italic" fill={TC_P50}>
                   {riskedNote}
                 </text>
               )}
@@ -339,9 +376,10 @@ export function NoviComparisonPanel({
         h: cellH - mT - mB,
       };
       const endNovi = sd.cumNovi.at(-1) ?? 0;
+      const endPrevNovi = hasPrev ? (sd.cumPrevNovi.at(-1) ?? 0) : 0;
       const endP50 = sd.cumP50.at(-1) ?? 0;
       const endHi = sd.cumHi.at(-1) ?? 0;
-      const yMax = Math.max(endNovi, endHi, 1) * 1.05;
+      const yMax = Math.max(endNovi, endPrevNovi, endHi, 1) * 1.05;
       const xMax = N_MONTHS;
       const yTicks = [0.25, 0.5, 0.75, 1.0].map((f) => f * yMax);
       const xTicks = [0, 100, 200, 300, 400, 500, 600];
@@ -380,11 +418,36 @@ export function NoviComparisonPanel({
           </text>
           <path d={linPath(sd.cumMean, frame, yMax, xMax)} fill="none" stroke={TC_MEAN} strokeWidth={1.2} strokeDasharray="5 3" />
           <path d={linPath(sd.cumP50, frame, yMax, xMax)} fill="none" stroke={TC_P50} strokeWidth={2} />
+          {hasPrev && (
+            <path d={linPath(sd.cumPrevNovi, frame, yMax, xMax)} fill="none" stroke={NOVI_RED} strokeWidth={1.4} strokeDasharray="4 3" />
+          )}
           <path d={linPath(sd.cumNovi, frame, yMax, xMax)} fill="none" stroke={NOVI_RED} strokeWidth={1.8} />
           <text x={frame.x + frame.w + 3} y={ly(endNovi) + 3} fontSize={9} fill={NOVI_RED}>
             {`Novi ${fmt(endNovi)}`}
           </text>
-          <text x={frame.x + frame.w + 3} y={ly(endP50) + (Math.abs(ly(endP50) - ly(endNovi)) < 10 ? 13 : 3)} fontSize={9} fill={TC_P50}>
+          {hasPrev && (
+            <text
+              x={frame.x + frame.w + 3}
+              y={ly(endPrevNovi) + (Math.abs(ly(endPrevNovi) - ly(endNovi)) < 10 ? 13 : 3)}
+              fontSize={9}
+              fill={NOVI_RED}
+              opacity={0.7}
+            >
+              {`${vintageQuarter(zone.prev_intel_vintage)} ${fmt(endPrevNovi)}`}
+            </text>
+          )}
+          <text
+            x={frame.x + frame.w + 3}
+            y={
+              ly(endP50) +
+              (Math.abs(ly(endP50) - ly(endNovi)) < 10 ||
+              (hasPrev && Math.abs(ly(endP50) - ly(endPrevNovi)) < 10)
+                ? 13
+                : 3)
+            }
+            fontSize={9}
+            fill={TC_P50}
+          >
             {`TC P50 ${fmt(endP50)}`}
           </text>
         </g>,

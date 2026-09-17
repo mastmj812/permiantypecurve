@@ -250,6 +250,14 @@ export interface NoviComparisonZone {
   oil_rate: number[];
   gas_rate: number[];
   water_rate: number[];
+  // previous-vintage overlay: the persisted drop-time stick set plotted
+  // against its OWN (superseded) vintage; null/empty when every
+  // contributing set was saved under the current vintage
+  prev_intel_vintage: string | null;
+  prev_n_sticks: number;
+  prev_oil_rate: number[];
+  prev_gas_rate: number[];
+  prev_water_rate: number[];
 }
 
 export async function fetchNoviComparison(
