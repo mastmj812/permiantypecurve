@@ -264,6 +264,21 @@ def resolve_rep_set(
         uid = well.novi_wellname or well.well_name
         rows = wh.execute(_SELF_STICK_SQL, {"uid": uid}).all()
         if not rows:
+            # The stick vanished from the current vintage (Novi renames
+            # AND renumbers its planned inventory every report — zero
+            # carryover measured 25Q3->26Q3). The only current-vintage
+            # benchmark that still exists is the neighborhood rule around
+            # the well's own geometry (2026-09-17 decision); ungeoreferenced
+            # legacy rows still resolve to None.
+            hood = _neighborhood_rep_set(wh, well)
+            if hood is not None:
+                log.info(
+                    "novi_rep_self_degraded_to_neighborhood",
+                    well=well.well_name,
+                    uid=uid,
+                    n=len(hood.stick_ids),
+                )
+                return hood
             log.info("novi_rep_self_unresolved", well=well.well_name, uid=uid)
             return None
         return RepSet(
@@ -275,8 +290,16 @@ def resolve_rep_set(
         )
 
     # generated
-    if not well.legs_lonlat or not well.formation or not well.completed_lateral_ft:
+    hood = _neighborhood_rep_set(wh, well)
+    if hood is None:
         log.info("novi_rep_fallback_ungeoreferenced", well=well.well_name)
+    return hood
+
+
+def _neighborhood_rep_set(wh: Session, well: NarviInventoryWell) -> RepSet | None:
+    """The sql/35 neighborhood selection around a well's own geometry;
+    None when the well lacks legs/bench/lateral (caller logs why)."""
+    if not well.legs_lonlat or not well.formation or not well.completed_lateral_ft:
         return None
     legs = _legs_ewkt(well.legs_lonlat)
     basin = wh.execute(_REP_BASIN_SQL, {"legs": legs, "radius": REP_BASIN_LOOKUP_M}).scalar()

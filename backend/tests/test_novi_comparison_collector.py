@@ -16,7 +16,12 @@ from typing import Any
 
 import app.api.deals as deals_mod
 from app.api.deals import _collect_novi_comparison
-from app.warehouse_client.intel_forecast import IntelMedianSeries, IntelReport, RepSet
+from app.warehouse_client.intel_forecast import (
+    IntelMedianSeries,
+    IntelReport,
+    RepSet,
+    resolve_rep_set,
+)
 
 _CURRENT_VINTAGE = "2026-09-30"
 _PREV_VINTAGE = "2025-09-30"
@@ -148,3 +153,72 @@ def test_current_persisted_set_gets_no_prev_overlay(monkeypatch: Any) -> None:
     assert zone.prev_intel_vintage is None
     assert zone.prev_n_sticks == 0
     assert zone.prev_oil_bbl == ()
+
+
+class _FakeResult:
+    def __init__(self, rows: list[Any]):
+        self._rows = rows
+
+    def all(self) -> list[Any]:
+        return self._rows
+
+    def scalar(self) -> Any:
+        return self._rows[0] if self._rows else None
+
+
+class _FakeWh:
+    """Routes the module's SQL constants to canned rows by fragment."""
+
+    def __init__(self, routes: dict[str, list[Any]]):
+        self.routes = routes
+        self.queries: list[str] = []
+
+    def execute(self, sql: Any, params: dict[str, Any] | None = None) -> _FakeResult:
+        stext = str(sql)
+        self.queries.append(stext)
+        for fragment, rows in self.routes.items():
+            if fragment in stext:
+                return _FakeResult(rows)
+        raise AssertionError(f"unexpected SQL: {stext[:120]}")
+
+
+def test_self_unresolved_passthrough_degrades_to_neighborhood() -> None:
+    """A pud/res pass-through whose Novi stick vanished from the current
+    vintage (renamed/renumbered on reload) must fall back to the sql/35
+    neighborhood rule around its own geometry — not resolve to None
+    (toucan post-2026Q3: every zone's current series was empty)."""
+    wh = _FakeWh(
+        {
+            "unique_id = :uid": [],  # self stick gone from current vintage
+            "GROUP BY basin": ["delaware"],  # modal-basin lookup
+            "intel_representative_sticks": [(101,), (102,), (103,)],
+        }
+    )
+    well = SimpleNamespace(
+        category="pud",
+        novi_rep=None,
+        novi_wellname="North TX 164 SBSS 1",
+        well_name="North TX 164 SBSS 1",
+        formation="BS2_S",
+        completed_lateral_ft=10000.0,
+        legs_lonlat=((-103.2, 31.4, -103.2, 31.42),),
+    )
+    rep = resolve_rep_set(wh, well)  # type: ignore[arg-type]
+    assert rep is not None
+    assert rep.mode == "neighborhood"
+    assert rep.stick_ids == (101, 102, 103)
+    assert rep.source == "fallback"
+    assert rep.lateral_tol == 0.25  # delaware
+
+    # Ungeoreferenced legacy pass-through still resolves to None.
+    bare = SimpleNamespace(
+        category="pud",
+        novi_rep=None,
+        novi_wellname="North TX 164 SBSS 2",
+        well_name="North TX 164 SBSS 2",
+        formation=None,
+        completed_lateral_ft=None,
+        legs_lonlat=(),
+    )
+    wh2 = _FakeWh({"unique_id = :uid": []})
+    assert resolve_rep_set(wh2, bare) is None  # type: ignore[arg-type]
