@@ -135,7 +135,7 @@ _FORECAST_SQL = text(
 _ARPS_SQL = text(
     """
     SELECT novi_wellname, production_stream, segment_curve_type,
-           b, d_nom, q_start, day_start, day_stop
+           b, d_nom, q_start, q_stop, day_start, day_stop
     FROM curated.intel_arps
     WHERE novi_wellname = ANY(:names)
     ORDER BY novi_wellname, production_stream, segment
@@ -177,7 +177,7 @@ _FORECAST_BY_REPORT_SQL = text(
 _ARPS_BY_REPORT_SQL = text(
     """
     SELECT novi_wellname, production_stream, segment_curve_type,
-           b, d_nom, q_start, day_start, day_stop
+           b, d_nom, q_start, q_stop, day_start, day_stop
     FROM curated.intel_arps_by_report(:report, CAST(:ids AS bigint[]))
     ORDER BY novi_wellname, production_stream, segment
     """
@@ -341,17 +341,41 @@ class IntelMedianSeries:
     dropped_sticks: tuple[int, ...]  # no ll_ft / no forecast rows — logged, not silent
 
 
+def _seg_decline_per_year(seg: dict[str, Any]) -> float:
+    """Nominal decline per year for one Novi Arps segment.
+
+    Novi ships ``d_nom = NULL`` on EVERY terminal exponential segment
+    (both basins, both vintages — verified 2026-09-17); on those rows the
+    decline hides in ``d_eff_tangent`` in PER-DAY units, unlike segments
+    1-2 where that column is per-year. Derive from the segment's own
+    endpoints instead of trusting mixed-unit columns. Coalescing NULL->0
+    (the pre-2026-09-17 behavior, ported from erebor's ``_tail_values``
+    which had the same defect) made every tail run FLAT at the terminal
+    q_start from ~month 360 on — the cum-curve inflection Michael caught
+    on a toucan dossier panel. MUST stay identical to erebor's
+    ``_seg_decline_per_year`` (app/api/production.py)."""
+    d = seg["d_nom"]
+    if d is not None:
+        return float(d)
+    q_start = float(seg["q_start"] or 0.0)
+    q_stop = float(seg.get("q_stop") or 0.0)
+    span_days = float(seg["day_stop"] or 0.0) - float(seg["day_start"] or 0.0)
+    if q_start > 0.0 and q_stop > 0.0 and span_days > 0.0:
+        return math.log(q_start / q_stop) * 365.0 / span_days
+    return 0.0
+
+
 def _tail_rates(segs: list[dict[str, Any]], days: list[float]) -> list[float]:
     """Arps rate at each tail day — a straight port of erebor's
-    ``_tail_values`` (t in years since segment start, d_nom nominal/yr;
-    exponential when the curve says so or b ~ 0; days covered by no
-    segment stay 0)."""
+    ``_tail_values`` (t in years since segment start, decline nominal/yr
+    via ``_seg_decline_per_year``; exponential when the curve says so or
+    b ~ 0; days covered by no segment stay 0)."""
     out = [0.0] * len(days)
     for seg in segs:
         day_start = float(seg["day_start"] or 0.0)
         day_stop = float(seg["day_stop"] or 0.0)
         qi = float(seg["q_start"] or 0.0)
-        di = float(seg["d_nom"] or 0.0)
+        di = _seg_decline_per_year(seg)
         b = float(seg["b"] or 0.0)
         exponential = seg["segment_curve_type"] == "exponential" or b < 1e-6
         for i, day in enumerate(days):
@@ -470,6 +494,18 @@ def _median_series_from_rows(
                 continue
             tv = _tail_rates(segs, tail_days)
             row = rates[name][stream]
+            # Anchor the tail LEVEL to the forecast's own end: Novi's
+            # monthly rows sit ~13-15% below their own Arps curve in the
+            # terminal region (calendar-day factor on the series, ideal
+            # rates in the params), so a raw evaluation steps up at the
+            # seam. Segments give shape; the last forecast rate gives
+            # level. Mirrors erebor's _anchored_tail — keep identical.
+            last_fc = row[start - 1] if start >= 1 else 0.0
+            if last_fc > 0.0:
+                seam = _tail_rates(segs, [float(start * STEP_DAYS)])[0]
+                if seam > 0.0:
+                    scale = last_fc / seam
+                    tv = [v * scale for v in tv]
             for k, m in enumerate(tail_mops):
                 row[m - 1] = tv[k]
 
