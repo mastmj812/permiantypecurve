@@ -53,6 +53,10 @@ class _StubResult:
     def scalar_one_or_none(self) -> Forecast | None:
         return self._row
 
+    # forecast_well's (subbasin, formation_blueox) lookup.
+    def one_or_none(self) -> Forecast | None:
+        return self._row
+
 
 class _StubSession:
     """Answers the single row lookup and records delete/commit calls."""
@@ -122,7 +126,7 @@ def _monthly_zero_water(n: int = 24) -> pd.DataFrame:
 
 
 class _SubbasinSession:
-    """Serves only the Well.subbasin lookup forecast_well makes."""
+    """Serves only the Well (subbasin, formation_blueox) lookup forecast_well makes."""
 
     def execute(self, stmt: Any) -> _StubResult:
         return _StubResult(None)

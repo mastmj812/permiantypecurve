@@ -467,6 +467,101 @@ def _fit_core(
     return popt, func(t, *popt)
 
 
+# Index of b in the fit vector for the models that have one. Slot 0 is qi
+# (or the peak-anchor's s), slot 1 is Di.
+_B_INDEX: dict[str, int] = {"arps_hyperbolic": 2, "modified_hyperbolic": 2}
+
+
+def _fit_with_b_prior(
+    df: pd.DataFrame,
+    *,
+    target_col: str,
+    func: Callable[..., NDArray[np.float64]],
+    bounds: _Bounds,
+    p0: list[float],
+    model_type: str,
+    config: ForecastConfig,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], dict[str, Any] | None]:
+    """``_fit_core``, then — on short histories — a second pass with b
+    pulled toward ``config.b_prior``. Returns (popt, predicted, info);
+    ``info`` is None when the prior carried no weight.
+
+    The prior enters as ONE pseudo-observation appended to the residual
+    vector, ``k * (b - b_prior)``, with
+
+        k = sqrt(w * n) * sigma_y / b_prior_sigma
+
+    n = fit months, sigma_y = RMSE of the unregularized first pass, w =
+    the history taper (b_prior.prior_weight: 1 at <= 12 months, 0 at
+    >= 36). At full weight, sitting one ``b_prior_sigma`` (0.10) off the
+    prior costs as much as the entire data misfit — so the prior decides b
+    unless the data clearly object, and it fades linearly as months
+    accumulate. Two properties worth keeping:
+
+      * scale-free — sigma_y carries the target's units (BBL of cum or
+        BOPD of rate), so the same sigma works for every stream/target;
+      * self-disabling on clean data — sigma_y -> 0 means the data already
+        pin b, k -> 0, and the fit is the unregularized one.
+
+    qi and Di are NOT regularized; they re-optimize around the pulled b.
+    Reported R²/RMSE are against the data only, never the pseudo-point.
+    """
+    # Local import keeps b_prior.py -> fit.py one-directional at import time.
+    from app.forecasting.b_prior import prior_weight
+
+    popt, predicted = _fit_core(df, target_col=target_col, func=func, bounds=bounds, p0=p0)
+    b_index = _B_INDEX.get(model_type)
+    if config.b_prior is None or b_index is None:
+        return popt, predicted, None
+    n = len(df)
+    weight = prior_weight(
+        n,
+        full_weight_months=config.b_prior_full_weight_months,
+        zero_weight_months=config.b_prior_zero_weight_months,
+    )
+    y = df[target_col].to_numpy(dtype=float)
+    sigma_y = _rmse(y, predicted)
+    if weight <= 0.0 or sigma_y <= 1e-9 * max(float(np.mean(np.abs(y))), 1e-12):
+        return popt, predicted, None
+
+    lower, upper = bounds
+    b_prior = float(np.clip(config.b_prior, lower[b_index], upper[b_index]))
+    k = float(np.sqrt(weight * n)) * sigma_y / config.b_prior_sigma
+    t = df["t_years"].to_numpy(dtype=float)
+
+    def augmented(t_aug: NDArray[np.float64], *p: float) -> NDArray[np.float64]:
+        return np.append(func(t_aug[:-1], *p), k * p[b_index])
+
+    start = [float(np.clip(v, lo, hi)) for v, lo, hi in zip(popt, lower, upper, strict=True)]
+    popt_reg, _pcov = curve_fit(
+        augmented,
+        np.append(t, 0.0),
+        np.append(y, k * b_prior),
+        p0=start,
+        bounds=bounds,
+        maxfev=10_000,
+    )
+    info = {
+        "b_prior": b_prior,
+        "weight": round(weight, 4),
+        "sigma": config.b_prior_sigma,
+        "n_fit_months": n,
+        "b_unregularized": float(popt[b_index]),
+        "b_regularized": float(popt_reg[b_index]),
+    }
+    return popt_reg, func(t, *popt_reg), info
+
+
+def _b_prior_note(info: dict[str, Any] | None) -> str:
+    if not info:
+        return ""
+    return (
+        f"b regularized toward bench prior {info['b_prior']:.2f} "
+        f"(weight {info['weight']:.2f}, {info['n_fit_months']} fit months): "
+        f"{info['b_unregularized']:.2f} -> {info['b_regularized']:.2f}"
+    )
+
+
 def _build_result(
     *,
     model_type: str,
@@ -480,6 +575,7 @@ def _build_result(
     n_points_fit: int,
     insufficient_history: bool,
     downtime_ratio: float = 0.0,
+    prior_info: dict[str, Any] | None = None,
 ) -> ForecastResult:
     params = _params_to_dict(model_type, popt, config.df_terminal_per_year)
     econ_limit = getattr(config, STREAM_ECON_LIMIT_FIELD[stream])
@@ -506,6 +602,8 @@ def _build_result(
         n_points_fit=n_points_fit,
         insufficient_history=insufficient_history,
         downtime_ratio=downtime_ratio,
+        notes=_b_prior_note(prior_info),
+        diagnostics={"b_prior": prior_info} if prior_info else None,
     )
 
 
@@ -529,15 +627,20 @@ def fit_rate_cum(
     qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
+    # Point-sampled input (cfg.qi_anchor_hi_basis == "instantaneous"): the
+    # observed peak IS qi, so both anchor ends are plain box bounds on qi.
+    cap_is_on_qi = cfg.qi_anchor_hi_basis == "instantaneous"
     bounds, p0 = _bounds_and_p0(
         model_type,
         peak.peak_rate,
         di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo if cap_is_on_qi else None,
+        qi_hi=qi_hi if cap_is_on_qi else None,
         b_lo=b_lo,
         b_hi=b_hi,
     )
     to_physical = None
-    if qi_lo is not None and qi_hi is not None:
+    if qi_lo is not None and qi_hi is not None and not cap_is_on_qi:
         func, bounds, p0, to_physical = _anchor_to_peak_month(
             func,
             _cum_callable(model_type, cfg.df_terminal_per_year),
@@ -548,13 +651,21 @@ def fit_rate_cum(
             p0=p0,
         )
 
-    popt, predicted = _fit_core(df, target_col="cum_vol", func=func, bounds=bounds, p0=p0)
+    popt, predicted, prior_info = _fit_with_b_prior(
+        df,
+        target_col="cum_vol",
+        func=func,
+        bounds=bounds,
+        p0=p0,
+        model_type=model_type,
+        config=cfg,
+    )
     if to_physical is not None:
         popt = to_physical(popt)
     actual = df["cum_vol"].to_numpy(dtype=float)
     return _build_result(
         model_type=model_type,
-        fit_method="rate_cum",
+        fit_method="rate_cum_bprior" if prior_info else "rate_cum",
         popt=popt,
         predicted=predicted,
         actual=actual,
@@ -564,6 +675,7 @@ def fit_rate_cum(
         n_points_fit=len(df),
         insufficient_history=insufficient,
         downtime_ratio=downtime_ratio,
+        prior_info=prior_info,
     )
 
 
@@ -587,15 +699,20 @@ def fit_rate_time(
     qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
+    # Point-sampled input (cfg.qi_anchor_hi_basis == "instantaneous"): the
+    # observed peak IS qi, so both anchor ends are plain box bounds on qi.
+    cap_is_on_qi = cfg.qi_anchor_hi_basis == "instantaneous"
     bounds, p0 = _bounds_and_p0(
         model_type,
         peak.peak_rate,
         di_hi=_stream_di_hi(stream, cfg),
+        qi_lo=qi_lo if cap_is_on_qi else None,
+        qi_hi=qi_hi if cap_is_on_qi else None,
         b_lo=b_lo,
         b_hi=b_hi,
     )
     to_physical = None
-    if qi_lo is not None and qi_hi is not None:
+    if qi_lo is not None and qi_hi is not None and not cap_is_on_qi:
         func, bounds, p0, to_physical = _anchor_to_peak_month(
             func,
             _cum_callable(model_type, cfg.df_terminal_per_year),
@@ -606,7 +723,15 @@ def fit_rate_time(
             p0=p0,
         )
 
-    popt, predicted = _fit_core(df, target_col="rate", func=func, bounds=bounds, p0=p0)
+    popt, predicted, prior_info = _fit_with_b_prior(
+        df,
+        target_col="rate",
+        func=func,
+        bounds=bounds,
+        p0=p0,
+        model_type=model_type,
+        config=cfg,
+    )
     if to_physical is not None:
         popt = to_physical(popt)
     actual = df["rate"].to_numpy(dtype=float)
@@ -622,6 +747,7 @@ def fit_rate_time(
         n_points_fit=len(df),
         insufficient_history=insufficient,
         downtime_ratio=downtime_ratio,
+        prior_info=prior_info,
     )
 
 
@@ -781,6 +907,7 @@ def fit_with_fallback(
     )
     return replace(
         fallback,
-        fit_method="rate_time_fallback",
+        # Keep the "b prior carried weight" provenance visible on rescued rows.
+        fit_method=("rate_time_fallback_bprior" if fallback.diagnostics else "rate_time_fallback"),
         notes=(note + ("\n" + fallback.notes if fallback.notes else "")),
     )

@@ -139,6 +139,10 @@ def fit_p50_series(
         df_terminal_per_year=df_terminal_per_year,
         horizon_years=horizon_years,
         min_post_peak_months=3,
+        # The P50 series is a cross-well percentile of POINT-SAMPLED
+        # analytic forecasts (rates[i] = q(t = i months)); its peak value
+        # is an instantaneous rate, not a month average.
+        qi_anchor_hi_basis="instantaneous",
     )
 
     try:

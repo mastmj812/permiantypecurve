@@ -15,8 +15,10 @@ import {
   type ForecastRow,
   type TransferError,
   TransferErrorThrown,
+  bPriorTitle,
   batchForecast,
   fetchSyncJob,
+  isBPriorFit,
   listForecasts,
   transferCohortParams,
   type Stream,
@@ -675,6 +677,14 @@ export function ReviewPage() {
                       {isOut && <span className="badge badge-warn">outlier</span>}
                       {r.fit_at_bound && (
                         <span className="badge badge-warn">at bound</span>
+                      )}
+                      {isBPriorFit(r.fit_method) && (
+                        <span
+                          className="badge badge-info"
+                          title={bPriorTitle(r.diagnostics)}
+                        >
+                          b prior
+                        </span>
                       )}
                       {r.downtime_ratio != null && r.downtime_ratio > 0.15 && (
                         <span
