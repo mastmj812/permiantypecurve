@@ -93,15 +93,13 @@ def test_fit_recovers_exponential_params() -> None:
 
 
 def test_fit_recovers_hyperbolic_params() -> None:
-    """Hyperbolic Arps with b > 1 has a known identifiability problem:
-    over a finite data window, multiple (qi, Di, b) triples produce
-    near-identical cum curves. The fit can land far from the "true"
-    params while still scoring fit_r2 > 0.999. We assert the fit
-    *quality* is excellent (the curve is reproduced) but only loose
-    bounds on the params themselves — anything tighter would be
-    asserting more than the math can deliver from 48 months of data.
-    The exponential test above uses tight tolerances because it has
-    only 2 free params, which ARE uniquely identifiable.
+    """Noise-free hyperbolic data is recovered tightly, b included.
+
+    This test used to carry loose tolerances (b abs=0.4) and a docstring
+    blaming an "identifiability problem". The real cause was that
+    ``cum_hyperbolic`` was b-insensitive inside |b-1| < 1e-4, so the fit
+    never left its b = 1.0 start; a truth of 1.2 "passed" at 1.0. With
+    the b-sensitive form the params come back to many digits.
     """
     truth = {"qi": 800.0, "Di": 0.9, "b": 1.2}
     df = _synthetic_monthly(cum_fn=cum_hyperbolic, params=truth, months=48)
@@ -110,11 +108,9 @@ def test_fit_recovers_hyperbolic_params() -> None:
         df, model_type="arps_hyperbolic", peak=peak, stream="oil", config=_UNCONSTRAINED
     )
     assert r.fit_r2 > 0.999
-    # qi is anchored at t=0 so it's the most identifiable of the three.
-    assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.10)
-    # Di and b trade off — loose tolerances here are correct, not slop.
-    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.25)
-    assert r.params["b"] == pytest.approx(truth["b"], abs=0.4)
+    assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.01)
+    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.01)
+    assert r.params["b"] == pytest.approx(truth["b"], abs=0.01)
 
 
 def test_fit_recovers_modified_hyperbolic_params() -> None:
@@ -130,9 +126,59 @@ def test_fit_recovers_modified_hyperbolic_params() -> None:
     )
     assert r.fit_r2 > 0.999
     assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.05)
-    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.1)
-    assert r.params["b"] == pytest.approx(truth["b"], abs=0.15)
+    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.01)
+    assert r.params["b"] == pytest.approx(truth["b"], abs=0.01)
     assert r.params["Df"] == pytest.approx(truth["Df"], abs=1e-6)
+
+
+def test_cum_fit_moves_b_off_its_unit_start() -> None:
+    """Regression for the frozen-b defect. Every fit starts at B_P0 = 1.0;
+    on a b = 0.92 well (inside the production [0.9, 1.2] bounds) the cum
+    fit must actually walk b down to the truth. Nominal Di 2.4/yr is a
+    ~71% effective year-1 decline — a typical Permian oil well."""
+    from app.forecasting.fit import B_P0
+
+    assert B_P0 == 1.0  # the start that used to trap the optimizer
+    truth = {"qi": 900.0, "Di": 2.4, "b": 0.92, "Df": 0.08}
+    df = _synthetic_monthly(
+        cum_fn=lambda t, qi, Di, b, Df: cum_modified_hyperbolic(t, qi, Di, b, Df),
+        params=truth,
+        months=36,
+    )
+    peak = _peak_at_month_zero(df)
+    r = fit_rate_cum(
+        df, model_type="modified_hyperbolic", peak=peak, stream="oil", config=_UNCONSTRAINED
+    )
+    assert abs(r.params["b"] - 1.0) > 0.05, "b never left its 1.0 start"
+    assert r.params["b"] == pytest.approx(truth["b"], abs=0.005)
+    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.01)
+    assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.01)
+
+
+def test_cum_hyperbolic_is_smooth_and_b_sensitive_through_unity() -> None:
+    t = np.array([0.25, 1.0, 5.0, 30.0])
+    qi, Di = 800.0, 2.5
+
+    # b = 1 is exactly the harmonic closed form.
+    harmonic = qi / Di * np.log1p(Di * t) * DAYS_PER_YEAR
+    np.testing.assert_allclose(cum_hyperbolic(t, qi, Di, 1.0), harmonic, rtol=1e-13)
+
+    # Away from b = 1 it still equals the textbook expression.
+    for b in (0.5, 0.9, 0.99, 1.01, 1.2, 1.6):
+        textbook = qi / (Di * (1 - b)) * (1 - np.power(1 + b * Di * t, 1 - 1 / b)) * DAYS_PER_YEAR
+        np.testing.assert_allclose(cum_hyperbolic(t, qi, Di, b), textbook, rtol=1e-9)
+
+    # dQ/db at b = 1 by the SAME forward step curve_fit takes (~1.5e-8)
+    # must match a wide central difference — it was identically 0 before.
+    h = 1.5e-8
+    forward = (cum_hyperbolic(t, qi, Di, 1.0 + h) - cum_hyperbolic(t, qi, Di, 1.0)) / h
+    central = (cum_hyperbolic(t, qi, Di, 1.001) - cum_hyperbolic(t, qi, Di, 0.999)) / 2e-3
+    assert np.all(forward > 0)
+    np.testing.assert_allclose(forward, central, rtol=1e-3)
+
+    # No seam where the old harmonic hand-off band ended.
+    lo, hi = cum_hyperbolic(t, qi, Di, 1.0 + 0.9999e-4), cum_hyperbolic(t, qi, Di, 1.0 + 1.0001e-4)
+    np.testing.assert_allclose(lo, hi, rtol=1e-7)
 
 
 def test_rate_time_fit_also_recovers_hyperbolic_params() -> None:

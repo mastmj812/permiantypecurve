@@ -572,14 +572,18 @@ def fit_with_fallback(
     """Default `rate_cum` fit with a `rate_time` retry on two triggers.
 
     Why: `fit_rate_cum` integrates the rate model to a closed-form
-    cumulative, then NLS-fits cum-vs-time. The integral has very low
-    Jacobian sensitivity to b — small b changes produce small cum
-    differences over typical post-peak windows — so the optimizer
-    often leaves b near its initial guess (1.0) and absorbs the misfit
-    into Di. On wells where the "true" b ≠ 1, Di then pins at the
-    bound (0.3 or 5.0) and the fit is flagged. Rate-vs-time is noisier
-    but more constraining on b, so it can produce a different
-    (Di, b) pair that doesn't pin.
+    cumulative, then NLS-fits cum-vs-time. Cum is smooth, so (Di, b)
+    trade off along a shallow valley and Di can run into its bound
+    (DI_NOMINAL_LO/HI_PER_YEAR) on wells the cum target constrains
+    poorly. Rate-vs-time is noisier but weights the early decline
+    directly, so it can produce a different (Di, b) pair that doesn't
+    pin.
+
+    (History: this docstring used to blame "very low Jacobian
+    sensitivity to b" for b sitting at its 1.0 start. The sensitivity
+    was not low, it was exactly zero — `cum_hyperbolic` handed off to a
+    b-free harmonic inside |b-1| < 1e-4. Fixed there; b now moves in
+    the cum fit.)
 
     Triggers (either fires the retry):
 

@@ -316,8 +316,7 @@ def forecast_well(
         return out
 
     # Default "rate_cum" runs the wrapper that retries with rate-time
-    # when Di pins at a bound (cum-fit's low b-sensitivity often leaves
-    # b at 1.0 and absorbs misfit into Di). Explicit "rate_time" or
+    # when Di pins at a bound (see fit_with_fallback). Explicit "rate_time" or
     # "rate_cum_strict" opt out — useful for tests and per-well overrides.
     if cfg.fit_method == "rate_time":
         fit_fn = fit_rate_time
