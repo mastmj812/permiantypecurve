@@ -211,3 +211,62 @@ def test_sufficient_history_flag_unset_at_six_months() -> None:
         df, model_type="arps_exponential", peak=peak, stream="oil", config=_UNCONSTRAINED
     )
     assert r.insufficient_history is False
+
+
+# ---------------- peak anchor (default config, anchors ON) ----------------
+
+
+def _peak_month_avg(params: dict[str, float]) -> float:
+    """Model's average rate over the peak month (t in [0, 1/12] yr)."""
+    q = cum_modified_hyperbolic(
+        np.array([1.0 / 12.0]), params["qi"], params["Di"], params["b"], params["Df"]
+    )
+    return float(q[0]) / (DAYS_PER_YEAR / 12.0)
+
+
+def test_anchored_fit_recovers_truth_with_default_config() -> None:
+    """The qi cap is on the model's PEAK-MONTH AVERAGE, not instantaneous
+    qi. At nominal Di 3.0/yr (~77% effective yr-1) the true instantaneous
+    qi sits ~12% above the observed peak-month average — above the old
+    1.05 x peak cap, which forced qi low and dragged b down with it."""
+    truth = {"qi": 1000.0, "Di": 3.0, "b": 1.1, "Df": 0.08}
+    df = _synthetic_monthly(
+        cum_fn=lambda t, qi, Di, b, Df: cum_modified_hyperbolic(t, qi, Di, b, Df),
+        params=truth,
+        months=36,
+    )
+    peak = _peak_at_month_zero(df)
+    assert truth["qi"] > 1.05 * peak.peak_rate  # the old cap would have bound
+
+    r = fit_rate_cum(df, model_type="modified_hyperbolic", peak=peak, stream="oil")
+    assert r.params["qi"] == pytest.approx(truth["qi"], rel=0.005)
+    assert r.params["Di"] == pytest.approx(truth["Di"], rel=0.01)
+    assert r.params["b"] == pytest.approx(truth["b"], abs=0.01)
+
+
+@pytest.mark.parametrize(
+    ("peak_month_scale", "binds"),
+    [(0.70, "cap"), (3.0, "floor")],
+)
+def test_peak_anchor_bounds_hold_when_binding(peak_month_scale: float, binds: str) -> None:
+    """Distort ONLY the peak month so the data pull qi past one end of the
+    anchor. Cap: model peak-month average <= 1.05 x observed peak. Floor:
+    instantaneous qi >= 0.90 x observed peak (meaning unchanged)."""
+    truth = {"qi": 1000.0, "Di": 2.5, "b": 1.0, "Df": 0.08}
+    df = _synthetic_monthly(
+        cum_fn=lambda t, qi, Di, b, Df: cum_modified_hyperbolic(t, qi, Di, b, Df),
+        params=truth,
+        months=36,
+    )
+    df.loc[0, ["oil_bbl", "rate_calday_bopd"]] *= peak_month_scale
+    peak = _peak_at_month_zero(df)
+
+    for fit in (fit_rate_cum, fit_rate_time):
+        r = fit(df, model_type="modified_hyperbolic", peak=peak, stream="oil")
+        assert _peak_month_avg(r.params) <= 1.05 * peak.peak_rate * (1 + 1e-6)
+        assert r.params["qi"] >= 0.90 * peak.peak_rate * (1 - 1e-6)
+    r = fit_rate_cum(df, model_type="modified_hyperbolic", peak=peak, stream="oil")
+    if binds == "cap":
+        assert _peak_month_avg(r.params) == pytest.approx(1.05 * peak.peak_rate, rel=1e-3)
+    else:
+        assert r.params["qi"] == pytest.approx(0.90 * peak.peak_rate, rel=1e-3)

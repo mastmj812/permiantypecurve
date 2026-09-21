@@ -80,9 +80,15 @@ class ForecastConfig:
     # Nominal-Di upper bound for the water fit (oil/gas use the oil-tuned
     # fit.DI_NOMINAL_HI_PER_YEAR). Water craters faster early; see above.
     water_di_nominal_hi_per_year: float = DEFAULT_WATER_DI_NOMINAL_HI_PER_YEAR
-    # Peak-anchor qi (ON by default): the fit's qi is constrained to
-    # [lo, hi] * observed_peak_rate instead of the wide [0, 10*peak]
-    # default. Anchoring qi near the peak stops the cum fit from settling
+    # Peak-anchor qi (ON by default), instead of the wide [0, 10*peak]
+    # band. The two ends bound DIFFERENT quantities, on purpose:
+    #   lo — instantaneous qi            >= lo * observed peak rate
+    #   hi — model's PEAK-MONTH AVERAGE  <= hi * observed peak rate
+    # The observed peak is a calendar-day month average, so the cap is on
+    # the model's month average too (fit._anchor_to_peak_month). Capping
+    # instantaneous qi — which runs 6-14% above the peak-month average at
+    # Permian declines — biased b low once b could move.
+    # Anchoring qi near the peak stops the cum fit from settling
     # into the coupled low-qi / low-Di degenerate corner — diagnostics on
     # braveheart_wca showed corr(qi_capture, di_gap)=+0.71 on oil, which
     # this drops to ~+0.12 (qi<0.80: 30%->0%, shallow-Di: 18%->1%).
@@ -98,9 +104,9 @@ class ForecastConfig:
     # ~10%, which a higher b can lift. None = use the module default.
     b_nominal_hi: float | None = None
     # Override the hyperbolic-b LOWER bound (default fit.B_LO = 0.9).
-    # Because the cum fit is nearly insensitive to b, raising the ceiling
-    # doesn't fatten tails — only forcing b up via the floor does. None =
-    # module default.
+    # None = module default. (An older note here said the cum fit was
+    # "nearly insensitive to b" — that was the frozen-b defect in
+    # cumulative.cum_hyperbolic, since fixed; b now responds to the data.)
     b_nominal_lo: float | None = None
     # >= 6 months post-peak required for the default fit (brief).
     min_post_peak_months: int = 6
