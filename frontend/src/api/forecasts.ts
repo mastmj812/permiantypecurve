@@ -10,6 +10,10 @@ export type Stream = "oil" | "gas" | "water";
 // "cohort_transfer" = short-history well whose Di / b were transferred
 // from the median of the long-history cohort in the same batch.
 // See backend forecasting/cohort.py + the /transfer-cohort-params endpoint.
+// "*_bprior" = the same default-path outcome, but the well had < 36
+// post-peak fit months so b was pulled toward its bench prior (weight 1
+// at <= 12 months, tapering to 0 at 36). Details ride
+// `diagnostics.b_prior`. See backend forecasting/b_prior.py.
 // "ratio_cum_oil" = ratio mode (gas/water only, engineer-selected): the
 // stream is a fitted ratio of CUMULATIVE OIL, forecast as ratio x the
 // oil forecast. Such rows carry model_type "ratio" and no Arps params
@@ -18,8 +22,29 @@ export type FitMethod =
   | "rate_cum"
   | "rate_time"
   | "rate_time_fallback"
+  | "rate_cum_bprior"
+  | "rate_time_fallback_bprior"
   | "cohort_transfer"
   | "ratio_cum_oil";
+export const isBPriorFit = (m: FitMethod): boolean =>
+  m === "rate_cum_bprior" || m === "rate_time_fallback_bprior";
+
+// Tooltip for the Review grid's "b prior" badge, from diagnostics.b_prior.
+export function bPriorTitle(diagnostics: Record<string, unknown> | null): string {
+  const p = (diagnostics?.b_prior ?? null) as Record<string, unknown> | null;
+  if (!p) return "Short history: b regularized toward its bench prior.";
+  const num = (v: unknown, digits = 2): string =>
+    typeof v === "number" ? v.toFixed(digits) : "?";
+  const str = (v: unknown, fallback: string): string =>
+    typeof v === "string" ? v : fallback;
+  return (
+    `Short history (${num(p.n_fit_months, 0)} fit months): b pulled toward the ` +
+    `${str(p.source, "bench")} prior ${num(p.b_prior)} (${str(p.key, "")}, ` +
+    `${num(p.n_wells, 0)} wells) at weight ${num(p.weight)}. ` +
+    `Unregularized b ${num(p.b_unregularized)} -> ${num(p.b_regularized)}.`
+  );
+}
+
 export type ModelType =
   | "arps_exponential"
   | "arps_hyperbolic"

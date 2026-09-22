@@ -33,10 +33,16 @@ class FitMethod(str, enum.Enum):
     RATE_CUM = "rate_cum"
     RATE_TIME = "rate_time"
     # The default cum-fit retried with rate-time because the primary
-    # pinned Di at a bound (cum has low Jacobian sensitivity to b — see
-    # forecasting/fit.py::fit_with_fallback). Distinct from RATE_TIME so
-    # the engineer can tell which wells were rescued.
+    # pinned Di at a bound (see forecasting/fit.py::fit_with_fallback).
+    # Distinct from RATE_TIME so the engineer can tell which wells were
+    # rescued.
     RATE_TIME_FALLBACK = "rate_time_fallback"
+    # Short-history variants of the two default-path outcomes: b was
+    # pulled toward the bench prior (forecasting/b_prior.py) because the
+    # well had < 36 fit months. The prior, its weight, and the
+    # unregularized b are persisted in `Forecast.diagnostics["b_prior"]`.
+    RATE_CUM_BPRIOR = "rate_cum_bprior"
+    RATE_TIME_FALLBACK_BPRIOR = "rate_time_fallback_bprior"
     # Short-history well whose Di / b were transferred from the median
     # of the long-history cohort in the same batch. qi stays from the
     # well's own peak. Donor cohort details are persisted in
@@ -106,7 +112,9 @@ class Forecast(Base):
     # knows to eyeball them. Computed once at fit time; same value
     # across oil/gas/water streams since downtime is per-well.
     downtime_ratio: Mapped[float | None] = mapped_column(Float)
-    # Audit payload for non-standard fit methods. Populated for
+    # Audit payload for non-standard fit methods. *_bprior rows carry
+    # {"b_prior": {b_prior, weight, sigma, n_fit_months, b_unregularized,
+    # b_regularized, source, key, n_wells}}. Populated for
     # cohort_transfer rows with {source, donor_count, donor_api10s,
     # cohort_Di, cohort_b, cutoff_months} so the user can trace which
     # long-history wells contributed to a transferred forecast. Null

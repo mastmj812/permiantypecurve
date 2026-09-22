@@ -24,12 +24,13 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pandas as pd
-from sqlalchemy import select
+from sqlalchemy import null, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import Forecast, ProductionMonthly, Stream, Well
+from app.forecasting.b_prior import lookup_b_prior
 from app.forecasting.fit import (
     STREAM_DOWNTIME_FLOOR_FIELD,
     STREAM_ECON_LIMIT_FIELD,
@@ -214,6 +215,9 @@ def _persist(
         "fit_r2": result.fit_r2,
         "fit_rmse": result.fit_rmse,
         "downtime_ratio": result.downtime_ratio,
+        # Always written, so a refit clears a stale payload (e.g. a former
+        # cohort_transfer row's donor block). SQL NULL, not JSON null.
+        "diagnostics": result.diagnostics if result.diagnostics is not None else null(),
         "manual_override": False,
         "locked": False,
         "updated_at": datetime.now(UTC),
@@ -284,8 +288,8 @@ def forecast_well(
 ) -> dict[str, ForecastResult | None]:
     """Fit all three streams for a single well.
 
-    Oil and gas anchor on the oil peak; water anchors on its own peak
-    (see ``detect_stream_peaks``). Each stream's ramp prefix is anchored
+    Every stream anchors on its OWN detected peak (see
+    ``detect_stream_peaks``). Each stream's ramp prefix is anchored
     on its own ONSET (first producing month) rather than the well's
     first-prod, so leading zero / sub-floor months don't inflate the ramp
     length or the type-curve timing (``onset_index_months`` records the
@@ -297,9 +301,11 @@ def forecast_well(
     # Basin-aware terminal Df: Midland wells get the shallower tail. Look
     # up the well's sub-basin once and bake the chosen Df into the config
     # used for every stream's fit + EUR.
-    subbasin = session.execute(
-        select(Well.subbasin).where(Well.api10 == api10)
-    ).scalar_one_or_none()
+    well_row = session.execute(
+        select(Well.subbasin, Well.formation_blueox).where(Well.api10 == api10)
+    ).one_or_none()
+    subbasin = well_row.subbasin if well_row is not None else None
+    formation_blueox = well_row.formation_blueox if well_row is not None else None
     cfg = replace(cfg, df_terminal_per_year=df_terminal_for_subbasin(subbasin, cfg))
 
     monthly = _load_monthly(session, api10)
@@ -316,8 +322,7 @@ def forecast_well(
         return out
 
     # Default "rate_cum" runs the wrapper that retries with rate-time
-    # when Di pins at a bound (cum-fit's low b-sensitivity often leaves
-    # b at 1.0 and absorbs misfit into Di). Explicit "rate_time" or
+    # when Di pins at a bound (see fit_with_fallback). Explicit "rate_time" or
     # "rate_cum_strict" opt out — useful for tests and per-well overrides.
     if cfg.fit_method == "rate_time":
         fit_fn = fit_rate_time
@@ -345,13 +350,21 @@ def forecast_well(
                 _prune_stale_stream_forecast(session, api10=api10, stream=stream)
             continue
         peak_index_abs = int(peak.peak_index)
+        # Short-history b regularization: bench prior for THIS stream, on
+        # the default path only (explicit rate_time / rate_cum_strict opt
+        # out). A caller-supplied cfg.b_prior wins. The fitter decides
+        # whether the prior carries any weight (none at >= 36 fit months).
+        stream_cfg, prior = cfg, None
+        if fit_fn is fit_with_fallback and cfg.b_prior_enabled and cfg.b_prior is None:
+            prior = lookup_b_prior(subbasin, formation_blueox, stream)
+            stream_cfg = replace(cfg, b_prior=prior.b)
         try:
             result = fit_fn(
                 monthly,
                 model_type=cfg.model_type,
                 peak=peak,
                 stream=stream,
-                config=cfg,
+                config=stream_cfg,
             )
         except Exception as e:
             log.exception("fit_failed", api10=api10, stream=stream, err=str(e))
@@ -393,12 +406,25 @@ def forecast_well(
             horizon_years=cfg.horizon_years,
             economic_limit=getattr(cfg, STREAM_ECON_LIMIT_FIELD[stream]),
         )
+        diagnostics = result.diagnostics
+        if diagnostics and "b_prior" in diagnostics and prior is not None:
+            # Record WHERE the prior came from so the row is auditable.
+            diagnostics = {
+                **diagnostics,
+                "b_prior": {
+                    **diagnostics["b_prior"],
+                    "source": prior.source,
+                    "key": prior.key,
+                    "n_wells": prior.n_wells,
+                },
+            }
         result = replace(
             result,
             params=new_params,
             qo=qo,
             peak_index_months=peak_index_months if peak_index_months > 0 else None,
             eur=total_eur,
+            diagnostics=diagnostics,
         )
 
         out[stream] = result

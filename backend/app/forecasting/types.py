@@ -80,9 +80,15 @@ class ForecastConfig:
     # Nominal-Di upper bound for the water fit (oil/gas use the oil-tuned
     # fit.DI_NOMINAL_HI_PER_YEAR). Water craters faster early; see above.
     water_di_nominal_hi_per_year: float = DEFAULT_WATER_DI_NOMINAL_HI_PER_YEAR
-    # Peak-anchor qi (ON by default): the fit's qi is constrained to
-    # [lo, hi] * observed_peak_rate instead of the wide [0, 10*peak]
-    # default. Anchoring qi near the peak stops the cum fit from settling
+    # Peak-anchor qi (ON by default), instead of the wide [0, 10*peak]
+    # band. The two ends bound DIFFERENT quantities, on purpose:
+    #   lo — instantaneous qi            >= lo * observed peak rate
+    #   hi — model's PEAK-MONTH AVERAGE  <= hi * observed peak rate
+    # The observed peak is a calendar-day month average, so the cap is on
+    # the model's month average too (fit._anchor_to_peak_month). Capping
+    # instantaneous qi — which runs 6-14% above the peak-month average at
+    # Permian declines — biased b low once b could move.
+    # Anchoring qi near the peak stops the cum fit from settling
     # into the coupled low-qi / low-Di degenerate corner — diagnostics on
     # braveheart_wca showed corr(qi_capture, di_gap)=+0.71 on oil, which
     # this drops to ~+0.12 (qi<0.80: 30%->0%, shallow-Di: 18%->1%).
@@ -92,16 +98,43 @@ class ForecastConfig:
     # None to disable.
     qi_anchor_lo_frac: float | None = 0.90
     qi_anchor_hi_frac: float | None = 1.05
+    # What the observed "peak rate" IS decides what the hi cap must bound:
+    #   "peak_month_avg" — real production: calendar-day MONTH AVERAGES.
+    #                      Cap the model's peak-month average (default).
+    #   "instantaneous"  — a point-sampled analytic series, rates[i] =
+    #                      q(t = i months), whose peak value IS qi. Cap qi
+    #                      itself. The type-curve P50 series is this kind
+    #                      (type_curves/fit_p50.py) — capping its month
+    #                      average instead lets qi float ~10% above the
+    #                      true peak and steepens Di to compensate.
+    qi_anchor_hi_basis: str = "peak_month_avg"
     # Override the hyperbolic-b upper bound (default fit.B_HI = 1.2, a
     # deliberately tight Wolfcamp cap). Raising it allows fatter tails —
     # diagnostics show the model under-predicts the out-year tail / cum by
     # ~10%, which a higher b can lift. None = use the module default.
     b_nominal_hi: float | None = None
     # Override the hyperbolic-b LOWER bound (default fit.B_LO = 0.9).
-    # Because the cum fit is nearly insensitive to b, raising the ceiling
-    # doesn't fatten tails — only forcing b up via the floor does. None =
-    # module default.
+    # None = module default. (An older note here said the cum fit was
+    # "nearly insensitive to b" — that was the frozen-b defect in
+    # cumulative.cum_hyperbolic, since fixed; b now responds to the data.)
     b_nominal_lo: float | None = None
+    # Short-history b regularization. With few post-peak months b is barely
+    # determined — at 24 months and 10% noise its spread is as wide as the
+    # whole [0.9, 1.2] window, so a free b just lands on a bound. When
+    # ``b_prior`` is set the fit adds ONE pseudo-observation pulling b
+    # toward it (fit._fit_with_b_prior), weighted 1.0 at <= full_weight
+    # months of fit data and tapering linearly to 0 at >= zero_weight
+    # months, beyond which the fit is exactly the unregularized one.
+    # ``b_prior`` is per (sub-basin, formation_blueox, stream) — the
+    # orchestrator fills it from app.forecasting.b_prior on the DEFAULT
+    # fit path only; explicit rate_time / rate_cum_strict opt out. None =
+    # no regularization (direct fitter calls, TC P50 fits, tests).
+    b_prior: float | None = None
+    b_prior_sigma: float = 0.10
+    b_prior_full_weight_months: int = 12
+    b_prior_zero_weight_months: int = 36
+    # Master switch for the orchestrator's prior lookup.
+    b_prior_enabled: bool = True
     # >= 6 months post-peak required for the default fit (brief).
     min_post_peak_months: int = 6
     # Wells with fewer than this many post-peak months are excluded from
@@ -144,6 +177,9 @@ class ForecastResult:
     # when peak_index_months is 0 — evaluator falls back to pure Arps.
     qo: float | None = None
     peak_index_months: int | None = None
+    # Audit payload persisted to forecasts.diagnostics. Set by the fitter
+    # when the b prior carried weight ({"b_prior": {...}}); None otherwise.
+    diagnostics: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {

@@ -6,6 +6,7 @@
 
 import {
   effectiveDecline,
+  isBPriorFit,
   type ForecastRow,
   type Stream,
 } from "../api/forecasts";
@@ -130,6 +131,7 @@ export function buildReviewTsv(rows: ForecastRow[], ctx: ReviewTsvContext): stri
     if (ctx.pendingTransfer.has(r.api10)) flags.push("pending transfer");
     if (ctx.outliers.has(r.api10)) flags.push("outlier");
     if (r.fit_at_bound) flags.push("at bound");
+    if (isBPriorFit(r.fit_method)) flags.push("b prior");
     if (r.downtime_ratio != null && r.downtime_ratio > 0.15) flags.push("downtime");
     if (r.manual_override) flags.push("edited");
     if (ctx.excluded.has(r.api10)) {

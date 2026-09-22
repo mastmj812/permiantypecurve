@@ -1,0 +1,999 @@
+{
+  "bench": {
+    "Central Basin Platform|BRNT": {
+      "gas": {
+        "Di": 1.0261,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 56,
+        "n_wells": 29,
+        "r2": 0.9988
+      },
+      "oil": {
+        "Di": 2.6082,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 65,
+        "n_wells": 32,
+        "r2": 0.99881
+      },
+      "water": {
+        "Di": 1.2642,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 65,
+        "n_wells": 32,
+        "r2": 0.99962
+      }
+    },
+    "Central Basin Platform|MISS": {
+      "gas": {
+        "Di": 1.0429,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 76,
+        "n_wells": 69,
+        "r2": 0.99914
+      },
+      "oil": {
+        "Di": 2.7445,
+        "b": 0.9696,
+        "b_at_bound": false,
+        "n_months": 74,
+        "n_wells": 86,
+        "r2": 0.99978
+      },
+      "water": {
+        "Di": 2.1651,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 76,
+        "n_wells": 78,
+        "r2": 0.99987
+      }
+    },
+    "Central Basin Platform|OTHER": {
+      "gas": {
+        "Di": 0.6033,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 82,
+        "n_wells": 169,
+        "r2": 0.99231
+      },
+      "oil": {
+        "Di": 2.3521,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 86,
+        "n_wells": 366,
+        "r2": 0.99957
+      },
+      "water": {
+        "Di": 2.0466,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 85,
+        "n_wells": 361,
+        "r2": 0.99913
+      }
+    },
+    "Delaware|AVA_0": {
+      "gas": {
+        "Di": 1.0938,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 60,
+        "n_wells": 124,
+        "r2": 0.99961
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 63,
+        "n_wells": 124,
+        "r2": 0.9931
+      },
+      "water": {
+        "Di": 2.7589,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 62,
+        "n_wells": 135,
+        "r2": 0.99296
+      }
+    },
+    "Delaware|AVA_1": {
+      "gas": {
+        "Di": 0.935,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 66,
+        "n_wells": 239,
+        "r2": 0.99765
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 68,
+        "n_wells": 252,
+        "r2": 0.96996
+      },
+      "water": {
+        "Di": 12.0,
+        "b": 1.1311,
+        "b_at_bound": false,
+        "n_months": 65,
+        "n_wells": 230,
+        "r2": 0.99878
+      }
+    },
+    "Delaware|AVA_2": {
+      "gas": {
+        "Di": 1.0406,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 64,
+        "n_wells": 129,
+        "r2": 0.99742
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 0.9423,
+        "b_at_bound": false,
+        "n_months": 70,
+        "n_wells": 136,
+        "r2": 0.99868
+      },
+      "water": {
+        "Di": 5.4828,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 68,
+        "n_wells": 132,
+        "r2": 0.99839
+      }
+    },
+    "Delaware|BRNT": {
+      "gas": {
+        "Di": 0.6287,
+        "b": 1.0041,
+        "b_at_bound": false,
+        "n_months": 81,
+        "n_wells": 66,
+        "r2": 0.99977
+      },
+      "oil": {
+        "Di": 3.7605,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 45,
+        "n_wells": 36,
+        "r2": 0.99452
+      }
+    },
+    "Delaware|BS1_S": {
+      "gas": {
+        "Di": 1.0199,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 53,
+        "n_wells": 254,
+        "r2": 0.99931
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.088,
+        "b_at_bound": false,
+        "n_months": 54,
+        "n_wells": 283,
+        "r2": 0.99988
+      },
+      "water": {
+        "Di": 3.9448,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 289,
+        "r2": 0.99918
+      }
+    },
+    "Delaware|BS2_C": {
+      "gas": {
+        "Di": 0.8376,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 51,
+        "n_wells": 215,
+        "r2": 0.99826
+      },
+      "oil": {
+        "Di": 3.6176,
+        "b": 1.1886,
+        "b_at_bound": true,
+        "n_months": 53,
+        "n_wells": 242,
+        "r2": 0.99993
+      },
+      "water": {
+        "Di": 3.3319,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 51,
+        "n_wells": 239,
+        "r2": 0.99973
+      }
+    },
+    "Delaware|BS2_S": {
+      "gas": {
+        "Di": 1.2856,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 64,
+        "n_wells": 1496,
+        "r2": 0.99912
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.0407,
+        "b_at_bound": false,
+        "n_months": 65,
+        "n_wells": 1570,
+        "r2": 0.99985
+      },
+      "water": {
+        "Di": 3.2571,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 65,
+        "n_wells": 1576,
+        "r2": 0.99953
+      }
+    },
+    "Delaware|BS3_C": {
+      "gas": {
+        "Di": 1.5852,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 55,
+        "n_wells": 575,
+        "r2": 0.99909
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.0813,
+        "b_at_bound": false,
+        "n_months": 56,
+        "n_wells": 613,
+        "r2": 0.9999
+      },
+      "water": {
+        "Di": 3.1622,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 55,
+        "n_wells": 607,
+        "r2": 0.9998
+      }
+    },
+    "Delaware|BS3_S": {
+      "gas": {
+        "Di": 1.7214,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 62,
+        "n_wells": 1399,
+        "r2": 0.99846
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.1231,
+        "b_at_bound": false,
+        "n_months": 63,
+        "n_wells": 1457,
+        "r2": 0.99998
+      },
+      "water": {
+        "Di": 3.3209,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 62,
+        "n_wells": 1419,
+        "r2": 0.99959
+      }
+    },
+    "Delaware|MISS": {
+      "gas": {
+        "Di": 0.8536,
+        "b": 0.9675,
+        "b_at_bound": false,
+        "n_months": 89,
+        "n_wells": 20,
+        "r2": 0.9998
+      }
+    },
+    "Delaware|OTHER": {
+      "gas": {
+        "Di": 0.8609,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 68,
+        "n_wells": 360,
+        "r2": 0.9993
+      },
+      "oil": {
+        "Di": 2.7541,
+        "b": 0.9957,
+        "b_at_bound": false,
+        "n_months": 69,
+        "n_wells": 392,
+        "r2": 0.99997
+      },
+      "water": {
+        "Di": 4.5493,
+        "b": 1.1875,
+        "b_at_bound": true,
+        "n_months": 68,
+        "n_wells": 404,
+        "r2": 0.99998
+      }
+    },
+    "Delaware|WCA_1": {
+      "gas": {
+        "Di": 1.9304,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 73,
+        "n_wells": 3589,
+        "r2": 0.99894
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.1106,
+        "b_at_bound": false,
+        "n_months": 75,
+        "n_wells": 3663,
+        "r2": 0.99997
+      },
+      "water": {
+        "Di": 3.1746,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 3504,
+        "r2": 0.99985
+      }
+    },
+    "Delaware|WCA_2": {
+      "gas": {
+        "Di": 1.7611,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 73,
+        "n_wells": 2887,
+        "r2": 0.9988
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.1577,
+        "b_at_bound": false,
+        "n_months": 76,
+        "n_wells": 2929,
+        "r2": 0.99998
+      },
+      "water": {
+        "Di": 2.6408,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 2805,
+        "r2": 0.99965
+      }
+    },
+    "Delaware|WCB_1": {
+      "gas": {
+        "Di": 1.4502,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 71,
+        "n_wells": 1078,
+        "r2": 0.99881
+      },
+      "oil": {
+        "Di": 3.444,
+        "b": 1.1668,
+        "b_at_bound": false,
+        "n_months": 72,
+        "n_wells": 1109,
+        "r2": 0.99999
+      },
+      "water": {
+        "Di": 2.5792,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 71,
+        "n_wells": 1079,
+        "r2": 0.99977
+      }
+    },
+    "Delaware|WCB_2": {
+      "gas": {
+        "Di": 1.2086,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 63,
+        "n_wells": 528,
+        "r2": 0.99939
+      },
+      "oil": {
+        "Di": 3.6042,
+        "b": 1.1657,
+        "b_at_bound": false,
+        "n_months": 63,
+        "n_wells": 551,
+        "r2": 0.99999
+      },
+      "water": {
+        "Di": 2.767,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 63,
+        "n_wells": 534,
+        "r2": 0.9999
+      }
+    },
+    "Delaware|WCC": {
+      "gas": {
+        "Di": 1.2371,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 70,
+        "n_wells": 502,
+        "r2": 0.99978
+      },
+      "oil": {
+        "Di": 3.0684,
+        "b": 1.0778,
+        "b_at_bound": false,
+        "n_months": 66,
+        "n_wells": 506,
+        "r2": 0.99999
+      },
+      "water": {
+        "Di": 1.8751,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 70,
+        "n_wells": 500,
+        "r2": 0.9998
+      }
+    },
+    "Delaware|WCD": {
+      "gas": {
+        "Di": 1.3405,
+        "b": 1.0796,
+        "b_at_bound": false,
+        "n_months": 79,
+        "n_wells": 84,
+        "r2": 0.99988
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.1308,
+        "b_at_bound": false,
+        "n_months": 77,
+        "n_wells": 88,
+        "r2": 0.99972
+      },
+      "water": {
+        "Di": 2.7636,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 78,
+        "n_wells": 88,
+        "r2": 0.99943
+      }
+    },
+    "Delaware|WCXY": {
+      "gas": {
+        "Di": 2.2946,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 1197,
+        "r2": 0.99902
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.108,
+        "b_at_bound": false,
+        "n_months": 76,
+        "n_wells": 1222,
+        "r2": 0.99982
+      },
+      "water": {
+        "Di": 3.0202,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 1133,
+        "r2": 0.99967
+      }
+    },
+    "Delaware|WDFD": {
+      "gas": {
+        "Di": 1.2507,
+        "b": 1.175,
+        "b_at_bound": false,
+        "n_months": 81,
+        "n_wells": 117,
+        "r2": 0.99991
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 50,
+        "n_wells": 32,
+        "r2": 0.99987
+      }
+    },
+    "Eastern Shelf|(unmapped)": {
+      "gas": {
+        "Di": 0.7901,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 51,
+        "n_wells": 124,
+        "r2": 0.99989
+      },
+      "oil": {
+        "Di": 3.0096,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 155,
+        "r2": 0.99836
+      },
+      "water": {
+        "Di": 3.0093,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 154,
+        "r2": 0.99829
+      }
+    },
+    "Midland|DEAN": {
+      "gas": {
+        "Di": 0.7202,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 55,
+        "n_wells": 296,
+        "r2": 0.99882
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 57,
+        "n_wells": 325,
+        "r2": 0.99793
+      },
+      "water": {
+        "Di": 6.1411,
+        "b": 1.0128,
+        "b_at_bound": false,
+        "n_months": 58,
+        "n_wells": 316,
+        "r2": 0.99994
+      }
+    },
+    "Midland|JM": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 53,
+        "n_wells": 580,
+        "r2": 0.99985
+      },
+      "oil": {
+        "Di": 2.6452,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 650,
+        "r2": 0.99996
+      },
+      "water": {
+        "Di": 2.7794,
+        "b": 0.9656,
+        "b_at_bound": false,
+        "n_months": 53,
+        "n_wells": 652,
+        "r2": 0.99996
+      }
+    },
+    "Midland|LSSH": {
+      "gas": {
+        "Di": 0.5708,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 68,
+        "n_wells": 3469,
+        "r2": 0.99739
+      },
+      "oil": {
+        "Di": 3.1165,
+        "b": 0.9138,
+        "b_at_bound": true,
+        "n_months": 69,
+        "n_wells": 3678,
+        "r2": 0.99995
+      },
+      "water": {
+        "Di": 3.9968,
+        "b": 1.0194,
+        "b_at_bound": false,
+        "n_months": 70,
+        "n_wells": 3662,
+        "r2": 0.99993
+      }
+    },
+    "Midland|MS": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 57,
+        "n_wells": 659,
+        "r2": 0.99682
+      },
+      "oil": {
+        "Di": 2.9342,
+        "b": 0.9862,
+        "b_at_bound": false,
+        "n_months": 58,
+        "n_wells": 753,
+        "r2": 0.99998
+      },
+      "water": {
+        "Di": 3.4839,
+        "b": 1.0629,
+        "b_at_bound": false,
+        "n_months": 59,
+        "n_wells": 757,
+        "r2": 0.99992
+      }
+    },
+    "Midland|OTHER": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 67,
+        "n_wells": 34,
+        "r2": 0.9931
+      },
+      "oil": {
+        "Di": 2.1859,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 65,
+        "n_wells": 41,
+        "r2": 0.99992
+      },
+      "water": {
+        "Di": 2.6904,
+        "b": 1.1493,
+        "b_at_bound": false,
+        "n_months": 70,
+        "n_wells": 43,
+        "r2": 0.99991
+      }
+    },
+    "Midland|WCA_1": {
+      "gas": {
+        "Di": 0.5307,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 74,
+        "n_wells": 4514,
+        "r2": 0.99595
+      },
+      "oil": {
+        "Di": 3.2828,
+        "b": 0.9197,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 4784,
+        "r2": 0.99997
+      },
+      "water": {
+        "Di": 3.6309,
+        "b": 0.9838,
+        "b_at_bound": false,
+        "n_months": 73,
+        "n_wells": 4768,
+        "r2": 0.99997
+      }
+    },
+    "Midland|WCB_1": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 76,
+        "n_wells": 2940,
+        "r2": 0.99657
+      },
+      "oil": {
+        "Di": 3.8876,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 75,
+        "n_wells": 3131,
+        "r2": 0.99988
+      },
+      "water": {
+        "Di": 3.9665,
+        "b": 0.9229,
+        "b_at_bound": false,
+        "n_months": 74,
+        "n_wells": 3117,
+        "r2": 0.99998
+      }
+    },
+    "Midland|WCB_2": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 81,
+        "n_wells": 1238,
+        "r2": 0.99447
+      },
+      "oil": {
+        "Di": 3.4443,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 78,
+        "n_wells": 1303,
+        "r2": 0.99993
+      },
+      "water": {
+        "Di": 3.2971,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 79,
+        "n_wells": 1298,
+        "r2": 0.99996
+      }
+    },
+    "Midland|WCC": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 78,
+        "n_wells": 312,
+        "r2": 0.9972
+      },
+      "oil": {
+        "Di": 3.3493,
+        "b": 0.9795,
+        "b_at_bound": false,
+        "n_months": 72,
+        "n_wells": 315,
+        "r2": 0.99998
+      },
+      "water": {
+        "Di": 3.4015,
+        "b": 0.9891,
+        "b_at_bound": false,
+        "n_months": 76,
+        "n_wells": 316,
+        "r2": 0.99996
+      }
+    },
+    "Midland|WCD": {
+      "gas": {
+        "Di": 1.0995,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 51,
+        "n_wells": 259,
+        "r2": 0.99627
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.0989,
+        "b_at_bound": false,
+        "n_months": 52,
+        "n_wells": 285,
+        "r2": 0.99994
+      },
+      "water": {
+        "Di": 5.113,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 52,
+        "n_wells": 283,
+        "r2": 0.99997
+      }
+    },
+    "Northwest Shelf|(unmapped)": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 76,
+        "n_wells": 458,
+        "r2": 0.97571
+      },
+      "oil": {
+        "Di": 1.4414,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 81,
+        "n_wells": 549,
+        "r2": 0.99937
+      },
+      "water": {
+        "Di": 1.4627,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 82,
+        "n_wells": 544,
+        "r2": 0.99905
+      }
+    }
+  },
+  "meta": {
+    "generated_at": "2026-09-21T22:20:17+00:00",
+    "git_sha": null,
+    "method": "pooled peak-normalized median decline, fit_rate_cum, production bounds",
+    "min_fit_months": 36,
+    "min_lateral_ft": 3000.0,
+    "min_month_coverage": 0.5,
+    "min_vintage_year": 2016,
+    "min_wells": 15,
+    "n_wells_scanned": 51935
+  },
+  "subbasin": {
+    "Central Basin Platform": {
+      "gas": {
+        "Di": 0.7717,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 80,
+        "n_wells": 280,
+        "r2": 0.99341
+      },
+      "oil": {
+        "Di": 2.6538,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 82,
+        "n_wells": 498,
+        "r2": 0.99975
+      },
+      "water": {
+        "Di": 1.9986,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 83,
+        "n_wells": 484,
+        "r2": 0.99949
+      }
+    },
+    "Delaware": {
+      "gas": {
+        "Di": 1.5883,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 69,
+        "n_wells": 14859,
+        "r2": 0.99912
+      },
+      "oil": {
+        "Di": 4.0,
+        "b": 1.1173,
+        "b_at_bound": false,
+        "n_months": 70,
+        "n_wells": 15213,
+        "r2": 0.99998
+      },
+      "water": {
+        "Di": 3.068,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 70,
+        "n_wells": 14864,
+        "r2": 0.99971
+      }
+    },
+    "Eastern Shelf": {
+      "gas": {
+        "Di": 0.7901,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 51,
+        "n_wells": 124,
+        "r2": 0.99989
+      },
+      "oil": {
+        "Di": 3.0096,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 155,
+        "r2": 0.99836
+      },
+      "water": {
+        "Di": 3.0093,
+        "b": 0.9,
+        "b_at_bound": true,
+        "n_months": 54,
+        "n_wells": 154,
+        "r2": 0.99829
+      }
+    },
+    "Midland": {
+      "gas": {
+        "Di": 0.522,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 70,
+        "n_wells": 14326,
+        "r2": 0.99712
+      },
+      "oil": {
+        "Di": 3.2313,
+        "b": 0.9026,
+        "b_at_bound": true,
+        "n_months": 70,
+        "n_wells": 15289,
+        "r2": 0.99996
+      },
+      "water": {
+        "Di": 3.7208,
+        "b": 0.9737,
+        "b_at_bound": false,
+        "n_months": 70,
+        "n_wells": 15238,
+        "r2": 0.99996
+      }
+    },
+    "Northwest Shelf": {
+      "gas": {
+        "Di": 0.5,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 76,
+        "n_wells": 458,
+        "r2": 0.97571
+      },
+      "oil": {
+        "Di": 1.4414,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 81,
+        "n_wells": 549,
+        "r2": 0.99937
+      },
+      "water": {
+        "Di": 1.4627,
+        "b": 1.2,
+        "b_at_bound": true,
+        "n_months": 82,
+        "n_wells": 544,
+        "r2": 0.99905
+      }
+    }
+  }
+}

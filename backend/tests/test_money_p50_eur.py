@@ -16,37 +16,49 @@ Pure functions only — no database, no Supabase.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
-from app.forecasting.cumulative import cum_modified_hyperbolic
-from app.forecasting.eur import DAYS_PER_YEAR
+from app.forecasting.eur import compute_eur
+from app.forecasting.ramp_arps import build_ramp_arps_rate
 from app.type_curves.aggregate import WellSeries, aggregate
 from app.type_curves.fit_p50 import fit_p50_series
 
 # Pinned P50 oil EUR per 1,000 ft (bbl / 1000 ft) for the fixed cohort below.
 # Re-pin ONLY on a deliberate math change, and call it out in the PR.
-PINNED_P50_OIL_EUR_PER_1000FT: float = 61_642.7
+#
+# History: 61,642.7 (2026-05 → 2026-09) was pinned while (a) b was frozen at
+# 1.00 by the cum_hyperbolic harmonic hand-off and (b) this cohort was built
+# from MONTH-AVERAGED rates, which is not what production feeds fit_p50 (see
+# _decline_profile). Against the cohort's true 50-yr EUR it read +1.2%.
+# 60,959.3 (2026-09-22): b free, qi cap on the peak-month average, point-
+# sampled cohort, trapezoid cum target in fit_p50 — reads +0.10% vs truth
+# (60,897.2); the residual is the P50 fit's own discretization.
+PINNED_P50_OIL_EUR_PER_1000FT: float = 60_959.3
 TOLERANCE: float = 0.005  # 0.5%
 N_MONTHS: int = 48
+
+# The cohort's truth, so the pin can be checked against something absolute.
+_TRUE = {"qi": 800.0, "Di": 2.0, "b": 1.0, "Df": 0.08}  # nominal Di 2.0/yr ≈ 67% eff.
 
 
 def _decline_profile(
     qi: float, di_nominal: float, b: float, df: float, n: int = N_MONTHS
 ) -> list[float]:
-    """Monthly calendar-day rate series for a modified-hyperbolic decline,
-    peak at month 0 (a post-peak series, as ``aggregate`` expects). Di is
-    NOMINAL per-year."""
-    t = (np.arange(n) + 0.5) / 12.0
-    eps = 1.0 / 24.0  # half-month, in years
-    lo = cum_modified_hyperbolic(np.maximum(t - eps, 0.0), qi, di_nominal, b, df)
-    hi = cum_modified_hyperbolic(t + eps, qi, di_nominal, b, df)
-    return [float(x) for x in (hi - lo) / (2 * eps * DAYS_PER_YEAR)]
+    """POINT-SAMPLED monthly rate series, rates[i] = q(t = i months), peak
+    at month 0 — the same convention the type-curve loader feeds
+    ``aggregate``/``fit_p50`` in production (``loader._forecast_rates`` →
+    ``build_ramp_arps_rate``), whose peak value IS the instantaneous qi.
+    Di is NOMINAL per-year.
+
+    An earlier version built month-AVERAGED rates here; fit_p50 caps qi
+    at the observed peak (qi_anchor_hi_basis="instantaneous"), so that
+    convention forced qi ~7% under truth and the fitted EUR carried a
+    -2.6% bias that had nothing to do with the model."""
+    return build_ramp_arps_rate(n_months=n, qo=qi, qi=qi, peak_index=0, Di=di_nominal, b=b, Df=df)
 
 
 def _fixed_cohort() -> list[WellSeries]:
-    # qi 800 BOPD, nominal Di 2.0/yr (~86% effective yr-1), b 1.0, Df 8%/yr.
-    base = _decline_profile(qi=800.0, di_nominal=2.0, b=1.0, df=0.08)
+    base = _decline_profile(qi=_TRUE["qi"], di_nominal=_TRUE["Di"], b=_TRUE["b"], df=_TRUE["Df"])
     # Five wells spread around the central profile so the P50 is the median
     # well; all 10,000 ft lateral, so per-1,000-ft normalization is a clean /10.
     factors = [0.85, 0.925, 1.0, 1.075, 1.15]
@@ -75,6 +87,15 @@ def test_exported_p50_oil_eur_per_1000ft_is_pinned() -> None:
         f"type-curve EUR the tool exports moved — investigate a convention-level "
         f"change before re-pinning."
     )
+
+
+def test_pinned_value_is_the_cohorts_true_eur() -> None:
+    """The pin is not just self-consistent: the median well IS the central
+    profile (factor 1.0, 10,000 ft), so the exported P50 EUR/1000 ft must
+    reproduce that well's closed-form 50-yr integral. Guards against
+    re-pinning a number that merely encodes a fit bias."""
+    true_per_1000ft = compute_eur("modified_hyperbolic", _TRUE, horizon_years=50.0) / 10.0
+    assert pytest.approx(true_per_1000ft, rel=TOLERANCE) == PINNED_P50_OIL_EUR_PER_1000FT
 
 
 def test_p50_percentile_orientation_is_spe() -> None:

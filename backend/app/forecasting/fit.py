@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -34,7 +35,7 @@ from app.forecasting.cumulative import (
     cum_hyperbolic,
     cum_modified_hyperbolic,
 )
-from app.forecasting.eur import compute_eur
+from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
 from app.forecasting.models import (
     arps_exponential,
     arps_harmonic,
@@ -329,23 +330,99 @@ def _stream_di_hi(stream: str, config: ForecastConfig) -> float:
 def _qi_bounds(
     peak_rate: float, config: ForecastConfig, stream: str
 ) -> tuple[float | None, float | None]:
-    """Optional qi bounds anchored to the observed peak. (None, None) —
-    the default [0, 10*peak] band — unless both
-    ``ForecastConfig.qi_anchor_lo_frac`` and ``qi_anchor_hi_frac`` are
-    set, in which case qi is constrained to [lo, hi] * peak_rate. Anchoring
-    qi near the peak stops the cum fit from trading a low qi for a too-
-    shallow Di (the coupled degeneracy).
+    """Optional peak anchor for qi, as absolute rates ``(qi_floor, q1_cap)``.
+    (None, None) — the default [0, 10*peak] band on qi — unless both
+    ``ForecastConfig.qi_anchor_lo_frac`` and ``qi_anchor_hi_frac`` are set.
 
-    All three streams anchor on their OWN detected peak now
+    The two ends are deliberately expressed on DIFFERENT quantities (see
+    ``_anchor_to_peak_month``):
+
+      * ``qi_floor = lo * peak`` bounds the INSTANTANEOUS qi from below.
+        Stops the cum fit trading a low qi for a too-shallow Di (the
+        coupled degeneracy).
+      * ``q1_cap = hi * peak`` bounds the model's AVERAGE rate over the
+        peak month from above. ``peak`` is a calendar-day month average,
+        so the cap has to be on the model's month average too. It used to
+        cap the instantaneous qi, which sits 6-14% ABOVE the peak-month
+        average at Permian declines (nominal Di 1.5-3.5/yr) — so the cap
+        forced qi low, and once b was free to move it absorbed that:
+        b biased low by ~0.07 (noise-free) to ~0.2 (24 months, 10% noise).
+
+    "Peak month" is the DETECTED peak (t = 0 is its first day), not the
+    well's first reported month — the first record is the peak on only
+    ~7% of oil wells, so partial first months rarely set the anchor.
+
+    All three streams anchor on their OWN detected peak
     (orchestrator.detect_stream_peaks), so ``peak_rate`` is always in
-    the stream's own units and anchoring applies uniformly. (Gas was
-    historically exempt because it inherited the OIL peak — anchoring
-    MCFD-scale qi to a BOPD-scale rate would have crushed it.)
+    the stream's own units and anchoring applies uniformly.
     """
     lo, hi = config.qi_anchor_lo_frac, config.qi_anchor_hi_frac
     if lo is None or hi is None or peak_rate <= 0:
         return None, None
     return lo * peak_rate, hi * peak_rate
+
+
+# Length of the peak month on the fit's time axis, in years. t = 0 is the
+# START of the detected peak month, so the model's average rate over that
+# month is Q(1/12) / (DAYS_PER_YEAR / 12).
+_PEAK_MONTH_YEARS: float = 1.0 / 12.0
+
+_Bounds = tuple[list[float], list[float]]
+
+
+def _anchor_to_peak_month(
+    func: Callable[..., NDArray[np.float64]],
+    cum_func: Callable[..., NDArray[np.float64]],
+    *,
+    qi_floor: float,
+    q1_cap: float,
+    peak_rate: float,
+    bounds: _Bounds,
+    p0: list[float],
+) -> tuple[
+    Callable[..., NDArray[np.float64]],
+    _Bounds,
+    list[float],
+    Callable[[NDArray[np.float64]], NDArray[np.float64]],
+]:
+    """Re-parameterize qi so the peak anchor is an exact BOX bound.
+
+    Wanted: instantaneous ``qi >= qi_floor`` AND model peak-month average
+    ``q1 <= q1_cap``. With u(shape) = q1/qi (every cum form is linear in
+    qi, so u depends only on Di/b), that is
+    ``qi_floor*u <= q1 <= q1_cap`` — a bound that moves with Di and b, which
+    curve_fit can't take. So fit ``s in [0, 1]`` instead of qi:
+
+        q1 = qi_floor*u + s * (q1_cap - qi_floor*u),   qi = q1 / u
+
+    u < 1 for any declining curve and lo < hi, so the interval is never
+    empty. Returns (wrapped func, bounds, p0, to_physical) where
+    ``to_physical`` maps the fitted vector back to (qi, *shape).
+    """
+    t1 = np.array([_PEAK_MONTH_YEARS])
+    peak_month_days = DAYS_PER_YEAR * _PEAK_MONTH_YEARS
+
+    def unit(shape: Any) -> float:
+        return float(cum_func(t1, 1.0, *shape)[0]) / peak_month_days
+
+    def qi_of(s: float, shape: Any) -> float:
+        u = unit(shape)
+        q1_lo = qi_floor * u
+        return (q1_lo + s * max(q1_cap - q1_lo, 0.0)) / u
+
+    def wrapped(t: NDArray[np.float64], s: float, *shape: float) -> NDArray[np.float64]:
+        return func(t, qi_of(s, shape), *shape)
+
+    def to_physical(popt: NDArray[np.float64]) -> NDArray[np.float64]:
+        out = np.array(popt, dtype=float)
+        out[0] = qi_of(float(popt[0]), popt[1:])
+        return out
+
+    # Start with the model's peak-month average ON the observed peak.
+    q1_lo0 = qi_floor * unit(p0[1:])
+    s0 = float(np.clip((peak_rate - q1_lo0) / max(q1_cap - q1_lo0, 1e-12), 1e-6, 1.0 - 1e-6))
+    lower, upper = bounds
+    return wrapped, ([0.0, *lower[1:]], [1.0, *upper[1:]]), [s0, *p0[1:]], to_physical
 
 
 def _params_to_dict(
@@ -390,6 +467,101 @@ def _fit_core(
     return popt, func(t, *popt)
 
 
+# Index of b in the fit vector for the models that have one. Slot 0 is qi
+# (or the peak-anchor's s), slot 1 is Di.
+_B_INDEX: dict[str, int] = {"arps_hyperbolic": 2, "modified_hyperbolic": 2}
+
+
+def _fit_with_b_prior(
+    df: pd.DataFrame,
+    *,
+    target_col: str,
+    func: Callable[..., NDArray[np.float64]],
+    bounds: _Bounds,
+    p0: list[float],
+    model_type: str,
+    config: ForecastConfig,
+) -> tuple[NDArray[np.float64], NDArray[np.float64], dict[str, Any] | None]:
+    """``_fit_core``, then — on short histories — a second pass with b
+    pulled toward ``config.b_prior``. Returns (popt, predicted, info);
+    ``info`` is None when the prior carried no weight.
+
+    The prior enters as ONE pseudo-observation appended to the residual
+    vector, ``k * (b - b_prior)``, with
+
+        k = sqrt(w * n) * sigma_y / b_prior_sigma
+
+    n = fit months, sigma_y = RMSE of the unregularized first pass, w =
+    the history taper (b_prior.prior_weight: 1 at <= 12 months, 0 at
+    >= 36). At full weight, sitting one ``b_prior_sigma`` (0.10) off the
+    prior costs as much as the entire data misfit — so the prior decides b
+    unless the data clearly object, and it fades linearly as months
+    accumulate. Two properties worth keeping:
+
+      * scale-free — sigma_y carries the target's units (BBL of cum or
+        BOPD of rate), so the same sigma works for every stream/target;
+      * self-disabling on clean data — sigma_y -> 0 means the data already
+        pin b, k -> 0, and the fit is the unregularized one.
+
+    qi and Di are NOT regularized; they re-optimize around the pulled b.
+    Reported R²/RMSE are against the data only, never the pseudo-point.
+    """
+    # Local import keeps b_prior.py -> fit.py one-directional at import time.
+    from app.forecasting.b_prior import prior_weight
+
+    popt, predicted = _fit_core(df, target_col=target_col, func=func, bounds=bounds, p0=p0)
+    b_index = _B_INDEX.get(model_type)
+    if config.b_prior is None or b_index is None:
+        return popt, predicted, None
+    n = len(df)
+    weight = prior_weight(
+        n,
+        full_weight_months=config.b_prior_full_weight_months,
+        zero_weight_months=config.b_prior_zero_weight_months,
+    )
+    y = df[target_col].to_numpy(dtype=float)
+    sigma_y = _rmse(y, predicted)
+    if weight <= 0.0 or sigma_y <= 1e-9 * max(float(np.mean(np.abs(y))), 1e-12):
+        return popt, predicted, None
+
+    lower, upper = bounds
+    b_prior = float(np.clip(config.b_prior, lower[b_index], upper[b_index]))
+    k = float(np.sqrt(weight * n)) * sigma_y / config.b_prior_sigma
+    t = df["t_years"].to_numpy(dtype=float)
+
+    def augmented(t_aug: NDArray[np.float64], *p: float) -> NDArray[np.float64]:
+        return np.append(func(t_aug[:-1], *p), k * p[b_index])
+
+    start = [float(np.clip(v, lo, hi)) for v, lo, hi in zip(popt, lower, upper, strict=True)]
+    popt_reg, _pcov = curve_fit(
+        augmented,
+        np.append(t, 0.0),
+        np.append(y, k * b_prior),
+        p0=start,
+        bounds=bounds,
+        maxfev=10_000,
+    )
+    info = {
+        "b_prior": b_prior,
+        "weight": round(weight, 4),
+        "sigma": config.b_prior_sigma,
+        "n_fit_months": n,
+        "b_unregularized": float(popt[b_index]),
+        "b_regularized": float(popt_reg[b_index]),
+    }
+    return popt_reg, func(t, *popt_reg), info
+
+
+def _b_prior_note(info: dict[str, Any] | None) -> str:
+    if not info:
+        return ""
+    return (
+        f"b regularized toward bench prior {info['b_prior']:.2f} "
+        f"(weight {info['weight']:.2f}, {info['n_fit_months']} fit months): "
+        f"{info['b_unregularized']:.2f} -> {info['b_regularized']:.2f}"
+    )
+
+
 def _build_result(
     *,
     model_type: str,
@@ -403,6 +575,7 @@ def _build_result(
     n_points_fit: int,
     insufficient_history: bool,
     downtime_ratio: float = 0.0,
+    prior_info: dict[str, Any] | None = None,
 ) -> ForecastResult:
     params = _params_to_dict(model_type, popt, config.df_terminal_per_year)
     econ_limit = getattr(config, STREAM_ECON_LIMIT_FIELD[stream])
@@ -429,6 +602,8 @@ def _build_result(
         n_points_fit=n_points_fit,
         insufficient_history=insufficient_history,
         downtime_ratio=downtime_ratio,
+        notes=_b_prior_note(prior_info),
+        diagnostics={"b_prior": prior_info} if prior_info else None,
     )
 
 
@@ -452,21 +627,45 @@ def fit_rate_cum(
     qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
+    # Point-sampled input (cfg.qi_anchor_hi_basis == "instantaneous"): the
+    # observed peak IS qi, so both anchor ends are plain box bounds on qi.
+    cap_is_on_qi = cfg.qi_anchor_hi_basis == "instantaneous"
     bounds, p0 = _bounds_and_p0(
         model_type,
         peak.peak_rate,
         di_hi=_stream_di_hi(stream, cfg),
-        qi_lo=qi_lo,
-        qi_hi=qi_hi,
+        qi_lo=qi_lo if cap_is_on_qi else None,
+        qi_hi=qi_hi if cap_is_on_qi else None,
         b_lo=b_lo,
         b_hi=b_hi,
     )
+    to_physical = None
+    if qi_lo is not None and qi_hi is not None and not cap_is_on_qi:
+        func, bounds, p0, to_physical = _anchor_to_peak_month(
+            func,
+            _cum_callable(model_type, cfg.df_terminal_per_year),
+            qi_floor=qi_lo,
+            q1_cap=qi_hi,
+            peak_rate=peak.peak_rate,
+            bounds=bounds,
+            p0=p0,
+        )
 
-    popt, predicted = _fit_core(df, target_col="cum_vol", func=func, bounds=bounds, p0=p0)
+    popt, predicted, prior_info = _fit_with_b_prior(
+        df,
+        target_col="cum_vol",
+        func=func,
+        bounds=bounds,
+        p0=p0,
+        model_type=model_type,
+        config=cfg,
+    )
+    if to_physical is not None:
+        popt = to_physical(popt)
     actual = df["cum_vol"].to_numpy(dtype=float)
     return _build_result(
         model_type=model_type,
-        fit_method="rate_cum",
+        fit_method="rate_cum_bprior" if prior_info else "rate_cum",
         popt=popt,
         predicted=predicted,
         actual=actual,
@@ -476,6 +675,7 @@ def fit_rate_cum(
         n_points_fit=len(df),
         insufficient_history=insufficient,
         downtime_ratio=downtime_ratio,
+        prior_info=prior_info,
     )
 
 
@@ -499,17 +699,41 @@ def fit_rate_time(
     qi_lo, qi_hi = _qi_bounds(peak.peak_rate, cfg, stream)
     b_hi = cfg.b_nominal_hi if cfg.b_nominal_hi is not None else B_HI
     b_lo = cfg.b_nominal_lo if cfg.b_nominal_lo is not None else B_LO
+    # Point-sampled input (cfg.qi_anchor_hi_basis == "instantaneous"): the
+    # observed peak IS qi, so both anchor ends are plain box bounds on qi.
+    cap_is_on_qi = cfg.qi_anchor_hi_basis == "instantaneous"
     bounds, p0 = _bounds_and_p0(
         model_type,
         peak.peak_rate,
         di_hi=_stream_di_hi(stream, cfg),
-        qi_lo=qi_lo,
-        qi_hi=qi_hi,
+        qi_lo=qi_lo if cap_is_on_qi else None,
+        qi_hi=qi_hi if cap_is_on_qi else None,
         b_lo=b_lo,
         b_hi=b_hi,
     )
+    to_physical = None
+    if qi_lo is not None and qi_hi is not None and not cap_is_on_qi:
+        func, bounds, p0, to_physical = _anchor_to_peak_month(
+            func,
+            _cum_callable(model_type, cfg.df_terminal_per_year),
+            qi_floor=qi_lo,
+            q1_cap=qi_hi,
+            peak_rate=peak.peak_rate,
+            bounds=bounds,
+            p0=p0,
+        )
 
-    popt, predicted = _fit_core(df, target_col="rate", func=func, bounds=bounds, p0=p0)
+    popt, predicted, prior_info = _fit_with_b_prior(
+        df,
+        target_col="rate",
+        func=func,
+        bounds=bounds,
+        p0=p0,
+        model_type=model_type,
+        config=cfg,
+    )
+    if to_physical is not None:
+        popt = to_physical(popt)
     actual = df["rate"].to_numpy(dtype=float)
     return _build_result(
         model_type=model_type,
@@ -523,6 +747,7 @@ def fit_rate_time(
         n_points_fit=len(df),
         insufficient_history=insufficient,
         downtime_ratio=downtime_ratio,
+        prior_info=prior_info,
     )
 
 
@@ -572,14 +797,18 @@ def fit_with_fallback(
     """Default `rate_cum` fit with a `rate_time` retry on two triggers.
 
     Why: `fit_rate_cum` integrates the rate model to a closed-form
-    cumulative, then NLS-fits cum-vs-time. The integral has very low
-    Jacobian sensitivity to b — small b changes produce small cum
-    differences over typical post-peak windows — so the optimizer
-    often leaves b near its initial guess (1.0) and absorbs the misfit
-    into Di. On wells where the "true" b ≠ 1, Di then pins at the
-    bound (0.3 or 5.0) and the fit is flagged. Rate-vs-time is noisier
-    but more constraining on b, so it can produce a different
-    (Di, b) pair that doesn't pin.
+    cumulative, then NLS-fits cum-vs-time. Cum is smooth, so (Di, b)
+    trade off along a shallow valley and Di can run into its bound
+    (DI_NOMINAL_LO/HI_PER_YEAR) on wells the cum target constrains
+    poorly. Rate-vs-time is noisier but weights the early decline
+    directly, so it can produce a different (Di, b) pair that doesn't
+    pin.
+
+    (History: this docstring used to blame "very low Jacobian
+    sensitivity to b" for b sitting at its 1.0 start. The sensitivity
+    was not low, it was exactly zero — `cum_hyperbolic` handed off to a
+    b-free harmonic inside |b-1| < 1e-4. Fixed there; b now moves in
+    the cum fit.)
 
     Triggers (either fires the retry):
 
@@ -678,6 +907,7 @@ def fit_with_fallback(
     )
     return replace(
         fallback,
-        fit_method="rate_time_fallback",
+        # Keep the "b prior carried weight" provenance visible on rescued rows.
+        fit_method=("rate_time_fallback_bprior" if fallback.diagnostics else "rate_time_fallback"),
         notes=(note + ("\n" + fallback.notes if fallback.notes else "")),
     )
