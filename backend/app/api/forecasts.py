@@ -52,6 +52,7 @@ from app.db.models import (
     Well,
 )
 from app.db.session import SessionLocal, get_session
+from app.forecasting.b_prior import lookup_b_prior
 from app.forecasting.cohort import (
     HistoryPartition,
     compute_donor_medians,
@@ -152,6 +153,10 @@ class ForecastConfigBody(BaseModel):
     # transfer after they've reviewed the long fits. Null = legacy path
     # (fit everyone unconstrained).
     short_history_cutoff_months: int | None = Field(default=None, ge=1, le=24)
+    # Short-history b regularization toward the bench prior (autoforecast)
+    # and the b lender for cohort transfers. Off = legacy behavior (free b;
+    # transfers lend the donor-median b).
+    b_prior_enabled: bool = True
 
     def to_config(self) -> ForecastConfig:
         return ForecastConfig(
@@ -167,6 +172,7 @@ class ForecastConfigBody(BaseModel):
             downtime_floor_bwpd=self.downtime_floor_bwpd,
             min_post_peak_months=self.min_post_peak_months,
             short_history_cutoff_months=self.short_history_cutoff_months,
+            b_prior_enabled=self.b_prior_enabled,
         )
 
 
@@ -491,6 +497,28 @@ class TransferResponse(BaseModel):
     donors: list[TransferStreamDonor]
 
 
+def transfer_b(
+    cfg: ForecastConfig,
+    subbasin: str | None,
+    formation_blueox: str | None,
+    stream: str,
+    *,
+    cohort_b: float,
+) -> tuple[float, dict[str, Any] | None]:
+    """The b a cohort transfer lends to one short well, plus its audit
+    block. Bench prior when ``cfg.b_prior_enabled`` (see
+    ``transfer_cohort_params``), else the donor-median ``cohort_b``."""
+    if not cfg.b_prior_enabled:
+        return cohort_b, None
+    prior = lookup_b_prior(subbasin, formation_blueox, stream)
+    return prior.b, {
+        "b": prior.b,
+        "source": prior.source,
+        "key": prior.key,
+        "n_wells": prior.n_wells,
+    }
+
+
 def _load_monthly_for_transfer(session: Session, api10: str):
     """Minimal frame for peak detection + per-stream qi lookup."""
     import pandas as pd  # local import keeps the top of file lean
@@ -599,12 +627,20 @@ def transfer_cohort_params(
 ) -> TransferResponse:
     """Write transfer forecasts for short-history wells in a batch.
 
-    Reads the resolved (auto-fit or user-edited) Di / b of the
-    long-history wells in the same batch, takes the per-stream median,
-    and writes a forecast row per short well using its own qi (rate at
-    that stream's peak month — water on its own early peak, oil/gas on
-    the oil peak) plus the cohort medians. Honors `locked` on existing
-    short-side rows — a locked row is preserved.
+    Reads the resolved (auto-fit or user-edited) Di of the long-history
+    wells in the same batch, takes the per-stream median, and writes a
+    forecast row per short well using its own qi (rate at that stream's
+    own peak month) plus the cohort median Di. Honors `locked` on
+    existing short-side rows — a locked row is preserved.
+
+    b is NOT the donor median. With b free in the fit (it was frozen at
+    1.00 until the cum_hyperbolic fix), ~80% of long-history per-well b
+    values sit on a bound, so their median is just 0.9 or 1.2 — a worse
+    lender than the pooled bench prior (app.forecasting.b_prior), which
+    is what each short well borrows for its own (sub-basin,
+    formation_blueox, stream). The donor median b is still reported and
+    persisted in ``diagnostics.cohort_b`` for audit. Set
+    ``config.b_prior_enabled = false`` to lend the donor median instead.
 
     Returns HTTP 422 when the oil donor pool is thinner than
     `min_donor_count`; no writes occur in that case. The user widens
@@ -654,6 +690,16 @@ def transfer_cohort_params(
     skipped_locked: list[tuple[str, Stream]] = []
     skipped_no_peak: list[str] = list(partition.no_peak_api10s)
 
+    # Bench keys for the short wells, one query — the b lender.
+    bench_by_api10 = {
+        row.api10: (row.subbasin, row.formation_blueox)
+        for row in session.execute(
+            select(Well.api10, Well.subbasin, Well.formation_blueox).where(
+                Well.api10.in_(partition.short_api10s)
+            )
+        ).all()
+    }
+
     for api10 in partition.short_api10s:
         monthly = _load_monthly_for_transfer(session, api10)
         if monthly.empty:
@@ -674,6 +720,11 @@ def transfer_cohort_params(
                 continue
             cohort_di, cohort_b, donor_count, donor_api10s = medians_by_stream[stream_str]
             stream_enum = Stream(stream_str)
+            # b: bench prior (see docstring); Di: donor median.
+            subbasin, formation_blueox = bench_by_api10.get(api10, (None, None))
+            lent_b, prior_block = transfer_b(
+                cfg, subbasin, formation_blueox, stream_str, cohort_b=cohort_b
+            )
 
             existing = session.execute(
                 select(Forecast).where(Forecast.api10 == api10, Forecast.stream == stream_enum)
@@ -707,7 +758,7 @@ def transfer_cohort_params(
             params: dict[str, Any] = {
                 "qi": qi,
                 "Di": cohort_di,
-                "b": cohort_b,
+                "b": lent_b,
                 "Df": cfg.df_terminal_per_year,
             }
             if qo is not None:
@@ -732,6 +783,8 @@ def transfer_cohort_params(
                 "cohort_b": cohort_b,
                 "cutoff_months": req.short_history_cutoff_months,
             }
+            if prior_block is not None:
+                diagnostics["b_prior"] = prior_block
             values: dict[str, Any] = {
                 "api10": api10,
                 "stream": stream_str,
@@ -739,7 +792,7 @@ def transfer_cohort_params(
                 "params": params,
                 "qi": qi,
                 "di_initial": cohort_di,
-                "b": cohort_b,
+                "b": lent_b,
                 "df_terminal": cfg.df_terminal_per_year,
                 "qo": qo,
                 "peak_index_months": peak_index_months,
@@ -998,9 +1051,7 @@ def _row_with_well_join(f: Forecast, session: Session) -> ForecastRow:
         # Save Override / Lock (PATCH splices this response back in-place).
         row.well_formation = well.formation_blueox
         row.well_lateral_ft = float(well.lateral_ft) if well.lateral_ft is not None else None
-        row.well_proppant_lbs = (
-            float(well.proppant_lbs) if well.proppant_lbs is not None else None
-        )
+        row.well_proppant_lbs = float(well.proppant_lbs) if well.proppant_lbs is not None else None
         row.well_vintage_year = int(well.vintage_year) if well.vintage_year is not None else None
         row.well_first_prod_date = well.first_prod_date
         row.well_county = well.county
@@ -1514,9 +1565,8 @@ def well_curves(
         # a resolvable (Arps) oil param set — without one the forecast
         # portion stays empty rather than fabricating a curve.
         is_ratio = is_ratio_params(eval_params)
-        oil_available = (
-            not is_ratio_params(oil_eval_params)
-            and all(oil_eval_params.get(k) is not None for k in ("qi", "Di", "b", "Df"))
+        oil_available = not is_ratio_params(oil_eval_params) and all(
+            oil_eval_params.get(k) is not None for k in ("qi", "Di", "b", "Df")
         )
 
         can_forecast = bool((fc and fc.peak_month_date is not None) or override_block)
@@ -1544,9 +1594,7 @@ def well_curves(
                 rate_arr = np.asarray(derived.rates, dtype=float)
             else:
                 anchor_date = _anchor_for(eval_params, fc)
-                rate_arr = np.asarray(
-                    _evaluate_rate(eval_model_type, eval_params, t), dtype=float
-                )
+                rate_arr = np.asarray(_evaluate_rate(eval_model_type, eval_params, t), dtype=float)
             cum_running = 0.0
             for i in range(n_pts):
                 rate_i = float(rate_arr[i])
