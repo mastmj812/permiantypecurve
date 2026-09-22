@@ -273,3 +273,25 @@ def test_long_history_well_is_untouched_by_the_prior(monkeypatch: pytest.MonkeyP
     out = orchestrator.forecast_well(_Session(), "4230100001", persist=False)  # type: ignore[arg-type]
     assert out["oil"] is not None and out["oil"].fit_method in ("rate_cum", "rate_time_fallback")
     assert out["oil"].diagnostics is None
+
+
+# ---------------- cohort transfer lender ----------------
+
+
+@pytest.mark.usefixtures("prior_table")
+def test_cohort_transfer_lends_the_bench_prior_b_not_the_donor_median() -> None:
+    from app.api.forecasts import transfer_b
+
+    b, block = transfer_b(ForecastConfig(), "Delaware", "WCA_1", "oil", cohort_b=0.9)
+    assert b == 1.11
+    assert block == {"b": 1.11, "source": "bench", "key": "Delaware|WCA_1", "n_wells": 400}
+
+    # Fallback chain applies the same way as the autoforecast.
+    b, block = transfer_b(ForecastConfig(), "Delaware", "BS9_X", "oil", cohort_b=0.9)
+    assert (b, block["source"]) == (1.05, "subbasin")  # type: ignore[index]
+
+    # Legacy behavior on request: donor median, no audit block.
+    b, block = transfer_b(
+        ForecastConfig(b_prior_enabled=False), "Delaware", "WCA_1", "oil", cohort_b=0.9
+    )
+    assert (b, block) == (0.9, None)
