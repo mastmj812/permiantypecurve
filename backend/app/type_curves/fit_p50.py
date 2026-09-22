@@ -67,16 +67,27 @@ def _make_monthly_df(p50: list[float | None]) -> pd.DataFrame:
     """Build a (prod_date, rate_calday_bopd, oil_bbl) frame the fitter
     can chew. Leading / mid-series nulls are zeroed (volume contribution
     is genuinely zero for those months); the caller is expected to have
-    already trimmed trailing nulls."""
+    already trimmed trailing nulls.
+
+    The series is POINT-SAMPLED (``rates[i] = q(t = i months)``), so
+    month i's volume is the TRAPEZOID ``(q_i + q_{i+1}) / 2 * days`` with
+    the last month flat-extrapolated — the same rule as
+    ``ramp_arps.trapezoid_eur``, the display/export integral of record.
+    The old rectangle rule (``q_i * days``) overstated early cum on a
+    steep decline, and the fit paid for it by pushing qi to the anchor
+    cap and b down (~-1% on the fitted EUR, ~-0.06 on b, for a clean
+    Permian-shaped curve).
+    """
+    rates = [float(v) if v is not None and np.isfinite(v) else 0.0 for v in p50]
     rows: list[dict[str, Any]] = []
     d = pd.Timestamp(_REF_DATE)
-    for v in p50:
-        rate = float(v) if v is not None and np.isfinite(v) else 0.0
+    for i, rate in enumerate(rates):
+        nxt = rates[i + 1] if i + 1 < len(rates) else rate
         rows.append(
             {
                 "prod_date": d.date(),
                 "rate_calday_bopd": rate,
-                "oil_bbl": rate * _DAYS_PER_MONTH,
+                "oil_bbl": (rate + nxt) / 2.0 * _DAYS_PER_MONTH,
             }
         )
         d = d + pd.DateOffset(months=1)
