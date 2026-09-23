@@ -23,7 +23,12 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Well, WellStatus
 from app.db.session import get_session
-from app.wells_api.filters import FilterSpec, parse_filter_query
+from app.wells_api.filters import (
+    SCENARIO_CLASS_VALUES,
+    SCENARIO_NO_DATA,
+    FilterSpec,
+    parse_filter_query,
+)
 
 router = APIRouter(prefix="/wells", tags=["wells"])
 
@@ -332,9 +337,7 @@ def context_wells(
         )
         spatial = func.ST_Intersects(candidate, draw)
     else:
-        spatial = func.ST_DWithin(
-            candidate, anchor, req.radius_ft / _FT_PER_DEG_LON_PERMIAN
-        )
+        spatial = func.ST_DWithin(candidate, anchor, req.radius_ft / _FT_PER_DEG_LON_PERMIAN)
     rows = session.execute(
         select(*_LITE_COLUMNS)
         .where(Well.api10.not_in(req.api10s), spatial)
@@ -439,6 +442,12 @@ class FilterFacets(BaseModel):
     formations: list[FacetCount]
     statuses: list[FacetCount]
     counties: list[FacetCount]
+    # Development scenario (curated.dev_scenario). scenario_classes covers
+    # the five classes + 'no_data' (NULL), count computed with the class
+    # selection itself excluded; scenario_benches is the TVD-corrected
+    # bench universe -- also the parent-bench picker's vocabulary.
+    scenario_classes: list[FacetCount] = []
+    scenario_benches: list[FacetCount] = []
     lateral_ft_min: float | None
     lateral_ft_max: float | None
     first_prod_year_min: int | None
@@ -459,7 +468,8 @@ def _facet_clauses_excluding(spec: FilterSpec, *, exclude_attr: str) -> list[Col
     truthiness. That works for statuses too — replacing with `()` here
     is a deliberate override of the PDP default.
     """
-    return replace(spec, **{exclude_attr: ()}).to_sqlalchemy_clauses()
+    cleared: dict[str, Any] = {exclude_attr: ()}
+    return replace(spec, **cleared).to_sqlalchemy_clauses()
 
 
 @router.get("/filters/facets", response_model=FilterFacets)
@@ -512,6 +522,27 @@ def filter_facets(
     counties_count = _counts_under(
         _facet_clauses_excluding(spec, exclude_attr="counties"), Well.county
     )
+    # scenario_class: count NULLs too (they are the 'no_data' option).
+    sc_stmt = select(Well.scenario_class, func.count()).group_by(Well.scenario_class)
+    for c in _facet_clauses_excluding(spec, exclude_attr="scenario_classes"):
+        sc_stmt = sc_stmt.where(c)
+    sc_count = {r[0]: int(r[1]) for r in session.execute(sc_stmt).all()}
+    scenario_classes_out = [
+        FacetCount(value=v, count=sc_count.get(v, 0)) for v in SCENARIO_CLASS_VALUES
+    ] + [FacetCount(value=SCENARIO_NO_DATA, count=sc_count.get(None, 0))]
+    all_scenario_benches: list[str] = [
+        v
+        for (v,) in session.execute(
+            select(Well.scenario_bench).where(Well.scenario_bench.isnot(None)).distinct()
+        ).all()
+    ]
+    sb_count = _counts_under(
+        _facet_clauses_excluding(spec, exclude_attr="scenario_benches"), Well.scenario_bench
+    )
+    scenario_benches_out = sorted(
+        (FacetCount(value=v, count=sb_count.get(v, 0)) for v in all_scenario_benches),
+        key=lambda f: (-f.count, f.value),
+    )
 
     formations_out = sorted(
         (FacetCount(value=v, count=formations_count.get(v, 0)) for v in all_formations),
@@ -543,6 +574,8 @@ def filter_facets(
         formations=formations_out,
         statuses=statuses_out,
         counties=counties_out,
+        scenario_classes=scenario_classes_out,
+        scenario_benches=scenario_benches_out,
         lateral_ft_min=float(extremes[0]) if extremes and extremes[0] is not None else None,
         lateral_ft_max=float(extremes[1]) if extremes and extremes[1] is not None else None,
         first_prod_year_min=int(extremes[2]) if extremes and extremes[2] is not None else None,

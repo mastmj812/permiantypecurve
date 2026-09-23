@@ -30,6 +30,8 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.session import get_session
 from app.wells_api.filters import (
+    PARENT_OFFSET_GATE_FT,
+    SCENARIO_NO_DATA,
     SPACING_SENTINEL_FT,
     WATER_SOURCE_NO_DATA,
     FilterSpec,
@@ -119,9 +121,7 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
             admitted.append("w.lateral_closer_xy_ft = :spacing_sentinel")
         if spec.spacing_include_no_data:
             admitted.append("w.lateral_closer_xy_ft IS NULL")
-        parts.append(
-            admitted[0] if len(admitted) == 1 else "(" + " OR ".join(admitted) + ")"
-        )
+        parts.append(admitted[0] if len(admitted) == 1 else "(" + " OR ".join(admitted) + ")")
     if spec.well_name_contains:
         parts.append("w.name ILIKE :well_name_pat ESCAPE '\\'")
         params["well_name_pat"] = f"%{escape_like(spec.well_name_contains)}%"
@@ -145,6 +145,57 @@ def _build_filter_sql(spec: FilterSpec) -> tuple[str, dict[str, object]]:
         parts.append(
             ws_admitted[0] if len(ws_admitted) == 1 else "(" + " OR ".join(ws_admitted) + ")"
         )
+    # Development scenario -- mirrors the ORM clauses in FilterSpec.
+    if spec.scenario_classes:
+        sc_real = [v for v in spec.scenario_classes if v != SCENARIO_NO_DATA]
+        sc_admitted: list[str] = []
+        if sc_real:
+            sc_admitted.append("w.scenario_class = ANY((:scenario_classes)::TEXT[])")
+            params["scenario_classes"] = sc_real
+        if SCENARIO_NO_DATA in spec.scenario_classes:
+            sc_admitted.append("w.scenario_class IS NULL")
+        parts.append(
+            sc_admitted[0] if len(sc_admitted) == 1 else "(" + " OR ".join(sc_admitted) + ")"
+        )
+    if spec.scenario_benches:
+        parts.append("w.scenario_bench = ANY((:scenario_benches)::TEXT[])")
+        params["scenario_benches"] = list(spec.scenario_benches)
+    if spec.parent_benches:
+        # Bench-pair: per-bench jsonb, no vertical window, no shielding.
+        pb = [
+            "j.key = ANY((:parent_benches)::TEXT[])",
+            "j.key IS DISTINCT FROM w.scenario_bench",
+            "CAST(j.value ->> 'n_parent' AS INTEGER) > 0",
+            "CAST(j.value ->> 'parent_min_offset_ft' AS NUMERIC) <= :parent_offset_gate",
+        ]
+        params["parent_benches"] = list(spec.parent_benches)
+        params["parent_offset_gate"] = PARENT_OFFSET_GATE_FT
+        dz = "CAST(j.value ->> 'parent_nearest_dtvd_ft' AS NUMERIC)"
+        if spec.parent_side == "below":
+            pb.append(f"{dz} > 0")
+        elif spec.parent_side == "above":
+            pb.append(f"{dz} < 0")
+        if spec.parent_dtvd_max_ft is not None:
+            pb.append(f"abs({dz}) <= :parent_dtvd_max_ft")
+            params["parent_dtvd_max_ft"] = spec.parent_dtvd_max_ft
+        if spec.parent_age_min_days is not None:
+            pb.append("CAST(j.value ->> 'parent_min_age_days' AS INTEGER) >= :parent_age_min_days")
+            params["parent_age_min_days"] = spec.parent_age_min_days
+        if spec.parent_age_max_days is not None:
+            pb.append("CAST(j.value ->> 'parent_max_age_days' AS INTEGER) <= :parent_age_max_days")
+            params["parent_age_max_days"] = spec.parent_age_max_days
+        parts.append(
+            "EXISTS (SELECT 1 FROM jsonb_each(w.scenario_bench_context) AS j(key, value) WHERE "
+            + " AND ".join(pb)
+            + ")"
+        )
+    else:
+        if spec.parent_age_min_days is not None:
+            parts.append("w.youngest_parent_age_days >= :parent_age_min_days")
+            params["parent_age_min_days"] = spec.parent_age_min_days
+        if spec.parent_age_max_days is not None:
+            parts.append("w.oldest_parent_age_days <= :parent_age_max_days")
+            params["parent_age_max_days"] = spec.parent_age_max_days
 
     if not parts:
         return "TRUE", params
@@ -180,6 +231,7 @@ mvtgeom AS (
     w.status::text AS status,
     w.lateral_ft,
     w.proppant_lbs,
+    w.scenario_class,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
     ST_AsMVTGeom(
       ST_Transform(
@@ -228,6 +280,7 @@ mvtgeom AS (
     w.status::text AS status,
     w.lateral_ft,
     w.proppant_lbs,
+    w.scenario_class,
     EXTRACT(YEAR FROM w.first_prod_date)::INT AS vintage_year,
     ST_AsMVTGeom(
       ST_Transform(w.wellstick, 3857),

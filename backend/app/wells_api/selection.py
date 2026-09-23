@@ -32,7 +32,13 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.models import Well
 from app.db.session import get_session
-from app.wells_api.filters import FilterSpec, filter_spec_dict
+from app.wells_api.filters import (
+    PARENT_SIDES,
+    SCENARIO_CLASS_VALUES,
+    SCENARIO_NO_DATA,
+    FilterSpec,
+    filter_spec_dict,
+)
 from app.wells_api.summary import (
     HARD_SELECTION_CAP,
     SelectionSummary,
@@ -73,6 +79,15 @@ class FilterSpecBody(BaseModel):
     # Empty = all classes — the flag-only default. Honored here so a
     # lasso/box select agrees with the map about which wells exist.
     water_sources: list[str] = Field(default_factory=list)
+    # Development scenario (see FilterSpec) -- honored here so a lasso/box
+    # select agrees with the map.
+    scenario_classes: list[str] = Field(default_factory=list)
+    scenario_benches: list[str] = Field(default_factory=list)
+    parent_benches: list[str] = Field(default_factory=list)
+    parent_side: str = "any"
+    parent_dtvd_max_ft: float | None = None
+    parent_age_min_days: int | None = None
+    parent_age_max_days: int | None = None
 
     def to_spec(self) -> FilterSpec:
         from app.db.models import WellStatus
@@ -94,6 +109,17 @@ class FilterSpecBody(BaseModel):
             well_name_contains=(self.well_name_contains or "").strip() or None,
             api10s=tuple(self.api10s),
             water_sources=tuple(self.water_sources),
+            scenario_classes=tuple(
+                v
+                for v in self.scenario_classes
+                if v in SCENARIO_CLASS_VALUES or v == SCENARIO_NO_DATA
+            ),
+            scenario_benches=tuple(self.scenario_benches),
+            parent_benches=tuple(self.parent_benches),
+            parent_side=self.parent_side if self.parent_side in PARENT_SIDES else "any",
+            parent_dtvd_max_ft=self.parent_dtvd_max_ft,
+            parent_age_min_days=self.parent_age_min_days,
+            parent_age_max_days=self.parent_age_max_days,
         )
 
 

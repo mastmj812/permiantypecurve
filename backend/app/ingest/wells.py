@@ -55,6 +55,10 @@ def _wellstick_or_none(wkt: str | None) -> Any | None:
     return func.ST_GeomFromText(wkt, 4326)
 
 
+def _list_or_none(v: tuple[str, ...] | None) -> list[str] | None:
+    return list(v) if v is not None else None
+
+
 def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
     """Turn a warehouse ``WellHeader`` into the values dict the upsert
     passes to PostGIS.
@@ -88,6 +92,23 @@ def header_to_upsert_values(h: WellHeader, now: datetime) -> dict[str, Any]:
         "lateral_closer_xy_ft": h.lateral_closer_xy_ft,
         "water_source": h.water_source,
         "wor_cv": h.wor_cv,
+        # Development scenario (curated.dev_scenario) — verbatim passthrough.
+        "scenario_bench": h.scenario_bench,
+        "scenario_class": h.scenario_class,
+        "parent_benches_below": _list_or_none(h.parent_benches_below),
+        "parent_benches_above": _list_or_none(h.parent_benches_above),
+        "nearest_parent_below_dtvd_ft": h.nearest_parent_below_dtvd_ft,
+        "nearest_parent_above_dtvd_ft": h.nearest_parent_above_dtvd_ft,
+        "shielded_below": h.shielded_below,
+        "shielded_above": h.shielded_above,
+        "nearest_parent_offset_ft": h.nearest_parent_offset_ft,
+        "youngest_parent_age_days": h.youngest_parent_age_days,
+        "oldest_parent_age_days": h.oldest_parent_age_days,
+        "has_same_bench_parent": h.has_same_bench_parent,
+        "codev_benches_other": _list_or_none(h.codev_benches_other),
+        "child_benches_other": _list_or_none(h.child_benches_other),
+        "child_censored": h.child_censored,
+        "scenario_bench_context": h.scenario_bench_context,
         "last_synced_at": now,
     }
 
@@ -104,7 +125,7 @@ def upsert_well_headers(session: Session, headers: Iterable[WellHeader]) -> int:
     now = datetime.now(UTC)
     for h in headers:
         values = header_to_upsert_values(h, now)
-        stmt = pg_insert(Well.__table__).values(**values)
+        stmt = pg_insert(Well).values(**values)
         update_cols = {c: stmt.excluded[c] for c in values if c != "api10"}
         stmt = stmt.on_conflict_do_update(index_elements=["api10"], set_=update_cols)
         session.execute(stmt)

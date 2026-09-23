@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,25 @@ class WellHeader:
     # (curated.water_data_quality.wor_cv). Near-zero = dead-flat WOR,
     # the calculated signature. Diagnostic display only.
     wor_cv: float | None = None
+    # Development scenario at first production (curated.dev_scenario,
+    # engineering_db sql/50) — see Well.scenario_class for the rule. All
+    # None when the well is absent from the view (no production/stick).
+    scenario_bench: str | None = None
+    scenario_class: str | None = None
+    parent_benches_below: tuple[str, ...] | None = None
+    parent_benches_above: tuple[str, ...] | None = None
+    nearest_parent_below_dtvd_ft: float | None = None
+    nearest_parent_above_dtvd_ft: float | None = None
+    shielded_below: bool | None = None
+    shielded_above: bool | None = None
+    nearest_parent_offset_ft: float | None = None
+    youngest_parent_age_days: int | None = None
+    oldest_parent_age_days: int | None = None
+    has_same_bench_parent: bool | None = None
+    codev_benches_other: tuple[str, ...] | None = None
+    child_benches_other: tuple[str, ...] | None = None
+    child_censored: bool | None = None
+    scenario_bench_context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
