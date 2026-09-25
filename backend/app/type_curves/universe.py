@@ -69,11 +69,38 @@ def universe_stmt(polygons: list[dict[str, Any]], formations: list[str]) -> Sele
             Well.lateral_ft,
             Well.status,
             Well.lateral_closer_xy_ft,
+            Well.scenario_class,
+            Well.scenario_bench,
+            Well.youngest_parent_age_days,
+            Well.oldest_parent_age_days,
+            Well.scenario_bench_context,
         )
         .where(spatial, Well.formation_blueox.in_(formations))
         .order_by(Well.api10)
         .limit(UNIVERSE_SANITY_CAP + 1)
     )
+
+
+def parent_facts(
+    bench_context: dict[str, Any] | None, own_bench: str | None
+) -> dict[str, dict[str, Any]]:
+    """Compact per-bench PARENT facts for the snapshot: only benches (other
+    than the well's own) with >= 1 parent, and only the four keys the
+    bench-pair filter reads. Keeps provenance small (the full bench_context
+    is ~1 KB/well; a 10k-well universe would bloat the row)."""
+    out: dict[str, dict[str, Any]] = {}
+    for bench, v in (bench_context or {}).items():
+        if bench == own_bench or not isinstance(v, dict):
+            continue
+        if (v.get("n_parent") or 0) <= 0:
+            continue
+        out[bench] = {
+            "off": v.get("parent_min_offset_ft"),
+            "dz": v.get("parent_nearest_dtvd_ft"),
+            "age_min": v.get("parent_min_age_days"),
+            "age_max": v.get("parent_max_age_days"),
+        }
+    return out
 
 
 def compute_universe(
@@ -120,6 +147,16 @@ def compute_universe(
             "lateral_closer_xy_ft": (
                 float(r.lateral_closer_xy_ft) if r.lateral_closer_xy_ft is not None else None
             ),
+            # Development scenario (wells.scenario_*, from curated.dev_scenario)
+            # so the waterfall can attribute scenario-filter culls. The KEY's
+            # presence marks the snapshot as scenario-aware (values may be
+            # None = well not in the view); snapshots saved before this lack
+            # it and the scenario stage degrades honestly (buildup.py).
+            "scenario_class": r.scenario_class,
+            "scenario_bench": r.scenario_bench,
+            "youngest_parent_age_days": r.youngest_parent_age_days,
+            "oldest_parent_age_days": r.oldest_parent_age_days,
+            "parent_facts": parent_facts(r.scenario_bench_context, r.scenario_bench),
         }
         for r in rows
     ]
