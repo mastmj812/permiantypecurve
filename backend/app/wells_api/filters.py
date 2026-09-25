@@ -16,7 +16,7 @@ from datetime import date
 from typing import Annotated, Any
 
 from fastapi import Query
-from sqlalchemy import ColumnElement, and_, or_
+from sqlalchemy import ColumnElement, Integer, Numeric, and_, cast, exists, func, or_, select
 
 from app.db.models import Well, WellStatus
 
@@ -43,6 +43,26 @@ WATER_SOURCE_VALUES: frozenset[str] = frozenset(
     {"measured", "calculated", "indeterminate", "insufficient"}
 )
 WATER_SOURCE_NO_DATA = "no_data"
+
+# Development scenario (engineering_db curated.dev_scenario, sql/50),
+# synced onto wells.scenario_*. Classes in precedence order, plus 'no_data'
+# for NULL (well absent from the view: no production / no stick). The class
+# is parent-side and NOT censored (see Well.scenario_class).
+SCENARIO_CLASS_VALUES: tuple[str, ...] = (
+    "sandwich",
+    "topfill",
+    "underfill",
+    "codev_stack",
+    "standalone",
+)
+SCENARIO_NO_DATA = "no_data"
+# Bench-pair parent filter ("WCA_1 beneath LSSH") reads the per-bench jsonb
+# directly: no vertical window, no shielding -- naming the pair IS the
+# vertical spec. The lateral-offset gate stays. CROSS-REPO CONTRACT: equals
+# the literal in engineering_db sql/50 and scripts/find_analogs.py
+# OFFSET_GATE_FT -- change all three or none.
+PARENT_OFFSET_GATE_FT = 660.0
+PARENT_SIDES: tuple[str, ...] = ("any", "above", "below")
 
 # Spacing splits the well population into three disjoint classes, and
 # the min/max range binds ONLY the first:
@@ -103,6 +123,27 @@ class FilterSpec:
     # Non-empty = only wells whose water_source is in the tuple;
     # WATER_SOURCE_NO_DATA admits the NULLs.
     water_sources: tuple[str, ...] = ()
+    # Development scenario. Empty tuples / None = no clause (the no-op tile
+    # URL and ETag are unchanged).
+    #   scenario_classes   admit these classes; 'no_data' admits NULL
+    #   scenario_benches   subject bench, TVD-corrected (wells.scenario_bench
+    #                      -- NOT formation_blueox; the two can differ)
+    #   parent_benches     bench-pair: the well has a parent (> 180 d older)
+    #                      in any of these benches within the 660-ft offset
+    #                      gate; no vertical window, no shielding
+    #   parent_side        'above' / 'below' narrows parent_benches (inert
+    #                      without it)
+    #   parent_dtvd_max_ft |dTVD| cap on that parent (inert without it)
+    #   parent_age_min/max_days  with parent_benches: that bench's youngest
+    #                      / oldest parent age; without: the class-level
+    #                      youngest / oldest qualifying vertical parent
+    scenario_classes: tuple[str, ...] = ()
+    scenario_benches: tuple[str, ...] = ()
+    parent_benches: tuple[str, ...] = ()
+    parent_side: str = "any"
+    parent_dtvd_max_ft: float | None = None
+    parent_age_min_days: int | None = None
+    parent_age_max_days: int | None = None
 
     def to_sqlalchemy_clauses(self) -> list[ColumnElement[bool]]:
         """Compose into the AND chain that goes into WHERE. Returns a list so
@@ -168,7 +209,54 @@ class FilterSpec:
             if WATER_SOURCE_NO_DATA in self.water_sources:
                 admitted_ws.append(Well.water_source.is_(None))
             clauses.append(admitted_ws[0] if len(admitted_ws) == 1 else or_(*admitted_ws))
+        # Development scenario -- mirrored by tiles._build_filter_sql.
+        if self.scenario_classes:
+            real_sc = [v for v in self.scenario_classes if v != SCENARIO_NO_DATA]
+            admitted_sc: list[ColumnElement[bool]] = []
+            if real_sc:
+                admitted_sc.append(Well.scenario_class.in_(real_sc))
+            if SCENARIO_NO_DATA in self.scenario_classes:
+                admitted_sc.append(Well.scenario_class.is_(None))
+            clauses.append(admitted_sc[0] if len(admitted_sc) == 1 else or_(*admitted_sc))
+        if self.scenario_benches:
+            clauses.append(Well.scenario_bench.in_(self.scenario_benches))
+        if self.parent_benches:
+            clauses.append(self._parent_bench_clause())
+        else:
+            if self.parent_age_min_days is not None:
+                clauses.append(Well.youngest_parent_age_days >= self.parent_age_min_days)
+            if self.parent_age_max_days is not None:
+                clauses.append(Well.oldest_parent_age_days <= self.parent_age_max_days)
         return clauses
+
+    def _parent_bench_clause(self) -> ColumnElement[bool]:
+        """EXISTS over jsonb_each(scenario_bench_context): a parent bench in
+        the list, not the subject's own, with >= 1 parent inside the offset
+        gate, optionally sided / dTVD-capped / age-bounded."""
+        j = func.jsonb_each(Well.scenario_bench_context).table_valued("key", "value").alias("j")
+        val = j.c.value
+
+        def _field(key: str, typ: Any) -> ColumnElement[Any]:
+            return cast(val.op("->>")(key), typ)
+
+        dz = _field("parent_nearest_dtvd_ft", Numeric)
+        conds: list[ColumnElement[bool]] = [
+            j.c.key.in_(self.parent_benches),
+            j.c.key.is_distinct_from(Well.scenario_bench),
+            _field("n_parent", Integer) > 0,
+            _field("parent_min_offset_ft", Numeric) <= PARENT_OFFSET_GATE_FT,
+        ]
+        if self.parent_side == "below":
+            conds.append(dz > 0)
+        elif self.parent_side == "above":
+            conds.append(dz < 0)
+        if self.parent_dtvd_max_ft is not None:
+            conds.append(func.abs(dz) <= self.parent_dtvd_max_ft)
+        if self.parent_age_min_days is not None:
+            conds.append(_field("parent_min_age_days", Integer) >= self.parent_age_min_days)
+        if self.parent_age_max_days is not None:
+            conds.append(_field("parent_max_age_days", Integer) <= self.parent_age_max_days)
+        return exists(select(1).select_from(j).where(*conds))
 
 
 def _parse_statuses(raw: str | None) -> tuple[WellStatus, ...]:
@@ -234,6 +322,34 @@ def parse_filter_query(
             )
         ),
     ] = None,
+    scenario_classes: Annotated[
+        str | None,
+        Query(
+            description=(
+                "CSV of development-scenario classes (sandwich, topfill, "
+                "underfill, codev_stack, standalone, no_data). Empty = all."
+            )
+        ),
+    ] = None,
+    scenario_benches: Annotated[
+        str | None, Query(description="CSV of TVD-corrected subject benches")
+    ] = None,
+    parent_benches: Annotated[
+        str | None,
+        Query(
+            description=(
+                "CSV of parent benches (bench-pair: a > 180 d older parent in "
+                "that bench within the 660-ft lateral offset gate; no vertical "
+                "window, no shielding)"
+            )
+        ),
+    ] = None,
+    parent_side: Annotated[
+        str | None, Query(description="any | above | below (with parent_benches)")
+    ] = None,
+    parent_dtvd_max_ft: Annotated[float | None, Query(ge=0)] = None,
+    parent_age_min_days: Annotated[int | None, Query(ge=0)] = None,
+    parent_age_max_days: Annotated[int | None, Query(ge=0)] = None,
 ) -> FilterSpec:
     """FastAPI dependency — turns query params into a FilterSpec.
 
@@ -266,6 +382,17 @@ def parse_filter_query(
             for v in _split_csv(water_sources)
             if v in WATER_SOURCE_VALUES or v == WATER_SOURCE_NO_DATA
         ),
+        scenario_classes=tuple(
+            v
+            for v in _split_csv(scenario_classes)
+            if v in SCENARIO_CLASS_VALUES or v == SCENARIO_NO_DATA
+        ),
+        scenario_benches=tuple(_split_csv(scenario_benches)),
+        parent_benches=tuple(_split_csv(parent_benches)),
+        parent_side=parent_side if parent_side in PARENT_SIDES else "any",
+        parent_dtvd_max_ft=parent_dtvd_max_ft,
+        parent_age_min_days=parent_age_min_days,
+        parent_age_max_days=parent_age_max_days,
     )
 
 
@@ -288,4 +415,11 @@ def filter_spec_dict(spec: FilterSpec) -> dict[str, Any]:
         "well_name_contains": spec.well_name_contains,
         "api10s": list(spec.api10s),
         "water_sources": list(spec.water_sources),
+        "scenario_classes": list(spec.scenario_classes),
+        "scenario_benches": list(spec.scenario_benches),
+        "parent_benches": list(spec.parent_benches),
+        "parent_side": spec.parent_side,
+        "parent_dtvd_max_ft": spec.parent_dtvd_max_ft,
+        "parent_age_min_days": spec.parent_age_min_days,
+        "parent_age_max_days": spec.parent_age_max_days,
     }

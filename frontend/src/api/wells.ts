@@ -43,6 +43,28 @@ export function filterSpecToQuery(spec: FilterSpec): string {
   if (spec.water_sources.length) {
     params.set("water_sources", spec.water_sources.join(","));
   }
+  // Development scenario — only non-defaults on the wire, so the
+  // unfiltered tile URL and its ETag are unchanged.
+  if (spec.scenario_classes.length) {
+    params.set("scenario_classes", spec.scenario_classes.join(","));
+  }
+  if (spec.scenario_benches.length) {
+    params.set("scenario_benches", spec.scenario_benches.join(","));
+  }
+  if (spec.parent_benches.length) {
+    params.set("parent_benches", spec.parent_benches.join(","));
+    // side / dTVD cap only mean something with a parent bench named
+    if (spec.parent_side !== "any") params.set("parent_side", spec.parent_side);
+    if (spec.parent_dtvd_max_ft != null) {
+      params.set("parent_dtvd_max_ft", String(spec.parent_dtvd_max_ft));
+    }
+  }
+  if (spec.parent_age_min_days != null) {
+    params.set("parent_age_min_days", String(spec.parent_age_min_days));
+  }
+  if (spec.parent_age_max_days != null) {
+    params.set("parent_age_max_days", String(spec.parent_age_max_days));
+  }
   return params.toString();
 }
 
@@ -126,6 +148,21 @@ export interface WellDetailLite {
   // Water-provenance flag (wells.water_source) — lets the Review tab's
   // stub rows badge the water stream like forecast-joined rows do.
   water_source: string | null;
+  // Development scenario at first production (wells.scenario_*). dTVD =
+  // neighbor minus this well (ft; negative = shallower). Parent-side
+  // class, not censored. Drives the gun-barrel tooltip + parent rings.
+  scenario_class?: string | null;
+  scenario_bench?: string | null;
+  parent_benches_below?: string[] | null;
+  parent_benches_above?: string[] | null;
+  nearest_parent_below_dtvd_ft?: number | null;
+  nearest_parent_above_dtvd_ft?: number | null;
+  nearest_parent_offset_ft?: number | null;
+  youngest_parent_age_days?: number | null;
+  oldest_parent_age_days?: number | null;
+  shielded_below?: boolean | null;
+  shielded_above?: boolean | null;
+  has_same_bench_parent?: boolean | null;
 }
 
 export async function fetchWellDetails(api10s: string[]): Promise<WellDetailLite[]> {

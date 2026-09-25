@@ -23,7 +23,12 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Well, WellStatus
 from app.db.session import get_session
-from app.wells_api.filters import FilterSpec, parse_filter_query
+from app.wells_api.filters import (
+    SCENARIO_CLASS_VALUES,
+    SCENARIO_NO_DATA,
+    FilterSpec,
+    parse_filter_query,
+)
 
 router = APIRouter(prefix="/wells", tags=["wells"])
 
@@ -90,6 +95,22 @@ class WellDetailLite(BaseModel):
     # rows (short-history wells with no forecast yet) badge the water
     # stream with the same field the forecast join carries.
     water_source: str | None = None
+    # Development scenario at first production (wells.scenario_*, synced
+    # from engineering_db curated.dev_scenario). The gun-barrel tooltip
+    # and parent-context rings read these. dTVD = neighbor minus subject
+    # (ft; negative = shallower). Class is parent-side (not censored).
+    scenario_class: str | None = None
+    scenario_bench: str | None = None
+    parent_benches_below: list[str] | None = None
+    parent_benches_above: list[str] | None = None
+    nearest_parent_below_dtvd_ft: float | None = None
+    nearest_parent_above_dtvd_ft: float | None = None
+    nearest_parent_offset_ft: float | None = None
+    youngest_parent_age_days: int | None = None
+    oldest_parent_age_days: int | None = None
+    shielded_below: bool | None = None
+    shielded_above: bool | None = None
+    has_same_bench_parent: bool | None = None
 
 
 @router.get("/wellsticks")
@@ -159,6 +180,18 @@ _LITE_COLUMNS = (
     Well.county,
     Well.novi_oil_eur,
     Well.water_source,
+    Well.scenario_class,
+    Well.scenario_bench,
+    Well.parent_benches_below,
+    Well.parent_benches_above,
+    Well.nearest_parent_below_dtvd_ft,
+    Well.nearest_parent_above_dtvd_ft,
+    Well.nearest_parent_offset_ft,
+    Well.youngest_parent_age_days,
+    Well.oldest_parent_age_days,
+    Well.shielded_below,
+    Well.shielded_above,
+    Well.has_same_bench_parent,
 )
 
 
@@ -182,6 +215,18 @@ def _row_to_lite(r: Any) -> WellDetailLite:
         county=r.county,
         novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
         water_source=r.water_source,
+        scenario_class=r.scenario_class,
+        scenario_bench=r.scenario_bench,
+        parent_benches_below=r.parent_benches_below,
+        parent_benches_above=r.parent_benches_above,
+        nearest_parent_below_dtvd_ft=r.nearest_parent_below_dtvd_ft,
+        nearest_parent_above_dtvd_ft=r.nearest_parent_above_dtvd_ft,
+        nearest_parent_offset_ft=r.nearest_parent_offset_ft,
+        youngest_parent_age_days=r.youngest_parent_age_days,
+        oldest_parent_age_days=r.oldest_parent_age_days,
+        shielded_below=r.shielded_below,
+        shielded_above=r.shielded_above,
+        has_same_bench_parent=r.has_same_bench_parent,
     )
 
 
@@ -332,9 +377,7 @@ def context_wells(
         )
         spatial = func.ST_Intersects(candidate, draw)
     else:
-        spatial = func.ST_DWithin(
-            candidate, anchor, req.radius_ft / _FT_PER_DEG_LON_PERMIAN
-        )
+        spatial = func.ST_DWithin(candidate, anchor, req.radius_ft / _FT_PER_DEG_LON_PERMIAN)
     rows = session.execute(
         select(*_LITE_COLUMNS)
         .where(Well.api10.not_in(req.api10s), spatial)
@@ -439,6 +482,12 @@ class FilterFacets(BaseModel):
     formations: list[FacetCount]
     statuses: list[FacetCount]
     counties: list[FacetCount]
+    # Development scenario (curated.dev_scenario). scenario_classes covers
+    # the five classes + 'no_data' (NULL), count computed with the class
+    # selection itself excluded; scenario_benches is the TVD-corrected
+    # bench universe -- also the parent-bench picker's vocabulary.
+    scenario_classes: list[FacetCount] = []
+    scenario_benches: list[FacetCount] = []
     lateral_ft_min: float | None
     lateral_ft_max: float | None
     first_prod_year_min: int | None
@@ -459,7 +508,8 @@ def _facet_clauses_excluding(spec: FilterSpec, *, exclude_attr: str) -> list[Col
     truthiness. That works for statuses too — replacing with `()` here
     is a deliberate override of the PDP default.
     """
-    return replace(spec, **{exclude_attr: ()}).to_sqlalchemy_clauses()
+    cleared: dict[str, Any] = {exclude_attr: ()}
+    return replace(spec, **cleared).to_sqlalchemy_clauses()
 
 
 @router.get("/filters/facets", response_model=FilterFacets)
@@ -512,6 +562,27 @@ def filter_facets(
     counties_count = _counts_under(
         _facet_clauses_excluding(spec, exclude_attr="counties"), Well.county
     )
+    # scenario_class: count NULLs too (they are the 'no_data' option).
+    sc_stmt = select(Well.scenario_class, func.count()).group_by(Well.scenario_class)
+    for c in _facet_clauses_excluding(spec, exclude_attr="scenario_classes"):
+        sc_stmt = sc_stmt.where(c)
+    sc_count = {r[0]: int(r[1]) for r in session.execute(sc_stmt).all()}
+    scenario_classes_out = [
+        FacetCount(value=v, count=sc_count.get(v, 0)) for v in SCENARIO_CLASS_VALUES
+    ] + [FacetCount(value=SCENARIO_NO_DATA, count=sc_count.get(None, 0))]
+    all_scenario_benches: list[str] = [
+        v
+        for (v,) in session.execute(
+            select(Well.scenario_bench).where(Well.scenario_bench.isnot(None)).distinct()
+        ).all()
+    ]
+    sb_count = _counts_under(
+        _facet_clauses_excluding(spec, exclude_attr="scenario_benches"), Well.scenario_bench
+    )
+    scenario_benches_out = sorted(
+        (FacetCount(value=v, count=sb_count.get(v, 0)) for v in all_scenario_benches),
+        key=lambda f: (-f.count, f.value),
+    )
 
     formations_out = sorted(
         (FacetCount(value=v, count=formations_count.get(v, 0)) for v in all_formations),
@@ -543,6 +614,8 @@ def filter_facets(
         formations=formations_out,
         statuses=statuses_out,
         counties=counties_out,
+        scenario_classes=scenario_classes_out,
+        scenario_benches=scenario_benches_out,
         lateral_ft_min=float(extremes[0]) if extremes and extremes[0] is not None else None,
         lateral_ft_max=float(extremes[1]) if extremes and extremes[1] is not None else None,
         first_prod_year_min=int(extremes[2]) if extremes and extremes[2] is not None else None,

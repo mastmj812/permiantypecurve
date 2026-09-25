@@ -8,7 +8,11 @@
 // The user clicks circles to toggle whether each well will be added to
 // the cohort when they hit "Add N selected" in the inspect modal.
 // Hover surfaces a small tooltip with the bits that matter for
-// parent/child + formation-validation decisions.
+// parent/child + formation-validation decisions, including the well's
+// development scenario (curated.dev_scenario). While a well is hovered,
+// wells in its PARENT benches that came on > 180 d before it get a
+// dashed ring + "parent above/below, N d older" label — the
+// scenario's parents drawn in the section.
 //
 // Pure SVG, no charting library — same approach as DeclineChart.
 
@@ -216,6 +220,62 @@ function compassLabel(deg: number): string {
 
 const CONTEXT_COLOR = "#9ca3af";
 const CONTEXT_RADIUS = 5;
+// Parent-context ring (hover). Dashed orange = a parent side that counts;
+// dashed grey = that side is SHIELDED by a co-developed well in between.
+const PARENT_RING_COLOR = "#ea580c";
+const SHIELDED_RING_COLOR = "#9ca3af";
+// Same 180-d parent threshold as the warehouse (sql/47, baked).
+const PARENT_MIN_AGE_DAYS = 180;
+
+interface ParentRing {
+  p: Projected;
+  side: "above" | "below";
+  ageDays: number;
+  shielded: boolean;
+  labeled: boolean;
+}
+
+function daysBetween(earlier: string | null, later: string | null): number | null {
+  if (!earlier || !later) return null;
+  const a = Date.parse(earlier);
+  const b = Date.parse(later);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Math.round((b - a) / 86_400_000);
+}
+
+// Wells in the hovered well's parent benches that came online > 180 d
+// before it. The warehouse's per-bench list is the truth for WHICH benches
+// are parents; this only finds the wells of those benches in the section
+// (the footprint's context wells), so it is a picture of the relation, not
+// a re-derivation of the co-extent rule. One label per bench: the parent
+// nearest in section offset.
+function parentRingsFor(target: Projected, pts: Projected[]): ParentRing[] {
+  const w = target.well;
+  const above = new Set(w.parent_benches_above ?? []);
+  const below = new Set(w.parent_benches_below ?? []);
+  if (above.size === 0 && below.size === 0) return [];
+  const rings: ParentRing[] = [];
+  for (const q of pts) {
+    if (q.api10 === target.api10) continue;
+    const bench = q.well.scenario_bench ?? q.well.formation_blueox;
+    if (!bench) continue;
+    const side = above.has(bench) ? "above" : below.has(bench) ? "below" : null;
+    if (!side) continue;
+    const ageDays = daysBetween(q.well.first_prod_date, w.first_prod_date);
+    if (ageDays == null || ageDays <= PARENT_MIN_AGE_DAYS) continue;
+    const shielded = side === "above" ? !!w.shielded_above : !!w.shielded_below;
+    rings.push({ p: q, side, ageDays, shielded, labeled: false });
+  }
+  const bestPerBench = new Map<string, ParentRing>();
+  for (const r of rings) {
+    const bench = r.p.well.scenario_bench ?? r.p.well.formation_blueox ?? "";
+    const cur = bestPerBench.get(bench);
+    const d = Math.abs(r.p.offsetFt - target.offsetFt);
+    if (!cur || d < Math.abs(cur.p.offsetFt - target.offsetFt)) bestPerBench.set(bench, r);
+  }
+  for (const r of bestPerBench.values()) r.labeled = true;
+  return rings;
+}
 
 export function GunBarrel({
   wells,
@@ -635,6 +695,40 @@ export function GunBarrel({
           />
         );
       })}
+
+      {/* Parent context for the hovered well (dev scenario). */}
+      {hover &&
+        parentRingsFor(hover, [...projected, ...contextProjected]).map((r) => {
+          const cx = xScale(sgn * r.p.offsetFt);
+          const cy = yScale(r.p.tvd);
+          const color = r.shielded ? SHIELDED_RING_COLOR : PARENT_RING_COLOR;
+          return (
+            <g key={`parent-${r.p.api10}`} pointerEvents="none">
+              <circle
+                cx={cx}
+                cy={cy}
+                r={WELL_RADIUS + 5}
+                fill="none"
+                stroke={color}
+                strokeWidth={2}
+                strokeDasharray="3 2"
+              />
+              {r.labeled && (
+                <text
+                  x={cx + WELL_RADIUS + 8}
+                  y={cy + (r.side === "above" ? -8 : 14)}
+                  fontSize="12"
+                  fontWeight={600}
+                  fill={color}
+                >
+                  {r.side === "above" ? "▲" : "▼"} parent {r.side},{" "}
+                  {r.ageDays.toLocaleString()} d older
+                  {r.shielded ? " (shielded)" : ""}
+                </text>
+              )}
+            </g>
+          );
+        })}
       </g>
 
       {/* Y-axis zoom gutter: drag a TVD window to zoom, double-click to
@@ -758,12 +852,13 @@ function GunBarrelTooltip({
   chartHeight: number;
 }) {
   const w = point.well;
+  const scen = scenarioLines(w);
   // Position the tooltip to the right of the circle by default; flip
   // to the left if it'd run off the chart's right edge. Same trick for
   // top/bottom so a circle near the y-axis edges doesn't push the box
   // off-screen.
-  const TT_WIDTH = 250;
-  const TT_HEIGHT = 112;
+  const TT_WIDTH = scen.length ? 330 : 250;
+  const TT_HEIGHT = 112 + scen.length * 19;
   const placeLeft = x + WELL_RADIUS + 8 + TT_WIDTH > chartWidth;
   const placeAbove = y + TT_HEIGHT + 8 > chartHeight;
   const tx = placeLeft ? x - WELL_RADIUS - 8 - TT_WIDTH : x + WELL_RADIUS + 8;
@@ -807,8 +902,62 @@ function GunBarrelTooltip({
       <text x={tx + 10} y={ty + 96} fontSize="13" fill="#374151">
         First prod {w.first_prod_date ?? "—"}
       </text>
+      {scen.map((line, i) => (
+        <text
+          key={i}
+          x={tx + 10}
+          y={ty + 115 + i * 19}
+          fontSize="13"
+          fontWeight={i === 0 ? 600 : 400}
+          fill={i === 0 ? "#0f172a" : "#374151"}
+        >
+          {line}
+        </text>
+      ))}
     </g>
   );
+}
+
+const SCENARIO_TEXT: Record<string, string> = {
+  sandwich: "sandwich (parents above + below)",
+  topfill: "topfill (parent below)",
+  underfill: "underfill (parent above)",
+  codev_stack: "co-developed stack",
+  standalone: "standalone",
+};
+
+// Scenario block for the tooltip (dev scenario at first production).
+// dTVD sign: neighbor minus this well — negative = shallower.
+function scenarioLines(w: WellDetailLite): string[] {
+  if (!w.scenario_class) return [];
+  const fmt = (v: number) => `${v > 0 ? "+" : "−"}${Math.abs(Math.round(v)).toLocaleString()} ft`;
+  const out = [`Scenario: ${SCENARIO_TEXT[w.scenario_class] ?? w.scenario_class}`];
+  const parts: string[] = [];
+  if (w.parent_benches_above?.length) {
+    parts.push(
+      `above ${w.parent_benches_above.join("/")}` +
+        (w.nearest_parent_above_dtvd_ft != null ? ` ${fmt(w.nearest_parent_above_dtvd_ft)}` : "") +
+        (w.shielded_above ? " (shielded)" : ""),
+    );
+  }
+  if (w.parent_benches_below?.length) {
+    parts.push(
+      `below ${w.parent_benches_below.join("/")}` +
+        (w.nearest_parent_below_dtvd_ft != null ? ` ${fmt(w.nearest_parent_below_dtvd_ft)}` : "") +
+        (w.shielded_below ? " (shielded)" : ""),
+    );
+  }
+  if (parts.length) out.push(`Parents: ${parts.join(" · ")}`);
+  const extra: string[] = [];
+  if (w.nearest_parent_offset_ft != null) {
+    extra.push(`offset ${Math.round(w.nearest_parent_offset_ft).toLocaleString()} ft`);
+  }
+  if (w.youngest_parent_age_days != null) {
+    extra.push(`youngest parent ${w.youngest_parent_age_days.toLocaleString()} d older`);
+  }
+  if (w.has_same_bench_parent) extra.push("lateral infill");
+  if (extra.length) out.push(extra.join(" · "));
+  return out;
 }
 
 // ---------------- tick math ----------------

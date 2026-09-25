@@ -97,6 +97,15 @@ _FIELD_SAMPLES: dict[str, object] = {
     "well_name_contains": "UNIVERSITY",
     "api10s": ("4200000001",),
     "water_sources": ("calculated",),
+    "scenario_classes": ("topfill",),
+    "scenario_benches": ("WCA_1",),
+    "parent_benches": ("LSSH",),
+    # Inert alone (only narrow parent_benches) -- covered by
+    # tests/test_dev_scenario_filters.py instead.
+    "parent_side": None,
+    "parent_dtvd_max_ft": None,
+    "parent_age_min_days": 730,
+    "parent_age_max_days": 3000,
 }
 
 

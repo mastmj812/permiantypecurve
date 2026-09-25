@@ -54,6 +54,22 @@ def _full_row(**overrides: object) -> dict[str, object]:
         "lateral_closer_xy_ft": None,
         "water_source": None,
         "wor_cv": None,
+        "scenario_bench": None,
+        "scenario_class": None,
+        "parent_benches_below": None,
+        "parent_benches_above": None,
+        "nearest_parent_below_dtvd_ft": None,
+        "nearest_parent_above_dtvd_ft": None,
+        "shielded_below": None,
+        "shielded_above": None,
+        "nearest_parent_offset_ft": None,
+        "youngest_parent_age_days": None,
+        "oldest_parent_age_days": None,
+        "has_same_bench_parent": None,
+        "codev_benches_other": None,
+        "child_benches_other": None,
+        "child_censored": None,
+        "scenario_bench_context": None,
     }
     row.update(overrides)
     return row

@@ -36,6 +36,51 @@ export const WATER_SOURCE_LABELS: Record<WaterSourceClass, string> = {
   no_data: "no water QC data",
 };
 
+// Development scenario at first production (wells.scenario_class, synced
+// verbatim from engineering_db curated.dev_scenario, sql/50). A vertical
+// parent = other mapped bench, online > 180 d before the well, closest
+// parent lateral midpoint <= 660 ft away, |dTVD| <= 1,000 ft; a side is
+// SHIELDED (doesn't count) when a co-developed well sits between. Set by
+// the parents at first production, so the class is NOT censored.
+// "no_data" = NULL (well not in the view: no production / no stick).
+// Mirrors backend wells_api/filters.py SCENARIO_CLASS_VALUES.
+export type ScenarioClass =
+  | "sandwich"
+  | "topfill"
+  | "underfill"
+  | "codev_stack"
+  | "standalone"
+  | "no_data";
+export const SCENARIO_CLASSES: ScenarioClass[] = [
+  "sandwich",
+  "topfill",
+  "underfill",
+  "codev_stack",
+  "standalone",
+  "no_data",
+];
+export const SCENARIO_LABELS: Record<ScenarioClass, string> = {
+  sandwich: "sandwich (parents above + below)",
+  topfill: "topfill (parent below)",
+  underfill: "underfill (parent above)",
+  codev_stack: "co-developed stack",
+  standalone: "standalone",
+  no_data: "no scenario data",
+};
+// Map color-by palette (also the section's legend swatches).
+export const SCENARIO_COLORS: Record<ScenarioClass, string> = {
+  sandwich: "#c026d3", // not #7c3aed — that is ACREAGE_COLOR
+  topfill: "#dc2626",
+  underfill: "#2563eb",
+  codev_stack: "#16a34a",
+  standalone: "#a3a3a3",
+  no_data: "#e5e7eb",
+};
+export type ParentSide = "any" | "above" | "below";
+// Bench-pair parent filter's lateral-offset gate (ft). CROSS-REPO
+// CONTRACT: backend PARENT_OFFSET_GATE_FT, warehouse sql/50, find_analogs.
+export const PARENT_OFFSET_GATE_FT = 660;
+
 export interface FilterSpec {
   formations: string[];
   operators: string[];
@@ -67,6 +112,26 @@ export interface FilterSpec {
   // flag-only default — no filter on the wire). Non-empty = only wells
   // whose water_source is listed; "no_data" admits the NULLs.
   water_sources: WaterSourceClass[];
+  // Development scenario. [] / null = no filter (nothing on the wire).
+  //   scenario_classes   admit these classes ([] = all)
+  //   scenario_benches   subject bench, TVD-corrected (backend-supported;
+  //                      the Formation section already covers it in the
+  //                      UI — formation_blueox == scenario_bench on every
+  //                      synced well as of 2026-09-23)
+  //   parent_benches     bench-pair: the well has a parent (> 180 d older)
+  //                      in one of these benches within the 660-ft lateral
+  //                      offset gate — NO vertical window, NO shielding
+  //   parent_side        narrows parent_benches to shallower / deeper
+  //   parent_dtvd_max_ft |dTVD| cap on that parent (ft)
+  //   parent_age_min/max_days  with parent_benches: that bench's youngest
+  //                      / oldest parent; without: the class-level ones
+  scenario_classes: ScenarioClass[];
+  scenario_benches: string[];
+  parent_benches: string[];
+  parent_side: ParentSide;
+  parent_dtvd_max_ft: number | null;
+  parent_age_min_days: number | null;
+  parent_age_max_days: number | null;
 }
 
 export const DEFAULT_FILTER_SPEC: FilterSpec = {
@@ -87,6 +152,13 @@ export const DEFAULT_FILTER_SPEC: FilterSpec = {
   well_name_contains: null,
   api10s: [],
   water_sources: [],
+  scenario_classes: [],
+  scenario_benches: [],
+  parent_benches: [],
+  parent_side: "any",
+  parent_dtvd_max_ft: null,
+  parent_age_min_days: null,
+  parent_age_max_days: null,
 };
 
 // GeoJSON Polygon geometry (NOT a Feature). Canonical home — wells.ts
@@ -237,6 +309,11 @@ export interface FilterFacets {
   formations: FacetCount[];
   statuses: FacetCount[];
   counties: FacetCount[];
+  // Five scenario classes + "no_data", counted with the class selection
+  // itself excluded; scenario_benches = TVD-corrected bench vocabulary
+  // (the parent-bench picker's options).
+  scenario_classes: FacetCount[];
+  scenario_benches: FacetCount[];
   lateral_ft_min: number | null;
   lateral_ft_max: number | null;
   first_prod_year_min: number | null;

@@ -211,6 +211,7 @@ export function CohortBar() {
           <span className="muted">
             no cohort active — current selection will forecast directly
           </span>
+          <CopyApi10sButton api10s={stagedArray} />
         </div>
         {showNewModal && (
           <NewCohortModal
@@ -297,6 +298,7 @@ export function CohortBar() {
           >
             Inspect ({stagedCount})
           </button>
+          <CopyApi10sButton api10s={stagedArray} />
           <button
             type="button"
             className="tb-btn"
@@ -689,5 +691,37 @@ function NewCohortModal({
         </div>
       </div>
     </div>
+  );
+}
+
+// Copy the staged selection's API10s (one per line) — the round trip for
+// scenario analog pulls: filter + lasso here, paste into a Claude session
+// / find_analogs comparison / another tool's well list.
+function CopyApi10sButton({ api10s }: { api10s: string[] }) {
+  const [copied, setCopied] = useState(false);
+  const n = api10s.length;
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText([...api10s].sort().join("\n"));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (e) {
+      console.error("clipboard write failed", e);
+    }
+  }
+  return (
+    <button
+      type="button"
+      className="tb-btn"
+      disabled={n === 0}
+      title={
+        n === 0
+          ? "Lasso wells to stage them first"
+          : `Copy ${n} staged API10${n === 1 ? "" : "s"} to the clipboard (one per line)`
+      }
+      onClick={() => void copy()}
+    >
+      {copied ? "Copied ✓" : `Copy API10s (${n})`}
+    </button>
   );
 }

@@ -18,6 +18,8 @@ import {
   type ProvenanceDraft,
   type ReasonCode,
   type SelectionSummary,
+  type ParentSide,
+  type ScenarioClass,
   type WaterSourceClass,
   type WellStatus,
 } from "../api/types";
@@ -155,7 +157,20 @@ export interface MapState {
   // Water-provenance classes to admit ([] = all — the flag-only
   // default). See FilterSpec.water_sources.
   setWaterSources: (water_sources: WaterSourceClass[]) => void;
+  // Development scenario (see FilterSpec). parent_side / dTVD cap are
+  // inert without a parent bench — the query builder drops them.
+  setScenarioClasses: (scenario_classes: ScenarioClass[]) => void;
+  setParentBenches: (parent_benches: string[]) => void;
+  setParentSide: (parent_side: ParentSide) => void;
+  setParentDtvdMax: (ft: number | null) => void;
+  setParentAgeRange: (min: number | null, max: number | null) => void;
   resetFilters: () => void;
+
+  // ---- map well coloring ----
+  // "formation" (default, Blue Ox bench palette) or "scenario" (dev
+  // scenario class; the FilterPanel section's swatches are the legend).
+  wellColorMode: "formation" | "scenario";
+  setWellColorMode: (m: "formation" | "scenario") => void;
 
   // ---- selection ----
   selectedApi10s: Set<string>;
@@ -325,7 +340,22 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({ filters: { ...s.filters, api10s } })),
   setWaterSources: (water_sources) =>
     set((s) => ({ filters: { ...s.filters, water_sources } })),
+  setScenarioClasses: (scenario_classes) =>
+    set((s) => ({ filters: { ...s.filters, scenario_classes } })),
+  setParentBenches: (parent_benches) =>
+    set((s) => ({ filters: { ...s.filters, parent_benches } })),
+  setParentSide: (parent_side) =>
+    set((s) => ({ filters: { ...s.filters, parent_side } })),
+  setParentDtvdMax: (parent_dtvd_max_ft) =>
+    set((s) => ({ filters: { ...s.filters, parent_dtvd_max_ft } })),
+  setParentAgeRange: (parent_age_min_days, parent_age_max_days) =>
+    set((s) => ({
+      filters: { ...s.filters, parent_age_min_days, parent_age_max_days },
+    })),
   resetFilters: () => set({ filters: DEFAULT_FILTER_SPEC }),
+
+  wellColorMode: "formation",
+  setWellColorMode: (wellColorMode) => set({ wellColorMode }),
 
   selectedApi10s: new Set<string>(),
   summary: null,

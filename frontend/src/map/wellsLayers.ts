@@ -10,6 +10,7 @@
 
 import type { ExpressionSpecification, LayerSpecification } from "maplibre-gl";
 
+import { SCENARIO_COLORS } from "../api/types";
 import { blueoxColorExpression } from "./formations";
 
 export const WELLS_SOURCE_ID = "wells";
@@ -34,13 +35,35 @@ export const LINES_MINZOOM = 9;
 const FORMATION_COLOR_EXPR: ExpressionSpecification =
   blueoxColorExpression() as ExpressionSpecification;
 
-// `feature-state.selected === true` → bright yellow halo; else formation color.
-const SELECTED_COLOR_EXPR: ExpressionSpecification = [
-  "case",
-  ["boolean", ["feature-state", "selected"], false],
-  "#facc15",
-  FORMATION_COLOR_EXPR,
+// Development-scenario color. MVT OMITS null properties entirely, so a
+// well with no scenario has no `scenario_class` key at all — coalesce to
+// "no_data" rather than testing == null. No zoom expression anywhere in
+// here, so the zoom-must-be-outermost trap doesn't apply.
+const SCENARIO_COLOR_EXPR: ExpressionSpecification = [
+  "match",
+  ["coalesce", ["get", "scenario_class"], "no_data"],
+  "sandwich", SCENARIO_COLORS.sandwich,
+  "topfill", SCENARIO_COLORS.topfill,
+  "underfill", SCENARIO_COLORS.underfill,
+  "codev_stack", SCENARIO_COLORS.codev_stack,
+  "standalone", SCENARIO_COLORS.standalone,
+  SCENARIO_COLORS.no_data,
 ];
+
+// `feature-state.selected === true` → bright yellow halo; else the
+// active color mode (formation by default, or development scenario).
+export function wellsColorExpr(
+  mode: "formation" | "scenario",
+): ExpressionSpecification {
+  return [
+    "case",
+    ["boolean", ["feature-state", "selected"], false],
+    "#facc15",
+    mode === "scenario" ? SCENARIO_COLOR_EXPR : FORMATION_COLOR_EXPR,
+  ];
+}
+
+const SELECTED_COLOR_EXPR: ExpressionSpecification = wellsColorExpr("formation");
 
 export const wellsPointsLayer: LayerSpecification = {
   id: WELLS_POINTS_LAYER,

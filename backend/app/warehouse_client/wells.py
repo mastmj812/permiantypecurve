@@ -65,6 +65,28 @@ _STICK_COALESCE_SQL = """
                              ST_SetSRID(ST_MakePoint(we.bhl_lon, we.bhl_lat), 4326)))
                  END)                        AS wellstick_wkt"""
 
+# Development-scenario block (engineering_db curated.dev_scenario, sql/50):
+# one definition in the warehouse; the app never reclassifies. ds.bench is
+# the TVD-corrected bench key (can differ from formation_blueox). numeric
+# dTVD/offset columns widen to float in _row_to_dto.
+_SCENARIO_COLUMNS_SQL = """
+        ds.bench                             AS scenario_bench,
+        ds.scenario_class,
+        ds.parent_benches_below,
+        ds.parent_benches_above,
+        ds.nearest_parent_below_dtvd_ft,
+        ds.nearest_parent_above_dtvd_ft,
+        ds.shielded_below,
+        ds.shielded_above,
+        ds.nearest_parent_offset_ft,
+        ds.youngest_parent_age_days,
+        ds.oldest_parent_age_days,
+        ds.has_same_bench_parent,
+        ds.codev_benches_other,
+        ds.child_benches_other,
+        ds.child_censored,
+        ds.bench_context                     AS scenario_bench_context"""
+
 _FETCH_ONE_SQL = text(
     f"""
     SELECT
@@ -96,10 +118,12 @@ _FETCH_ONE_SQL = text(
         we.eur_50yr_oil_bbl                  AS novi_oil_eur,
         we.lateral_closer_xy_ft,
         wdq.water_source,
-        wdq.wor_cv
+        wdq.wor_cv,
+{_SCENARIO_COLUMNS_SQL}
     FROM curated.wells_enriched we
     LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
     LEFT JOIN curated.water_data_quality wdq ON wdq.api10 = we.api10
+    LEFT JOIN curated.dev_scenario ds ON ds.api10 = we.api10
     WHERE we.api10 = :api10
     """
 )
@@ -112,6 +136,9 @@ def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
         # curated stores some intensity columns as bigint/integer; widen
         # to float for downstream rate math.
         return float(v) if v is not None else None  # type: ignore[arg-type]
+
+    def _to_tuple(v: object) -> tuple[str, ...] | None:
+        return tuple(v) if v is not None else None  # type: ignore[arg-type]
 
     return WellHeader(
         api10=row["api10"],
@@ -143,6 +170,22 @@ def _row_to_dto(row) -> WellHeader:  # type: ignore[no-untyped-def]
         lateral_closer_xy_ft=_to_float(row["lateral_closer_xy_ft"]),
         water_source=row["water_source"],
         wor_cv=_to_float(row["wor_cv"]),
+        scenario_bench=row["scenario_bench"],
+        scenario_class=row["scenario_class"],
+        parent_benches_below=_to_tuple(row["parent_benches_below"]),
+        parent_benches_above=_to_tuple(row["parent_benches_above"]),
+        nearest_parent_below_dtvd_ft=_to_float(row["nearest_parent_below_dtvd_ft"]),
+        nearest_parent_above_dtvd_ft=_to_float(row["nearest_parent_above_dtvd_ft"]),
+        shielded_below=row["shielded_below"],
+        shielded_above=row["shielded_above"],
+        nearest_parent_offset_ft=_to_float(row["nearest_parent_offset_ft"]),
+        youngest_parent_age_days=row["youngest_parent_age_days"],
+        oldest_parent_age_days=row["oldest_parent_age_days"],
+        has_same_bench_parent=row["has_same_bench_parent"],
+        codev_benches_other=_to_tuple(row["codev_benches_other"]),
+        child_benches_other=_to_tuple(row["child_benches_other"]),
+        child_censored=row["child_censored"],
+        scenario_bench_context=row["scenario_bench_context"],
     )
 
 
@@ -166,7 +209,8 @@ def fetch_well_by_api10(session: Session, api10: str) -> WellHeader | None:
 # so the single-well and bulk paths can't drift from each other. Columns are
 # `we.`-qualified — the FROM clause joins curated.enverus_lateral_lines for
 # the same three-tier wellstick COALESCE as _FETCH_ONE_SQL, plus
-# curated.water_data_quality for the water-provenance flag.
+# curated.water_data_quality for the water-provenance flag and
+# curated.dev_scenario for the development-scenario block.
 _HEADER_COLUMNS_SQL = f"""
     we.api10,
     we.api14_unformatted                 AS api14,
@@ -196,7 +240,8 @@ _HEADER_COLUMNS_SQL = f"""
     we.eur_50yr_oil_bbl                  AS novi_oil_eur,
     we.lateral_closer_xy_ft,
     wdq.water_source,
-    wdq.wor_cv
+    wdq.wor_cv,
+{_SCENARIO_COLUMNS_SQL}
 """
 
 
@@ -254,6 +299,7 @@ def fetch_well_headers(
         FROM curated.wells_enriched we
         LEFT JOIN curated.enverus_lateral_lines ell ON ell.api10 = we.api10
         LEFT JOIN curated.water_data_quality wdq ON wdq.api10 = we.api10
+        LEFT JOIN curated.dev_scenario ds ON ds.api10 = we.api10
         WHERE {" AND ".join(where_clauses)}
         ORDER BY we.api10
         """

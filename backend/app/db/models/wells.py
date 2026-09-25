@@ -6,6 +6,7 @@ from typing import Any
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    Boolean,
     Computed,
     Date,
     DateTime,
@@ -13,8 +14,10 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    Text,
     func,
 )
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -94,6 +97,44 @@ class Well(Base):
     # signature of a vendor-calculated water stream. Diagnostic display
     # only — no app logic keys on it.
     wor_cv: Mapped[float | None] = mapped_column(Float)
+
+    # ---- Development scenario (engineering_db curated.dev_scenario, sql/50;
+    # migration 0032). Classified at FIRST PRODUCTION by what was already
+    # producing above/below: sandwich > topfill > underfill > codev_stack >
+    # standalone. Vertical parent = other mapped bench online > 180 d
+    # earlier, closest parent lateral midpoint <= 660 ft away, |dTVD| <=
+    # 1,000 ft; a side is SHIELDED when a co-developed well sits between.
+    # Parent-side, so NOT censored; child_* is right-censored for young
+    # wells (child_censored). NULL everywhere = not in dev_scenario (no
+    # production / no stick). dTVD = neighbor minus subject (ft; negative =
+    # shallower). Pure passthrough — no app-side reclassification.
+    # TVD-corrected bench (warehouse key) — can differ from formation_blueox.
+    scenario_bench: Mapped[str | None] = mapped_column(String(64), index=True)
+    scenario_class: Mapped[str | None] = mapped_column(String(16), index=True)
+    parent_benches_below: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    parent_benches_above: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    nearest_parent_below_dtvd_ft: Mapped[float | None] = mapped_column(Float)
+    nearest_parent_above_dtvd_ft: Mapped[float | None] = mapped_column(Float)
+    shielded_below: Mapped[bool | None] = mapped_column(Boolean)
+    shielded_above: Mapped[bool | None] = mapped_column(Boolean)
+    nearest_parent_offset_ft: Mapped[float | None] = mapped_column(Float)
+    youngest_parent_age_days: Mapped[int | None] = mapped_column(Integer)
+    oldest_parent_age_days: Mapped[int | None] = mapped_column(Integer)
+    has_same_bench_parent: Mapped[bool | None] = mapped_column(Boolean)
+    codev_benches_other: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    child_benches_other: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    child_censored: Mapped[bool | None] = mapped_column(Boolean)
+    # Per-bench facts {bench: {n, n_codev, n_parent, n_child, ...,
+    # parent_min_offset_ft, parent_nearest_dtvd_ft, parent_min/max_age_days,
+    # codev_nearest_dtvd_ft}} — the bench-pair parent filter reads it
+    # (no vertical window, no shielding), same as find_analogs.
+    # none_as_null: Python None must land as SQL NULL, not JSON 'null' —
+    # jsonb_each() on a JSON null raises, which would 500 every map tile
+    # carrying a parent-bench filter (caught on the first dev sync).
+    scenario_bench_context: Mapped[dict[str, Any] | None] = mapped_column(
+        JSONB(none_as_null=True)
+    )
+
     proppant_lbs: Mapped[float | None] = mapped_column(Float)
     fluid_bbl: Mapped[float | None] = mapped_column(Float)
     tvd_ft: Mapped[float | None] = mapped_column(Float)

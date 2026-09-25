@@ -834,6 +834,21 @@ textarea {
   line-height: 1.35;
   color: #6b7280;
 }
+/* Sub-heading inside a filter section (Development scenario's parent
+   bench / parent age groups). */
+.filter-subhead {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: #6b7280;
+  margin: 10px 0 2px;
+}
+/* Inline label to the left of a single numeric input in a .row. */
+.row-label {
+  font-size: var(--fs-sm);
+  color: #6b7280;
+  margin-right: 6px;
+  white-space: nowrap;
+}
 /* Spacing's two class checkboxes stack rather than sitting inline —
    each label is a full sentence and wraps badly side by side. */
 .filter-section .chk-inline.chk-stacked {
