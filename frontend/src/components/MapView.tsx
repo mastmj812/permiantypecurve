@@ -29,7 +29,9 @@ import { latestWins } from "../map/sequenced";
 import {
   WELLS_INTERACTIVE_LAYERS,
   WELLS_LINES_SOLID_COHORT_LAYER,
+  WELLS_LINES_SOLID_LAYER,
   WELLS_POINTS_COHORT_LAYER,
+  WELLS_POINTS_LAYER,
   WELLS_SOURCE_ID,
   cohortLineFilter,
   cohortPointFilter,
@@ -37,6 +39,7 @@ import {
   wellsLinesSolidLayer,
   wellsPointsCohortLayer,
   wellsPointsLayer,
+  wellsColorExpr,
 } from "../map/wellsLayers";
 import { useMapStore } from "../store/mapStore";
 import { activeCohort, useCohortStore } from "../store/cohortStore";
@@ -183,6 +186,7 @@ export function MapView() {
   const showBasementFaults = useMapStore((s) => s.showBasementFaults);
   const showSnfFaults = useMapStore((s) => s.showSnfFaults);
   const showWellsticks = useMapStore((s) => s.showWellsticks);
+  const wellColorMode = useMapStore((s) => s.wellColorMode);
   const dealPolygons = useMapStore((s) => s.dealPolygons);
   const dealVisibility = useMapStore((s) => s.dealVisibility);
   const showNarviSticks = useMapStore((s) => s.showNarviSticks);
@@ -430,6 +434,21 @@ export function MapView() {
       );
     }
   }, [cohortApi10s, styleLoaded]);
+
+  // -------------- well color mode (formation | scenario) --------------
+  // Paint swap only — the tile URL (and so the filter) is untouched.
+  useEffect(() => {
+    if (!styleLoaded) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const expr = wellsColorExpr(wellColorMode);
+    if (map.getLayer(WELLS_POINTS_LAYER)) {
+      map.setPaintProperty(WELLS_POINTS_LAYER, "circle-color", expr);
+    }
+    if (map.getLayer(WELLS_LINES_SOLID_LAYER)) {
+      map.setPaintProperty(WELLS_LINES_SOLID_LAYER, "line-color", expr);
+    }
+  }, [wellColorMode, styleLoaded]);
 
   // -------------- wellsticks toggle --------------
   useEffect(() => {

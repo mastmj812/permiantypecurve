@@ -311,3 +311,36 @@ def test_tiles_carry_scenario_class_property() -> None:
     # the style must coalesce).
     for sql in (_points_sql(), _lines_sql()):
         assert "w.scenario_class," in sql
+
+
+def test_lite_detail_carries_scenario_for_gunbarrel() -> None:
+    # /details and /context feed the gun-barrel tooltip + parent rings.
+    from types import SimpleNamespace
+
+    from app.wells_api.detail import _LITE_COLUMNS, _row_to_lite
+
+    names = {getattr(c, "key", None) or getattr(c, "name", None) for c in _LITE_COLUMNS}
+    for f in (
+        "scenario_class",
+        "scenario_bench",
+        "parent_benches_below",
+        "parent_benches_above",
+        "nearest_parent_above_dtvd_ft",
+        "shielded_below",
+        "youngest_parent_age_days",
+    ):
+        assert f in names, f
+    # one attribute per selected column, all NULL, then the scenario values
+    base: dict[str, object] = dict.fromkeys((n for n in names if n), None)
+    base.update(
+        api10="4246140102",
+        scenario_class="underfill",
+        parent_benches_above=["WCA_1"],
+        nearest_parent_above_dtvd_ft=-608.0,
+        youngest_parent_age_days=181,
+    )
+    lite = _row_to_lite(SimpleNamespace(**base))
+    assert lite.scenario_class == "underfill"
+    assert lite.parent_benches_above == ["WCA_1"]
+    assert lite.nearest_parent_above_dtvd_ft == -608.0
+    assert lite.youngest_parent_age_days == 181

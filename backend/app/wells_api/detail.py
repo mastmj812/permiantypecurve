@@ -95,6 +95,22 @@ class WellDetailLite(BaseModel):
     # rows (short-history wells with no forecast yet) badge the water
     # stream with the same field the forecast join carries.
     water_source: str | None = None
+    # Development scenario at first production (wells.scenario_*, synced
+    # from engineering_db curated.dev_scenario). The gun-barrel tooltip
+    # and parent-context rings read these. dTVD = neighbor minus subject
+    # (ft; negative = shallower). Class is parent-side (not censored).
+    scenario_class: str | None = None
+    scenario_bench: str | None = None
+    parent_benches_below: list[str] | None = None
+    parent_benches_above: list[str] | None = None
+    nearest_parent_below_dtvd_ft: float | None = None
+    nearest_parent_above_dtvd_ft: float | None = None
+    nearest_parent_offset_ft: float | None = None
+    youngest_parent_age_days: int | None = None
+    oldest_parent_age_days: int | None = None
+    shielded_below: bool | None = None
+    shielded_above: bool | None = None
+    has_same_bench_parent: bool | None = None
 
 
 @router.get("/wellsticks")
@@ -164,6 +180,18 @@ _LITE_COLUMNS = (
     Well.county,
     Well.novi_oil_eur,
     Well.water_source,
+    Well.scenario_class,
+    Well.scenario_bench,
+    Well.parent_benches_below,
+    Well.parent_benches_above,
+    Well.nearest_parent_below_dtvd_ft,
+    Well.nearest_parent_above_dtvd_ft,
+    Well.nearest_parent_offset_ft,
+    Well.youngest_parent_age_days,
+    Well.oldest_parent_age_days,
+    Well.shielded_below,
+    Well.shielded_above,
+    Well.has_same_bench_parent,
 )
 
 
@@ -187,6 +215,18 @@ def _row_to_lite(r: Any) -> WellDetailLite:
         county=r.county,
         novi_oil_eur=(float(r.novi_oil_eur) if r.novi_oil_eur is not None else None),
         water_source=r.water_source,
+        scenario_class=r.scenario_class,
+        scenario_bench=r.scenario_bench,
+        parent_benches_below=r.parent_benches_below,
+        parent_benches_above=r.parent_benches_above,
+        nearest_parent_below_dtvd_ft=r.nearest_parent_below_dtvd_ft,
+        nearest_parent_above_dtvd_ft=r.nearest_parent_above_dtvd_ft,
+        nearest_parent_offset_ft=r.nearest_parent_offset_ft,
+        youngest_parent_age_days=r.youngest_parent_age_days,
+        oldest_parent_age_days=r.oldest_parent_age_days,
+        shielded_below=r.shielded_below,
+        shielded_above=r.shielded_above,
+        has_same_bench_parent=r.has_same_bench_parent,
     )
 
 

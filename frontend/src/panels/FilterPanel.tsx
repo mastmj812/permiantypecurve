@@ -3,9 +3,15 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { fetchFacets, fetchOperators } from "../api/wells";
 import {
+  PARENT_OFFSET_GATE_FT,
+  SCENARIO_CLASSES,
+  SCENARIO_COLORS,
+  SCENARIO_LABELS,
   WATER_SOURCE_CLASSES,
   WATER_SOURCE_LABELS,
   type FacetCount,
+  type ParentSide,
+  type ScenarioClass,
   type WaterSourceClass,
   type WellStatus,
 } from "../api/types";
@@ -35,6 +41,13 @@ export function FilterPanel() {
   const setWellNameContains = useMapStore((s) => s.setWellNameContains);
   const setApi10s = useMapStore((s) => s.setApi10s);
   const setWaterSources = useMapStore((s) => s.setWaterSources);
+  const setScenarioClasses = useMapStore((s) => s.setScenarioClasses);
+  const setParentBenches = useMapStore((s) => s.setParentBenches);
+  const setParentSide = useMapStore((s) => s.setParentSide);
+  const setParentDtvdMax = useMapStore((s) => s.setParentDtvdMax);
+  const setParentAgeRange = useMapStore((s) => s.setParentAgeRange);
+  const wellColorMode = useMapStore((s) => s.wellColorMode);
+  const setWellColorMode = useMapStore((s) => s.setWellColorMode);
   const resetFilters = useMapStore((s) => s.resetFilters);
 
   // Refetch facets whenever filters change so per-facet counts respond
@@ -105,6 +118,24 @@ export function FilterPanel() {
       <WaterSourceSection
         selected={filters.water_sources}
         onChange={setWaterSources}
+      />
+
+      <DevScenarioSection
+        classes={filters.scenario_classes}
+        classFacets={facetsQ.data?.scenario_classes ?? []}
+        benchFacets={facetsQ.data?.scenario_benches ?? []}
+        parentBenches={filters.parent_benches}
+        parentSide={filters.parent_side}
+        parentDtvdMax={filters.parent_dtvd_max_ft}
+        ageMin={filters.parent_age_min_days}
+        ageMax={filters.parent_age_max_days}
+        colorByScenario={wellColorMode === "scenario"}
+        onClassesChange={setScenarioClasses}
+        onParentBenchesChange={setParentBenches}
+        onParentSideChange={setParentSide}
+        onParentDtvdMaxChange={setParentDtvdMax}
+        onAgeChange={setParentAgeRange}
+        onColorByScenarioChange={(v) => setWellColorMode(v ? "scenario" : "formation")}
       />
 
       <StatusSection selected={filters.statuses} onChange={setStatuses} />
@@ -681,6 +712,210 @@ function WaterSourceSection({
           {WATER_SOURCE_LABELS[c]}
         </label>
       ))}
+    </section>
+  );
+}
+
+// ---------------- Development scenario ----------------
+// Pure passthrough of engineering_db curated.dev_scenario — the app never
+// reclassifies. Two independent tools:
+//   * class checkboxes — the default screen (660-ft offset gate, 1,000-ft
+//     band, shielding by an in-between co-developed well); [] = all
+//   * parent bench — the bench PAIR ("WCA_1 beneath LSSH"): reads the
+//     per-bench facts directly, so NO vertical window and NO shielding —
+//     naming the pair is the vertical spec. Same as find_analogs
+//     --parent-bench, so a query here and in a Claude session agree.
+// Parent age is days the parent was online before this well's first
+// production. Class is parent-side and fully observed at first prod —
+// not censored (so there is deliberately no include-censored toggle).
+function DevScenarioSection({
+  classes,
+  classFacets,
+  benchFacets,
+  parentBenches,
+  parentSide,
+  parentDtvdMax,
+  ageMin,
+  ageMax,
+  colorByScenario,
+  onClassesChange,
+  onParentBenchesChange,
+  onParentSideChange,
+  onParentDtvdMaxChange,
+  onAgeChange,
+  onColorByScenarioChange,
+}: {
+  classes: ScenarioClass[];
+  classFacets: FacetCount[];
+  benchFacets: FacetCount[];
+  parentBenches: string[];
+  parentSide: ParentSide;
+  parentDtvdMax: number | null;
+  ageMin: number | null;
+  ageMax: number | null;
+  colorByScenario: boolean;
+  onClassesChange: (next: ScenarioClass[]) => void;
+  onParentBenchesChange: (next: string[]) => void;
+  onParentSideChange: (s: ParentSide) => void;
+  onParentDtvdMaxChange: (ft: number | null) => void;
+  onAgeChange: (min: number | null, max: number | null) => void;
+  onColorByScenarioChange: (v: boolean) => void;
+}) {
+  const countOf = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const f of classFacets) m.set(f.value, f.count);
+    return m;
+  }, [classFacets]);
+
+  const isChecked = (c: ScenarioClass) => classes.length === 0 || classes.includes(c);
+  function toggle(c: ScenarioClass) {
+    const current = classes.length === 0 ? [...SCENARIO_CLASSES] : classes;
+    const next = current.includes(c) ? current.filter((x) => x !== c) : [...current, c];
+    // All re-checked collapses to the compact no-filter default.
+    onClassesChange(next.length === SCENARIO_CLASSES.length ? [] : next);
+  }
+
+  const pairActive = parentBenches.length > 0;
+  const addable = benchFacets
+    .map((f) => f.value)
+    .filter((b) => b !== "(unmapped)" && !parentBenches.includes(b))
+    .sort();
+
+  return (
+    <section className="filter-section">
+      <h3
+        title={
+          "engineering_db curated.dev_scenario: what was already producing above/below " +
+          "the well at its first production. Vertical parent = other bench, online > 180 d " +
+          `earlier, closest parent lateral midpoint <= ${PARENT_OFFSET_GATE_FT} ft away, ` +
+          "|dTVD| <= 1,000 ft; shielded (doesn't count) when a co-developed well sits between."
+        }
+      >
+        Development scenario (at first prod)
+      </h3>
+      <label className="chk-inline chk-stacked">
+        <input
+          type="checkbox"
+          checked={colorByScenario}
+          onChange={(e) => onColorByScenarioChange(e.target.checked)}
+        />
+        color map by scenario
+      </label>
+      {SCENARIO_CLASSES.map((c) => (
+        <label key={c} className="chk-inline chk-stacked">
+          <input type="checkbox" checked={isChecked(c)} onChange={() => toggle(c)} />
+          <span
+            aria-hidden
+            style={{
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              marginRight: 6,
+              background: SCENARIO_COLORS[c],
+              border: "1px solid #6b7280",
+            }}
+          />
+          {SCENARIO_LABELS[c]}
+          <span className="muted"> ({(countOf.get(c) ?? 0).toLocaleString()})</span>
+        </label>
+      ))}
+
+      <h4 className="filter-subhead" title="Bench pair: no vertical window, no shielding">
+        Parent bench (pair)
+      </h4>
+      <div className="chip-row">
+        {parentBenches.map((b) => (
+          <span key={b} className="chip">
+            {b}
+            <button
+              type="button"
+              className="link-btn"
+              aria-label={`remove ${b}`}
+              onClick={() => onParentBenchesChange(parentBenches.filter((x) => x !== b))}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <select
+          value=""
+          aria-label="add parent bench"
+          onChange={(e) => {
+            if (e.target.value) onParentBenchesChange([...parentBenches, e.target.value]);
+          }}
+        >
+          <option value="">+ bench…</option>
+          {addable.map((b) => (
+            <option key={b} value={b}>
+              {b}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="row" style={{ opacity: pairActive ? 1 : 0.5 }}>
+        {(["any", "above", "below"] as ParentSide[]).map((s) => (
+          <label key={s} className="chk-inline">
+            <input
+              type="radio"
+              name="parent-side"
+              disabled={!pairActive}
+              checked={parentSide === s}
+              onChange={() => onParentSideChange(s)}
+            />
+            {s === "any" ? "either side" : s === "above" ? "parent above" : "parent below"}
+          </label>
+        ))}
+      </div>
+      <div className="row" style={{ opacity: pairActive ? 1 : 0.5 }}>
+        <span className="row-label">max |ΔTVD| (ft)</span>
+        <input
+          type="number"
+          min={0}
+          step={50}
+          placeholder="none"
+          disabled={!pairActive}
+          value={parentDtvdMax ?? ""}
+          onChange={(e) =>
+            onParentDtvdMaxChange(e.target.value ? Number(e.target.value) : null)
+          }
+        />
+      </div>
+
+      <h4
+        className="filter-subhead"
+        title={
+          "Days the parent was online before this well's first production. With a parent " +
+          "bench: that bench's youngest/oldest parent. Without: the class's qualifying " +
+          "vertical parents."
+        }
+      >
+        Parent age at first prod (days)
+      </h4>
+      <div className="row">
+        <input
+          type="number"
+          min={0}
+          step={30}
+          placeholder="min"
+          value={ageMin ?? ""}
+          onChange={(e) => onAgeChange(e.target.value ? Number(e.target.value) : null, ageMax)}
+        />
+        <span className="row-sep">—</span>
+        <input
+          type="number"
+          min={0}
+          step={30}
+          placeholder="max"
+          value={ageMax ?? ""}
+          onChange={(e) => onAgeChange(ageMin, e.target.value ? Number(e.target.value) : null)}
+        />
+      </div>
+      <p className="filter-hint">
+        Class is set by the parents at first production — not censored. Parent-bench pair
+        ignores the 1,000-ft band and shielding; the {PARENT_OFFSET_GATE_FT}-ft lateral-offset
+        gate always applies. Filters the map and lasso/box selection.
+      </p>
     </section>
   );
 }
