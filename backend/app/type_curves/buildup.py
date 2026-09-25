@@ -27,19 +27,23 @@ Stage order (each universe well takes the FIRST stage that removes it):
   2. lateral          lateral_ft outside [lateral_min_ft, lateral_max_ft]
   3. spacing          same-zone spacing (LateralCloserXY) outside range,
                       or in a no-spacing class the filter excludes
-  4. filters_other    status / operator / explicit api10 allow-list
-  5. not_selected     survived the filters but never entered the cohort.
+  4. scenario         development-scenario filters (class, subject bench,
+                      bench-pair parent, parent age) — curated.dev_scenario
+                      as snapshotted on the universe well; mirrors the
+                      FilterSpec scenario clauses exactly (scenario_culled)
+  5. filters_other    status / operator / explicit api10 allow-list
+  6. not_selected     survived the filters but never entered the cohort.
                       When the engineer removed the well WITH a coded
                       reason (``manual_exclusions``, v2 provenance), the
                       code + note ride this stage — same bucket, now
                       attributable instead of anonymous.
-  6. no_peak          forecast batch found no production peak
-  7. short_history    < cutoff months post-peak AND not cohort-transferred
-  8. review_excluded  engineer un-ticked on Review (code + note)
-  9. post_save_removed removed from the saved curve later (code + note)
+  7. no_peak          forecast batch found no production peak
+  8. short_history    < cutoff months post-peak AND not cohort-transferred
+  9. review_excluded  engineer un-ticked on Review (code + note)
+ 10. post_save_removed removed from the saved curve later (code + note)
   → included          the final type-curve cohort
 
-Stages 1-4 apply ONLY to wells that never entered the cohort. The filter
+Stages 1-5 apply ONLY to wells that never entered the cohort. The filter
 snapshot is evaluated LIVE (the drawer feeds it the current left-rail
 filters; a saved curve stores the spec as of Aggregate), so for a well
 that was already staged it is a counterfactual, not a history: the well
@@ -64,13 +68,20 @@ from typing import Any
 
 from app.db.models import TypeCurve
 from app.type_curves.reason_codes import REVIEW_REASON_CODES
-from app.wells_api.filters import SPACING_SENTINEL_FT
+from app.wells_api.filters import (
+    PARENT_OFFSET_GATE_FT,
+    SCENARIO_NO_DATA,
+    SPACING_SENTINEL_FT,
+)
 
 # Stage key → sheet description. Order IS the waterfall order.
 STAGE_DESCRIPTIONS: list[tuple[str, str]] = [
     ("vintage", "First prod outside vintage window"),
     ("lateral", "Lateral length outside range"),
     ("spacing", "Same-zone spacing outside range / unbounded"),
+    # Inserted 2026-09-25 AFTER spacing: curves saved earlier carry no
+    # scenario filters, so no historical well is reattributed; it shows 0.
+    ("scenario", "Development scenario outside filter"),
     ("filters_other", "Status / operator / list filters"),
     ("not_selected", "Not carried into cohort (geo / manual)"),
     ("no_peak", "No production peak found"),
@@ -166,6 +177,81 @@ def _resolve_spacing_classes(fs: dict[str, Any]) -> tuple[bool, bool]:
     return legacy, legacy
 
 
+def scenario_filters_active(fs: dict[str, Any]) -> bool:
+    """Any development-scenario clause in the filter snapshot (parent side /
+    dTVD cap alone are inert, exactly as in FilterSpec)."""
+    return bool(
+        fs.get("scenario_classes")
+        or fs.get("scenario_benches")
+        or fs.get("parent_benches")
+        or fs.get("parent_age_min_days") is not None
+        or fs.get("parent_age_max_days") is not None
+    )
+
+
+def _num(v: Any) -> float | None:
+    return float(v) if v is not None else None
+
+
+def scenario_culled(w: dict[str, Any], fs: dict[str, Any]) -> bool:
+    """Would FilterSpec's scenario clauses exclude this universe well?
+
+    A Python mirror of FilterSpec.to_sqlalchemy_clauses /
+    tiles._build_filter_sql for the scenario fields, over the snapshot's
+    per-well attrs (tests pin the correspondence). SQL NULL semantics are
+    reproduced: any comparison against a missing value is "not admitted".
+    Caller guarantees the snapshot is scenario-aware ("scenario_class" key
+    present on the well).
+    """
+    classes = fs.get("scenario_classes") or []
+    if classes:
+        sc = w.get("scenario_class")
+        if not ((sc is not None and sc in classes) or (sc is None and SCENARIO_NO_DATA in classes)):
+            return True
+    benches = fs.get("scenario_benches") or []
+    if benches and w.get("scenario_bench") not in benches:
+        return True
+    age_min, age_max = fs.get("parent_age_min_days"), fs.get("parent_age_max_days")
+    parents = fs.get("parent_benches") or []
+    if parents:
+        side = fs.get("parent_side") or "any"
+        dtvd_max = fs.get("parent_dtvd_max_ft")
+        facts: dict[str, Any] = w.get("parent_facts") or {}
+
+        def bench_admits(b: str) -> bool:
+            f = facts.get(b)
+            # facts only carries other-bench, n_parent > 0 entries
+            if f is None or b == w.get("scenario_bench"):
+                return False
+            off, dz = _num(f.get("off")), _num(f.get("dz"))
+            if off is None or off > PARENT_OFFSET_GATE_FT:
+                return False
+            if side == "below" and not (dz is not None and dz > 0):
+                return False
+            if side == "above" and not (dz is not None and dz < 0):
+                return False
+            if dtvd_max is not None and not (dz is not None and abs(dz) <= dtvd_max):
+                return False
+            if age_min is not None and not (
+                f.get("age_min") is not None and f["age_min"] >= age_min
+            ):
+                return False
+            return not (
+                age_max is not None
+                and not (f.get("age_max") is not None and f["age_max"] <= age_max)
+            )
+
+        if not any(bench_admits(b) for b in parents):
+            return True
+    else:
+        y, o = w.get("youngest_parent_age_days"), w.get("oldest_parent_age_days")
+        if age_min is not None and not (y is not None and y >= age_min):
+            return True
+        if age_max is not None and not (o is not None and o <= age_max):
+            return True
+    return False
+
+
 def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
     out: list[tuple[str, str]] = []
     start, end = fs.get("first_prod_start"), fs.get("first_prod_end")
@@ -210,6 +296,30 @@ def _criteria_lines(fs: dict[str, Any]) -> list[tuple[str, str]]:
                 f"{rng} same-zone offset at first prod ({classes})",
             )
         )
+    if scenario_filters_active(fs):
+        parts: list[str] = []
+        if fs.get("scenario_classes"):
+            parts.append("class " + ", ".join(str(c) for c in fs["scenario_classes"]))
+        if fs.get("scenario_benches"):
+            parts.append("bench " + ", ".join(str(b) for b in fs["scenario_benches"]))
+        if fs.get("parent_benches"):
+            side = fs.get("parent_side") or "any"
+            pair = "parent in " + "/".join(str(b) for b in fs["parent_benches"])
+            if side != "any":
+                pair += f" ({side})"
+            if fs.get("parent_dtvd_max_ft") is not None:
+                pair += f", |dTVD| <= {fs['parent_dtvd_max_ft']:,.0f} ft"
+            pair += f", lateral offset <= {PARENT_OFFSET_GATE_FT:,.0f} ft"
+            parts.append(pair)
+        lo, hi = fs.get("parent_age_min_days"), fs.get("parent_age_max_days")
+        if lo is not None or hi is not None:
+            rng = (
+                f"{lo:,}-{hi:,} d"
+                if lo is not None and hi is not None
+                else (f">= {lo:,} d" if lo is not None else f"<= {hi:,} d")
+            )
+            parts.append(f"parent age at first prod {rng}")
+        out.append(("scenario_criterion", "; ".join(parts) + " (at first production)"))
     statuses = fs.get("statuses") or []
     if statuses:
         out.append(("status_criterion", ", ".join(str(s) for s in statuses)))
@@ -371,6 +481,17 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
     # snapshot carries no county attr — folded into filters_other by
     # design decision; nothing to evaluate here.
 
+    # Scenario stage: live only when the snapshot has scenario filters. A
+    # universe snapshotted before the scenario attrs existed can't be
+    # evaluated — degrade honestly (note, no cull) rather than guess.
+    scen_active = scenario_filters_active(fs)
+    if scen_active and uni_wells and not any("scenario_class" in w for w in uni_wells):
+        notes.append(
+            "scenario filters set, but this universe snapshot predates scenario "
+            "attributes — the scenario stage is not evaluated (re-stamp the AOI "
+            "to attribute scenario culls)"
+        )
+
     def _spacing_culled(w: dict[str, Any]) -> bool:
         # Mirrors FilterSpec.to_sqlalchemy_clauses: the range binds only
         # the `measured` class; no_data (NULL) and no_neighbor (the 2800
@@ -396,6 +517,8 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             return "lateral"
         if _spacing_culled(w):
             return "spacing"
+        if scen_active and "scenario_class" in w and scenario_culled(w, fs):
+            return "scenario"
         if statuses and str(w.get("status")) not in statuses:
             return "filters_other"
         if operators and str(w.get("operator")) not in operators:
@@ -407,7 +530,9 @@ def compute_buildup(tc: TypeCurve) -> Buildup:
             return "filters_other"
         return None
 
-    def disposition_for(w: dict[str, Any], fstage: str | None) -> tuple[str, str | None, str | None]:
+    def disposition_for(
+        w: dict[str, Any], fstage: str | None
+    ) -> tuple[str, str | None, str | None]:
         api10 = str(w.get("api10"))
         if api10 not in cohort:
             # Never staged — the filters are the honest explanation.

@@ -54,6 +54,7 @@ const STAGE_BADGES: Record<string, { label: string; tone: string }> = {
   vintage: { label: "vintage", tone: "cull" },
   lateral: { label: "lateral", tone: "cull" },
   spacing: { label: "spacing", tone: "cull" },
+  scenario: { label: "scenario", tone: "cull" },
   filters_other: { label: "filters", tone: "cull" },
   not_selected: { label: "not selected", tone: "manual" },
   no_peak: { label: "no peak", tone: "cull" },

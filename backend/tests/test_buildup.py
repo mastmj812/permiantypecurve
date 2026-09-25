@@ -213,6 +213,7 @@ def test_waterfall_stage_counts() -> None:
         "vintage": 1,
         "lateral": 1,
         "spacing": 0,  # no spacing bounds in this snapshot
+        "scenario": 0,  # no scenario filters in this snapshot
         "filters_other": 1,
         "not_selected": 1,
         "no_peak": 1,
@@ -384,9 +385,9 @@ def test_cohort_member_off_filter_is_included_not_culled() -> None:
     prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
     for w in prov["universe"]["wells"]:
         w["lateral_closer_xy_ft"] = 800.0
-    next(w for w in prov["universe"]["wells"] if w["api10"] == "W01")[
-        "lateral_closer_xy_ft"
-    ] = 2800.0
+    next(w for w in prov["universe"]["wells"] if w["api10"] == "W01")["lateral_closer_xy_ft"] = (
+        2800.0
+    )
     b = compute_buildup(_tc(prov, included))
     w01 = next(r for r in b.rows if r.api10 == "W01")
     assert w01.disposition == "included"
@@ -409,9 +410,9 @@ def test_off_filter_advisory_stacks_with_transferred_annotation() -> None:
     prov["filter_snapshot"]["spacing_include_no_neighbor"] = False
     for w in prov["universe"]["wells"]:
         w["lateral_closer_xy_ft"] = 800.0
-    next(w for w in prov["universe"]["wells"] if w["api10"] == "W08")[
-        "lateral_closer_xy_ft"
-    ] = 2800.0
+    next(w for w in prov["universe"]["wells"] if w["api10"] == "W08")["lateral_closer_xy_ft"] = (
+        2800.0
+    )
     b = compute_buildup(_tc(prov, included))
     w08 = next(r for r in b.rows if r.api10 == "W08")
     assert w08.disposition == "included"
