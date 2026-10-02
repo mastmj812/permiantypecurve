@@ -38,3 +38,9 @@ class Deal(Base):
     # workbook; the export endpoint runs from this when no ad-hoc
     # payload is supplied.
     blueox_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # PDP forecasting from a seller data room (migration 0033):
+    # {"vdr_id": str, "api10s": [str] | null (null = every seller 1PDP
+    # well with an api10), "uptime_overrides": {api10: float}}. See
+    # app.pdp.service.
+    pdp_config: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
