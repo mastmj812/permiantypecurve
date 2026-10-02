@@ -6,7 +6,8 @@ global ``forecasts`` table.
 
 Unpeaked streams (managed-choke new wells) take Di from the same-bench
 warehouse cohort: anduin's own per-well forecasts (``forecasts``, monthly
-basis) for wells with the same ``formation_blueox`` within 5 mi (10 mi
+basis) for wells in the same donor bench group (``donor_benches`` —
+``formation_blueox``, with WCXY and WCA_1 pooled) within 5 mi (10 mi
 when fewer than ``MIN_DONORS``), >= 24 months of production, and a fitted
 (not transferred) row for the stream. Median Di of the pool; b from the
 bench prior (the same lender the monthly cohort transfer uses). No pool
@@ -41,6 +42,23 @@ MIN_DONORS: int = 5
 DONOR_MIN_MONTHS: int = 24
 SELLER_PDP_CATEGORY: str = "1PDP"
 _M_PER_MI: float = 1609.344
+
+# Benches pooled for the PDP donor cohort ONLY (Michael, 2026-10-02):
+# WCXY sits a few tens of feet above WCA_1 (Reeves medians 10,522 vs
+# 10,586 ft around Yorktown 68H) — the split is operator landing
+# strategy, not a different target. Formation grouping elsewhere in the
+# suite is unchanged.
+DONOR_BENCH_GROUPS: tuple[frozenset[str], ...] = (frozenset({"WCXY", "WCA_1"}),)
+
+
+def donor_benches(formation_blueox: str | None) -> list[str]:
+    """Benches whose wells may lend Di to a well on ``formation_blueox``."""
+    if formation_blueox is None:
+        return []
+    for group in DONOR_BENCH_GROUPS:
+        if formation_blueox in group:
+            return sorted(group)
+    return [formation_blueox]
 
 
 class PdpConfigError(ValueError):
@@ -141,12 +159,12 @@ def synced_api10s(session: Session, vdr_id: str) -> list[str]:
 _DONOR_SQL = text(
     """
     WITH tgt AS (
-        SELECT formation_blueox, COALESCE(wellstick, sh_geom) AS g
+        SELECT COALESCE(wellstick, sh_geom) AS g
         FROM wells WHERE api10 = :api10
     )
-    SELECT f.api10, f.di_initial
+    SELECT f.api10, f.di_initial, w.formation_blueox
     FROM tgt
-    JOIN wells w ON w.formation_blueox = tgt.formation_blueox AND w.api10 <> :api10
+    JOIN wells w ON w.formation_blueox = ANY(:benches) AND w.api10 <> :api10
     JOIN forecasts f ON f.api10 = w.api10 AND f.stream = CAST(:stream AS stream)
     WHERE f.di_initial IS NOT NULL
       AND f.fit_method NOT IN ('cohort_transfer', 'ratio_cum_oil')
@@ -156,13 +174,19 @@ _DONOR_SQL = text(
 )
 
 
-def cohort_donors(session: Session, api10: str, stream: str) -> dict[str, Any] | None:
+def cohort_donors(
+    session: Session, api10: str, stream: str, formation_blueox: str | None
+) -> dict[str, Any] | None:
+    benches = donor_benches(formation_blueox)
+    if not benches:
+        return None
     for radius in DONOR_RADII_MI:
         rows = session.execute(
             _DONOR_SQL,
             {
                 "api10": api10,
                 "stream": stream,
+                "benches": benches,
                 "radius_m": radius * _M_PER_MI,
                 "min_months": DONOR_MIN_MONTHS,
             },
@@ -176,6 +200,8 @@ def cohort_donors(session: Session, api10: str, stream: str) -> dict[str, Any] |
                 "n": len(rows),
                 "radius_mi": radius,
                 "min_months": DONOR_MIN_MONTHS,
+                "benches": benches,
+                "by_bench": {b: sum(r.formation_blueox == b for r in rows) for b in benches},
                 "api10s": sorted(r.api10 for r in rows),
             }
     return None
@@ -336,7 +362,7 @@ def forecast_well(
                 out.append(StreamOutcome(stream, "no_production"))
                 continue
             if cls == "unpeaked" and window is None:
-                donors = cohort_donors(session, api10, stream)
+                donors = cohort_donors(session, api10, stream, formation_blueox)
                 if donors is None:
                     out.append(
                         StreamOutcome(
