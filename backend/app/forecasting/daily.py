@@ -87,6 +87,13 @@ EARLY_LIFE_DAYS: int = 180
 # trim chokes constantly (alchemist Atlanta 73H: 11 adjustments, most
 # < 10% rate change); only material ones are operational breaks.
 MATERIAL_RATE_STEP: float = 0.15
+# No producing day in this many trailing days -> the stream is SHUT IN
+# (seller PDNP / inactive): forecast zero unless the engineer sets a
+# restart (manual params with a future anchor). Without this rule the
+# whole idle year is one shut-in EVENT (excluded from uptime -> 1.0) and
+# a from-peak fit would put phantom volumes on a dead well (alchemist
+# Atlanta 73 2H: nothing real since 2024; seller's own forecast is zero).
+SHUT_IN_DAYS: int = 365
 CHOKE_PERSIST_READINGS: int = 7
 RATE_STEP_WINDOW: int = 14
 
@@ -323,10 +330,13 @@ def detect_daily_peak(prep: pd.DataFrame, stream: str) -> DailyPeak | None:
 
 
 def classify_stream(prep: pd.DataFrame, stream: str, peak: DailyPeak | None) -> str:
-    """``no_production`` | ``unpeaked`` | ``fit``."""
+    """``no_production`` | ``shut_in`` | ``unpeaked`` | ``fit``."""
     if peak is None:
         return "no_production"
     last = prep["prod_date"].max().date()
+    recent = producing_series(prep, stream)
+    if not (recent["prod_date"].dt.date > last - timedelta(days=SHUT_IN_DAYS)).any():
+        return "shut_in"
     if (last - peak.peak_date).days < UNPEAKED_RECENT_DAYS:
         return "unpeaked"
     p = producing_series(prep, stream)
@@ -386,11 +396,17 @@ def _t_years(dates: Any, anchor: date) -> NDArray[np.float64]:
 
 
 def model_rate(params: dict[str, float], anchor: date, dates: Any) -> NDArray[np.float64]:
-    """Producing-day rate on ``dates`` (t = 0 at ``anchor``)."""
-    t = np.maximum(_t_years(dates, anchor), 0.0)
-    return np.asarray(
-        modified_hyperbolic(t, params["qi"], params["Di"], params["b"], params["Df"]), dtype=float
+    """Producing-day rate on ``dates`` (t = 0 at ``anchor``). Zero BEFORE
+    the anchor: a restart forecast (manual params, future anchor) must not
+    produce between data_through and the restart date."""
+    t_raw = _t_years(dates, anchor)
+    rate = np.asarray(
+        modified_hyperbolic(
+            np.maximum(t_raw, 0.0), params["qi"], params["Di"], params["b"], params["Df"]
+        ),
+        dtype=float,
     )
+    return np.where(t_raw < 0, 0.0, rate)
 
 
 def tail_ratio(
@@ -498,6 +514,23 @@ def fit_daily_stream(
     )
 
 
+def shut_in_forecast(prep: pd.DataFrame, stream: str, *, df_terminal: float) -> DailyForecast:
+    """Zero-rate forecast for a shut-in stream (method ``shut_in``)."""
+    p = producing_series(prep, stream)
+    through = prep["prod_date"].max().date()
+    return DailyForecast(
+        stream=stream,
+        method="shut_in",
+        params={"qi": 0.0, "Di": 0.5, "b": 1.0, "Df": float(df_terminal)},
+        anchor_date=through,
+        data_through=through,
+        diagnostics={
+            "last_producing_day": p["prod_date"].max().date().isoformat() if len(p) else None,
+            "basis": f"no producing day in the trailing {SHUT_IN_DAYS} d — zero unless a restart is set",
+        },
+    )
+
+
 def transfer_now(
     prep: pd.DataFrame,
     stream: str,
@@ -596,6 +629,8 @@ def review_flags(
     data_through: date,
 ) -> list[str]:
     flags: list[str] = []
+    if classification == "shut_in":
+        flags.append("shut_in")
     if classification == "unpeaked":
         flags.append("unpeaked_transfer")
     if fc is not None and fc.at_bound:

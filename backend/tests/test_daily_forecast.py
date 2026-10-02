@@ -243,3 +243,27 @@ def test_only_material_choke_changes_flag() -> None:
     through = days[-1].date()
     assert daily.review_flags(None, "fit", br[:1], data_through=through) == []
     assert daily.review_flags(None, "fit", br, data_through=through) == ["recent_break"]
+
+
+def test_dead_well_is_shut_in_with_zero_forecast() -> None:
+    """Produced for years, then nothing for > 365 d (alchemist Atlanta 73 2H)."""
+    n = 1500
+    days = pd.date_range(FIRST, periods=n, freq="D")
+    oil = np.where(np.arange(n) < 1000, 50.0, 0.0)
+    p = daily.prepare_daily(pd.DataFrame({"prod_date": days, "oil_bbl": oil, "gas_mcf": oil * 5}))
+    pk = daily.detect_daily_peak(p, "oil")
+    assert daily.classify_stream(p, "oil", pk) == "shut_in"
+    fc = daily.shut_in_forecast(p, "oil", df_terminal=0.08)
+    assert fc.method == "shut_in" and fc.qi == 0.0
+    assert daily.remaining_volume(fc, 1.0, FIRST, 50.0) == 0.0
+    assert daily.review_flags(fc, "shut_in", [], data_through=fc.data_through) == ["shut_in"]
+
+
+def test_restart_forecast_is_zero_before_its_anchor() -> None:
+    params = {"qi": 40.0, "Di": 0.8, "b": 1.0, "Df": 0.08}
+    restart = date(2027, 1, 1)
+    days = pd.date_range("2026-07-04", "2027-01-31", freq="D")
+    q = daily.model_rate(params, restart, days)
+    before = days < pd.Timestamp(restart)
+    assert (q[before] == 0).all()
+    assert q[~before][0] == pytest.approx(40.0, rel=0.01)

@@ -47,6 +47,8 @@ class PdpConfigBody(BaseModel):
     vdr_id: str = Field(pattern=r"^[a-z0-9_]+$")
     api10s: list[str] | None = None
     uptime_overrides: dict[str, float] = Field(default_factory=dict)
+    # Seller 2PDNP wells convey too (zero forecast unless a restart is set).
+    include_pdnp: bool = False
 
 
 class ForecastRequest(BaseModel):

@@ -49,6 +49,7 @@ MIN_DONORS: int = 5
 DONOR_MIN_MONTHS: int = 24
 DONOR_MIN_FIRST_PROD: date = date(2016, 1, 1)
 SELLER_PDP_CATEGORY: str = "1PDP"
+SELLER_PDNP_CATEGORY: str = "2PDNP"
 _M_PER_MI: float = 1609.344
 
 # Benches pooled for the PDP donor cohort ONLY (Michael, 2026-10-02):
@@ -78,6 +79,7 @@ class PdpConfig:
     vdr_id: str
     api10s: list[str] | None
     uptime_overrides: dict[str, float]
+    include_pdnp: bool = False
 
     @classmethod
     def from_deal(cls, deal: Deal) -> PdpConfig:
@@ -88,6 +90,7 @@ class PdpConfig:
             vdr_id=str(cfg["vdr_id"]),
             api10s=list(cfg["api10s"]) if cfg.get("api10s") else None,
             uptime_overrides={k: float(v) for k, v in (cfg.get("uptime_overrides") or {}).items()},
+            include_pdnp=bool(cfg.get("include_pdnp", False)),
         )
 
 
@@ -97,15 +100,13 @@ class PdpConfig:
 
 
 def resolve_api10s(wh: Session, cfg: PdpConfig) -> list[str]:
-    """Explicit list, else every seller 1PDP property that maps to a well."""
+    """Explicit list, else every seller 1PDP property that maps to a well
+    (plus 2PDNP when the deal conveys its non-producing wells)."""
     if cfg.api10s:
         return sorted(set(cfg.api10s))
+    cats = {SELLER_PDP_CATEGORY} | ({SELLER_PDNP_CATEGORY} if cfg.include_pdnp else set())
     return sorted(
-        {
-            w["api10"]
-            for w in fetch_vdr_wells(wh, cfg.vdr_id)
-            if w["reserve_category"] == SELLER_PDP_CATEGORY
-        }
+        {w["api10"] for w in fetch_vdr_wells(wh, cfg.vdr_id) if w["reserve_category"] in cats}
     )
 
 
@@ -449,7 +450,9 @@ def forecast_well(
             if cls == "no_production":
                 out.append(StreamOutcome(stream, "no_production"))
                 continue
-            if cls == "unpeaked" and window is None:
+            if cls == "shut_in" and window is None:
+                fc = daily.shut_in_forecast(prep, stream, df_terminal=df_terminal)
+            elif cls == "unpeaked" and window is None:
                 donors = cohort_donors(session, api10, stream, formation_blueox)
                 if donors is None:
                     out.append(
@@ -504,11 +507,8 @@ def forecast_well(
             horizon_years=base_cfg.horizon_years,
             manual=window is not None,
         )
-        out.append(
-            StreamOutcome(
-                stream, "transferred" if fc.method == "transfer_now" else "fitted", forecast=fc
-            )
-        )
+        status = {"transfer_now": "transferred", "shut_in": "shut_in"}.get(fc.method, "fitted")
+        out.append(StreamOutcome(stream, status, forecast=fc))
     session.commit()
     return out
 
