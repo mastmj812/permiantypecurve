@@ -3,27 +3,39 @@
 // never the global forecasts table.
 //
 // Flow: pick deal -> pick data room (saved to deals.pdp_config) -> Sync
-// (copy the room's daily rows) -> Run forecast -> review each well:
-// set a fit window (click the chart), override Di/b, override uptime,
-// lock. Manual params and windows survive every re-run; locked streams
-// are skipped by re-runs.
+// (copy the room's daily rows) -> Run forecast -> review WELL BY WELL:
+// the queue (left) orders shut-in, then flagged, then clean wells; the
+// review pane (right) shows oil, gas and water together. "Accept & next"
+// (A) locks every stream of the well and jumps to the next unsigned
+// well; N / P step without locking. "Accept clean wells" bulk-locks every
+// unsigned well with no flag beyond at_bound. Manual params, windows and
+// locks survive every re-run.
 //
-// Conventions shown on screen: Di is NOMINAL per year, always with the
-// 1-yr effective alongside (anchor = from the params' t = 0; forward =
-// what the forecast does in the year after data_through). Rates are
-// producing-day; volumes are calendar (x uptime). Remaining = from
-// data_through to first prod + 50 yr (raw technical integral, no
+// Conventions on screen: Di is NOMINAL per year with the 1-yr effective
+// alongside (anchor = from the params' t = 0; fwd = the year after
+// data_through). Rates are producing-day; volumes are calendar (x uptime).
+// Remaining = data_through -> first prod + 50 yr (raw technical, no
 // economic limit).
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { listDeals, type DealSummary } from "../api/deals";
 import {
-  effectiveFromNominal,
+  PDP_FLAG_SHORT,
+  PDP_FLAG_TEXT,
+  STREAM_COLOR,
   fetchPdpSeries,
   getPdpConfig,
   listPdpForecasts,
   listVdrSources,
+  lockWells,
   patchPdpForecast,
   putPdpConfig,
   putWellUptime,
@@ -34,43 +46,22 @@ import {
   type PdpSeries,
   type PdpStream,
   type VdrSource,
-  STREAM_COLOR,
 } from "../api/pdp";
-import { PdpChart } from "../components/PdpChart";
 import { PdpExportPanel } from "../components/PdpExportPanel";
+import { PdpStreamPanel } from "../components/PdpStreamPanel";
+import {
+  cleanUnsigned,
+  groupWells,
+  nextUnsigned,
+  orderQueue,
+  stepQueue,
+  wellFlags,
+  wellStatus,
+  type QueueWell,
+} from "../pdp/reviewQueue";
 import { useMapStore } from "../store/mapStore";
 
 const STREAMS: PdpStream[] = ["oil", "gas", "water"];
-
-const FLAG_TEXT: Record<string, string> = {
-  unpeaked_transfer:
-    "Still inclining — declines now on the same-bench cohort Di",
-  at_bound: "A fit parameter sits on its bound",
-  tail_mismatch: "Model vs last-90-day actual outside ±15%",
-  recent_break: "Shut-in or choke change in the last 18 months",
-  donor_water_allocated: "Donor water is Novi TX allocation (0.970 × gas)",
-  shut_in:
-    "No producing day in the last 365 d — forecast zero; set manual params with a future anchor for a restart",
-};
-
-const FLAG_SHORT: Record<string, string> = {
-  unpeaked_transfer: "unpeaked",
-  tail_mismatch: "tail",
-  recent_break: "break",
-  donor_water_allocated: "donor H₂O",
-  shut_in: "shut-in",
-};
-
-const METHOD_LABEL: Record<string, string> = {
-  daily_fit: "fit",
-  transfer_now: "cohort",
-  manual: "manual",
-  shut_in: "shut-in",
-};
-
-function pct(v: number | null | undefined): string {
-  return v === null || v === undefined ? "—" : `${(100 * v).toFixed(1)}%`;
-}
 
 function kvol(v: number): string {
   return (v / 1000).toLocaleString(undefined, {
@@ -79,30 +70,41 @@ function kvol(v: number): string {
   });
 }
 
-function num(v: number | null | undefined, d = 2): string {
-  return v === null || v === undefined ? "—" : v.toFixed(d);
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  if (!el) return false;
+  const tag = el.tagName;
+  return (
+    tag === "INPUT" ||
+    tag === "TEXTAREA" ||
+    tag === "SELECT" ||
+    el.isContentEditable
+  );
 }
 
-interface WellGroup {
-  api10: string;
-  name: string;
-  bench: string | null;
-  byStream: Partial<Record<PdpStream, PdpRow>>;
-  flagged: boolean;
-}
+const STATUS_MARK: Record<string, string> = {
+  signed: "✓",
+  partial: "◐",
+  open: "",
+};
 
 export function PdpPage() {
   const dealId = useMapStore((s) => s.pdpDealId);
   const setDealId = useMapStore((s) => s.setPdpDealId);
   const selection = useMapStore((s) => s.pdpSelection);
   const setSelection = useMapStore((s) => s.setPdpSelection);
+  const current = selection?.api10 ?? null;
+  const select = useCallback(
+    (api10: string | null) =>
+      setSelection(api10 ? { api10, stream: "oil" } : null),
+    [setSelection],
+  );
 
   const [deals, setDeals] = useState<DealSummary[]>([]);
   const [sources, setSources] = useState<VdrSource[]>([]);
   const [vdrId, setVdrId] = useState<string>("");
   const [includePdnp, setIncludePdnp] = useState(false);
   const [rows, setRows] = useState<PdpRow[]>([]);
-  const [series, setSeries] = useState<PdpSeries | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -139,55 +141,10 @@ export function PdpPage() {
     };
   }, [dealId, reload]);
 
-  const selectedRow = useMemo(
-    () =>
-      selection
-        ? (rows.find(
-            (r) => r.api10 === selection.api10 && r.stream === selection.stream,
-          ) ?? null)
-        : null,
-    [rows, selection],
-  );
-
-  useEffect(() => {
-    if (!dealId || !selectedRow) {
-      setSeries(null);
-      return;
-    }
-    let cancelled = false;
-    fetchPdpSeries(dealId, selectedRow.api10, selectedRow.stream)
-      .then((s) => {
-        if (!cancelled) setSeries(s);
-      })
-      .catch((e: unknown) => {
-        if (!cancelled) setError(String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-    // selectedRow is a fresh object after every reload, so any refit /
-    // manual edit / uptime change re-fetches the chart.
-  }, [dealId, selectedRow]);
-
-  const wells: WellGroup[] = useMemo(() => {
-    const by = new Map<string, WellGroup>();
-    for (const r of rows) {
-      const g = by.get(r.api10) ?? {
-        api10: r.api10,
-        name: r.well_name ?? r.api10,
-        bench: r.formation_blueox,
-        byStream: {},
-        flagged: false,
-      };
-      g.byStream[r.stream] = r;
-      if (r.review_flags.some((f) => f !== "at_bound")) g.flagged = true;
-      by.set(r.api10, g);
-    }
-    return [...by.values()].sort(
-      (a, b) =>
-        Number(b.flagged) - Number(a.flagged) || a.name.localeCompare(b.name),
-    );
-  }, [rows]);
+  const queue = useMemo(() => orderQueue(groupWells(rows)), [rows]);
+  const signed = queue.filter((w) => wellStatus(w) === "signed").length;
+  const clean = useMemo(() => cleanUnsigned(queue), [queue]);
+  const currentWell = queue.find((w) => w.api10 === current) ?? null;
 
   const totals = useMemo(() => {
     const t: Record<PdpStream, { cum: number; rem: number }> = {
@@ -245,16 +202,11 @@ export function PdpPage() {
         .join(", ");
     });
 
-  const patch = (body: PdpPatch, label: string) =>
+  const patch = (stream: PdpStream, body: PdpPatch, label: string) =>
     dealId &&
-    selectedRow &&
+    current &&
     void run(label, async () => {
-      await patchPdpForecast(
-        dealId,
-        selectedRow.api10,
-        selectedRow.stream,
-        body,
-      );
+      await patchPdpForecast(dealId, current, stream, body);
       return null;
     });
 
@@ -264,6 +216,59 @@ export function PdpPage() {
       await putWellUptime(dealId, api10, v);
       return v === null ? "uptime override cleared" : `uptime set to ${v}`;
     });
+
+  const accept = useCallback(() => {
+    if (!dealId || !current || busy) return;
+    const next = nextUnsigned(queue, current);
+    void run("accepting", async () => {
+      await lockWells(dealId, [current]);
+      select(next);
+      return next ? null : "every well is signed off";
+    });
+  }, [dealId, current, busy, queue, run, select]);
+
+  const unlockWell = () =>
+    dealId &&
+    current &&
+    void run("unlocking", async () => {
+      await lockWells(dealId, [current], false);
+      return null;
+    });
+
+  const acceptClean = () => {
+    if (!dealId || clean.length === 0) return;
+    const names = clean.map((w) => `  • ${w.name}`).join("\n");
+    if (
+      !window.confirm(
+        `Lock every stream of these ${clean.length} clean wells?\n\n${names}`,
+      )
+    )
+      return;
+    void run("accepting clean wells", async () => {
+      const r = await lockWells(
+        dealId,
+        clean.map((w) => w.api10),
+      );
+      return `signed off ${r.wells} clean wells (${r.changed} streams locked)`;
+    });
+  };
+
+  // Keyboard: A accept & next, N next, P previous (ignored while typing).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      const k = e.key.toLowerCase();
+      if (k === "a") {
+        e.preventDefault();
+        accept();
+      } else if (k === "n" || k === "p") {
+        e.preventDefault();
+        select(stepQueue(queue, current, k === "n" ? 1 : -1));
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [accept, queue, current, select]);
 
   const firstRow = rows[0] ?? null;
 
@@ -375,77 +380,73 @@ export function PdpPage() {
       {message && <div className="alert pdp-message">{message}</div>}
 
       <div className="pdp-body">
-        <div className="pdp-wells review-table-wrap">
+        <div className="pdp-wells">
+          {queue.length > 0 && (
+            <div className="pdp-queue-head">
+              <div
+                className="pdp-progress"
+                title="wells with every stream locked"
+              >
+                <div
+                  className="pdp-progress-bar"
+                  style={{ width: `${(100 * signed) / queue.length}%` }}
+                />
+                <span>
+                  {signed} of {queue.length} wells signed off
+                </span>
+              </div>
+              <button
+                type="button"
+                className="tb-btn"
+                disabled={!!busy || clean.length === 0}
+                onClick={acceptClean}
+                title="Lock every stream of each unsigned well with no flag beyond at-bound"
+              >
+                Accept clean wells ({clean.length})
+              </button>
+            </div>
+          )}
           <table className="pdp-table">
             <thead>
               <tr>
+                <th />
                 <th>Well</th>
                 <th>Bench</th>
-                <th title="oil method">Oil</th>
-                <th title="oil forward 1-yr effective decline">Fwd eff</th>
-                <th title="model / actual, last 90 days (oil)">Tail</th>
-                <th title="calendar uptime applied to volumes">Uptime</th>
                 <th title="remaining oil, Mbbl">Oil rem</th>
-                <th title="remaining gas, MMcf">Gas rem</th>
                 <th>Flags</th>
               </tr>
             </thead>
             <tbody>
-              {wells.map((w) => {
-                const oil = w.byStream.oil;
-                const flags = new Set(
-                  Object.values(w.byStream).flatMap(
-                    (r) => r?.review_flags ?? [],
-                  ),
-                );
-                const active = selection?.api10 === w.api10;
+              {queue.map((w) => {
+                const st = wellStatus(w);
                 return (
                   <tr
                     key={w.api10}
-                    className={active ? "row-selected" : undefined}
-                    onClick={() =>
-                      setSelection({
-                        api10: w.api10,
-                        stream: selection?.stream ?? "oil",
-                      })
-                    }
+                    className={[
+                      w.api10 === current ? "row-selected" : "",
+                      st === "signed" ? "row-signed" : "",
+                    ].join(" ")}
+                    onClick={() => select(w.api10)}
                     style={{ cursor: "pointer" }}
                   >
-                    <td title={w.api10}>
-                      {w.name}
-                      {Object.values(w.byStream).some((r) => r?.locked) &&
-                        " 🔒"}
+                    <td className="pdp-status" title={st}>
+                      {STATUS_MARK[st]}
                     </td>
+                    <td title={w.api10}>{w.name}</td>
                     <td>{w.bench ?? "—"}</td>
                     <td>
-                      {oil ? (
-                        METHOD_LABEL[oil.method]
-                      ) : (
-                        <span className="badge badge-err">none</span>
-                      )}
-                    </td>
-                    <td>{pct(oil?.diagnostics.forward_effective_decline)}</td>
-                    <td>{num(oil?.tail_ratio)}</td>
-                    <td>
-                      {num(oil?.uptime_factor, 3)}
-                      {oil?.uptime_basis.override !== undefined && " *"}
-                    </td>
-                    <td>{oil ? kvol(oil.remaining) : "—"}</td>
-                    <td>
-                      {w.byStream.gas ? kvol(w.byStream.gas.remaining) : "—"}
+                      {w.byStream.oil ? kvol(w.byStream.oil.remaining) : "—"}
                     </td>
                     <td>
-                      {[...flags]
-                        .filter((f) => f !== "at_bound")
-                        .map((f) => (
-                          <span
-                            key={f}
-                            className="badge badge-warn"
-                            title={FLAG_TEXT[f] ?? f}
-                          >
-                            {FLAG_SHORT[f] ?? f}
-                          </span>
-                        ))}
+                      {wellFlags(w).map((f) => (
+                        <span
+                          key={f}
+                          className="badge badge-warn"
+                          title={PDP_FLAG_TEXT[f] ?? f}
+                        >
+                          {PDP_FLAG_SHORT[f] ?? f}
+                        </span>
+                      ))}
                     </td>
                   </tr>
                 );
@@ -461,23 +462,32 @@ export function PdpPage() {
         </div>
 
         <div className="pdp-detail">
-          {selection && (
-            <WellDetail
-              key={`${selection.api10}`}
-              group={wells.find((w) => w.api10 === selection.api10) ?? null}
-              stream={selection.stream}
-              row={selectedRow}
-              series={series}
+          {currentWell && dealId ? (
+            <WellReview
+              dealId={dealId}
+              well={currentWell}
               busy={!!busy}
-              onStream={(s) =>
-                setSelection({ api10: selection.api10, stream: s })
+              position={
+                queue.findIndex((w) => w.api10 === currentWell.api10) + 1
               }
+              total={queue.length}
+              onAccept={accept}
+              onStep={(step) => select(stepQueue(queue, current, step))}
+              onUnlock={unlockWell}
               onPatch={patch}
               onUptime={setUptime}
             />
-          )}
-          {!selection && (
-            <p className="muted">Select a well to review its fit.</p>
+          ) : (
+            <p className="muted">
+              {queue.length > 0 ? (
+                <>
+                  Select a well, or press <kbd>N</kbd> to start at the top of
+                  the queue.
+                </>
+              ) : (
+                "Select a deal to review its PDP forecasts."
+              )}
+            </p>
           )}
         </div>
       </div>
@@ -485,328 +495,213 @@ export function PdpPage() {
   );
 }
 
-interface DetailProps {
-  group: WellGroup | null;
-  stream: PdpStream;
-  row: PdpRow | null;
-  series: PdpSeries | null;
+function useElementWidth<T extends HTMLElement>(): [RefObject<T>, number] {
+  const ref = useRef<T>(null);
+  const [width, setWidth] = useState(760);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(([entry]) => {
+      if (entry) setWidth(Math.max(480, Math.floor(entry.contentRect.width)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, width];
+}
+
+interface ReviewProps {
+  dealId: string;
+  well: QueueWell;
   busy: boolean;
-  onStream: (s: PdpStream) => void;
-  onPatch: (body: PdpPatch, label: string) => void;
+  position: number;
+  total: number;
+  onAccept: () => void;
+  onStep: (step: 1 | -1) => void;
+  onUnlock: () => void;
+  onPatch: (stream: PdpStream, body: PdpPatch, label: string) => void;
   onUptime: (api10: string, v: number | null) => void;
 }
 
-function WellDetail({
-  group,
-  stream,
-  row,
-  series,
+function WellReview({
+  dealId,
+  well,
   busy,
-  onStream,
+  position,
+  total,
+  onAccept,
+  onStep,
+  onUnlock,
   onPatch,
   onUptime,
-}: DetailProps) {
-  const [fitStart, setFitStart] = useState<string>(row?.fit_start_date ?? "");
-  const [qi, setQi] = useState<string>("");
-  const [di, setDi] = useState<string>("");
-  const [b, setB] = useState<string>("");
-  const [anchor, setAnchor] = useState<string>("");
-  const [uptime, setUptime] = useState<string>("");
-
-  // Re-seed the editors whenever the persisted row changes.
-  useEffect(() => {
-    setFitStart(row?.fit_start_date ?? "");
-    setQi(row ? row.qi.toFixed(1) : "");
-    setDi(row ? row.Di.toFixed(3) : "");
-    setB(row ? row.b.toFixed(3) : "");
-    setAnchor(row?.anchor_date ?? "");
-    setUptime(row ? row.uptime_factor.toFixed(3) : "");
-  }, [row]);
-
-  if (!group) return null;
-  const manualEff =
-    Number.isFinite(parseFloat(di)) && Number.isFinite(parseFloat(b))
-      ? effectiveFromNominal(parseFloat(di), parseFloat(b))
-      : null;
-  const donors = row?.diagnostics.donors;
-  const opBreaks = (row?.breaks ?? []).filter(
-    (x) => !x.early_life && x.material !== false,
+}: ReviewProps) {
+  const [series, setSeries] = useState<Partial<Record<PdpStream, PdpSeries>>>(
+    {},
   );
-  const locked = !!row?.locked;
+  const [ref, width] = useElementWidth<HTMLDivElement>();
+  const streams = STREAMS.filter((s) => well.byStream[s]);
+  const status = wellStatus(well);
+  const first = streams
+    .map((s) => well.byStream[s])
+    .find((r): r is PdpRow => r !== undefined);
+  const [uptime, setUptime] = useState(
+    first ? first.uptime_factor.toFixed(3) : "",
+  );
+
+  // Re-fetch the charts only when a fit actually changes (not on lock
+  // toggles or unrelated reloads): the key covers every series input.
+  const fetchKey = JSON.stringify([
+    well.api10,
+    streams.map((s) => {
+      const r = well.byStream[s];
+      return r
+        ? [
+            s,
+            r.method,
+            r.qi,
+            r.Di,
+            r.b,
+            r.anchor_date,
+            r.fit_start_date,
+            r.uptime_factor,
+          ]
+        : [s];
+    }),
+  ]);
+  useEffect(() => {
+    let cancelled = false;
+    const [api10, keyed] = JSON.parse(fetchKey) as [
+      string,
+      Array<[PdpStream, ...unknown[]]>,
+    ];
+    setSeries({});
+    void Promise.all(
+      keyed.map(
+        async ([s]) => [s, await fetchPdpSeries(dealId, api10, s)] as const,
+      ),
+    )
+      .then((pairs) => {
+        if (!cancelled) setSeries(Object.fromEntries(pairs));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [dealId, fetchKey]);
+
+  const uptimeNow = first?.uptime_factor;
+  useEffect(() => {
+    if (uptimeNow !== undefined) setUptime(uptimeNow.toFixed(3));
+  }, [uptimeNow]);
+
+  const missing = STREAMS.filter((s) => !well.byStream[s]);
 
   return (
-    <div className="pdp-detail-inner">
-      <div className="pdp-detail-head">
-        <strong>{group.name}</strong>{" "}
-        <span className="muted">
-          {group.api10} · {group.bench ?? "—"}
-        </span>
-        <span className="pdp-stream-tabs">
-          {STREAMS.map((s) => {
-            const r = group.byStream[s];
-            return (
-              <button
-                key={s}
-                type="button"
-                className={`tb-btn ${s === stream ? "tb-active" : ""}`}
-                style={{ borderBottom: `3px solid ${STREAM_COLOR[s]}` }}
-                onClick={() => onStream(s)}
-                disabled={!r}
-                title={r ? undefined : "no forecast for this stream"}
-              >
-                {s}
-                {r ? ` · ${METHOD_LABEL[r.method]}` : ""}
-              </button>
-            );
-          })}
-        </span>
+    <div className="pdp-review" ref={ref}>
+      <div className="pdp-review-head">
+        <div>
+          <strong>{well.name}</strong>{" "}
+          <span className="muted">
+            {well.api10} · {well.bench ?? "—"} · {position} of {total}
+          </span>{" "}
+          {status === "signed" && (
+            <span className="badge badge-ok">signed off</span>
+          )}
+          {status === "partial" && (
+            <span className="badge badge-info">partly locked</span>
+          )}
+        </div>
+        <div className="pdp-review-actions">
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => onStep(-1)}
+            title="previous well (P)"
+          >
+            ◀ Prev <kbd>P</kbd>
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            onClick={() => onStep(1)}
+            title="next well, no lock (N)"
+          >
+            Next <kbd>N</kbd> ▶
+          </button>
+          {status !== "open" && (
+            <button
+              type="button"
+              className="tb-btn"
+              disabled={busy}
+              onClick={onUnlock}
+            >
+              Unlock well
+            </button>
+          )}
+          <button
+            type="button"
+            className="tb-btn-primary"
+            disabled={busy || status === "signed"}
+            onClick={onAccept}
+            title="lock oil, gas and water as they stand and go to the next unsigned well (A)"
+          >
+            Accept &amp; next <kbd>A</kbd>
+          </button>
+        </div>
       </div>
-
-      {!row && (
+      {first && (
+        <div className="pdp-uptime-row">
+          <span className="muted">
+            Well uptime {first.uptime_factor.toFixed(3)}
+            {first.uptime_basis.override !== undefined
+              ? ` (override; computed ${first.uptime_basis.factor.toFixed(3)})`
+              : ` (routine downtime; ${first.uptime_basis.event_days} event days excluded)`}{" "}
+            · data through {first.data_through}
+          </span>
+          <input
+            className="tweak-input"
+            value={uptime}
+            onChange={(e) => setUptime(e.target.value)}
+            disabled={busy}
+          />
+          <button
+            type="button"
+            className="tb-btn"
+            disabled={
+              busy || !(parseFloat(uptime) > 0 && parseFloat(uptime) <= 1)
+            }
+            onClick={() => onUptime(well.api10, parseFloat(uptime))}
+          >
+            Override
+          </button>
+          <button
+            type="button"
+            className="tb-btn"
+            disabled={busy || first.uptime_basis.override === undefined}
+            onClick={() => onUptime(well.api10, null)}
+          >
+            Use computed
+          </button>
+        </div>
+      )}
+      {streams.map((s) => {
+        const row = well.byStream[s];
+        return row ? (
+          <PdpStreamPanel
+            key={s}
+            row={row}
+            series={series[s] ?? null}
+            busy={busy}
+            chartWidth={Math.min(width - 4, 1100)}
+            onPatch={onPatch}
+          />
+        ) : null;
+      })}
+      {missing.length > 0 && (
         <p className="muted">
-          No {stream} forecast for this well (no production, or no donors for a
-          transfer).
+          No {missing.join(" / ")} forecast for this well (no production on that
+          stream).
         </p>
-      )}
-      {row && series && (
-        <PdpChart
-          series={series}
-          onPickDate={locked ? undefined : (iso) => setFitStart(iso)}
-        />
-      )}
-      {row && (
-        <>
-          <div className="param-stats pdp-stats">
-            <span title="producing-day rate at the anchor">
-              qi {row.qi.toFixed(1)}
-            </span>
-            <span>
-              Di {row.Di.toFixed(2)}/yr nominal (
-              {pct(row.diagnostics.anchor_effective_decline)} eff. 1-yr from
-              anchor)
-            </span>
-            <span>b {row.b.toFixed(2)}</span>
-            <span>Df {(100 * row.Df).toFixed(0)}%</span>
-            <span title="1-yr effective decline starting at data_through">
-              fwd {pct(row.diagnostics.forward_effective_decline)}
-            </span>
-            <span>tail {num(row.tail_ratio)}</span>
-            <span>anchor {row.anchor_date}</span>
-            <span>
-              cum {kvol(row.cum_to_date)} · rem{" "}
-              <strong>{kvol(row.remaining)}</strong> · EUR {kvol(row.eur)}{" "}
-              {stream === "gas" ? "MMcf" : "Mbbl"}
-            </span>
-            <span>
-              uptime {row.uptime_factor.toFixed(3)}
-              {row.uptime_basis.override !== undefined
-                ? ` (override; computed ${row.uptime_basis.factor.toFixed(3)})`
-                : ` (routine downtime; ${row.uptime_basis.event_days} event days excluded)`}
-            </span>
-            {row.method === "daily_fit" && (
-              <span>
-                {row.n_points} producing days · R² (log){" "}
-                {num(row.fit_r2_log, 3)}
-              </span>
-            )}
-          </div>
-
-          {row.review_flags.length > 0 && (
-            <div className="chip-row">
-              {row.review_flags.map((f) => (
-                <span
-                  key={f}
-                  className="badge badge-warn"
-                  title={FLAG_TEXT[f] ?? f}
-                >
-                  {FLAG_TEXT[f] ?? f}
-                  {f === "at_bound" && row.diagnostics.at_bound
-                    ? `: ${row.diagnostics.at_bound}`
-                    : ""}
-                </span>
-              ))}
-            </div>
-          )}
-
-          {donors && (
-            <p className="muted pdp-note">
-              Cohort: {donors.n} donors within {donors.radius_mi} mi (
-              {Object.entries(donors.by_bench)
-                .map(([k, v]) => `${k} ${v}`)
-                .join(", ")}
-              ; {donors.n_autofit_now} autofit this run) — Di median{" "}
-              {donors.di_median.toFixed(2)}, IQR {donors.di_p25.toFixed(2)}–
-              {donors.di_p75.toFixed(2)}. Decline starts at {row.data_through}{" "}
-              from the trailing-30-day rate.
-            </p>
-          )}
-          {row.method === "manual" && row.diagnostics.previous && (
-            <p className="muted pdp-note">
-              Manual params replace a {row.diagnostics.previous.method} (Di{" "}
-              {row.diagnostics.previous.params.Di?.toFixed(2)}, b{" "}
-              {row.diagnostics.previous.params.b?.toFixed(2)}).
-            </p>
-          )}
-          {opBreaks.length > 0 && (
-            <ul className="pdp-breaks">
-              {opBreaks.map((x) => (
-                <li key={`${x.kind}${x.start}`}>
-                  {x.kind === "shut_in"
-                    ? `Shut-in ${x.start} → ${x.end} (${x.days} d)`
-                    : `Choke ${x.choke_from} → ${x.choke_to} on ${x.start}`}
-                  {x.rate_ratio
-                    ? ` — oil ${x.oil_rate_before} → ${x.oil_rate_after} bopd (×${x.rate_ratio.toFixed(2)})`
-                    : ""}
-                  {!locked && (
-                    <button
-                      type="button"
-                      className="link-btn"
-                      onClick={() =>
-                        setFitStart(
-                          x.kind === "shut_in" && x.end ? x.end : x.start,
-                        )
-                      }
-                    >
-                      use as fit start
-                    </button>
-                  )}
-                </li>
-              ))}
-            </ul>
-          )}
-
-          <div className="pdp-controls">
-            <fieldset disabled={busy || locked}>
-              <legend>Fit window</legend>
-              <input
-                type="date"
-                value={fitStart}
-                onChange={(e) => setFitStart(e.target.value)}
-              />
-              <button
-                type="button"
-                className="tb-btn"
-                disabled={!fitStart}
-                onClick={() =>
-                  onPatch({ fit_start_date: fitStart }, "refitting")
-                }
-              >
-                Refit from date
-              </button>
-              <button
-                type="button"
-                className="tb-btn"
-                disabled={
-                  row.method === "transfer_now" ||
-                  (!row.fit_start_date && row.method !== "manual")
-                }
-                onClick={() => onPatch({ clear_fit_start: true }, "reverting")}
-                title="Clear the window and any manual params — back to the auto method"
-              >
-                Revert to auto
-              </button>
-              <span className="muted">
-                Click the chart to pick a date. Time stays measured from the
-                peak.
-              </span>
-            </fieldset>
-            <fieldset disabled={busy || locked}>
-              <legend>Manual parameters</legend>
-              <label>
-                qi{" "}
-                <input
-                  className="tweak-input"
-                  value={qi}
-                  onChange={(e) => setQi(e.target.value)}
-                />
-              </label>
-              <label>
-                Di/yr nominal{" "}
-                <input
-                  className="tweak-input"
-                  value={di}
-                  onChange={(e) => setDi(e.target.value)}
-                />
-              </label>
-              <span className="muted">= {pct(manualEff)} eff.</span>
-              <label>
-                b{" "}
-                <input
-                  className="tweak-input"
-                  value={b}
-                  onChange={(e) => setB(e.target.value)}
-                />
-              </label>
-              <label>
-                anchor{" "}
-                <input
-                  type="date"
-                  value={anchor}
-                  onChange={(e) => setAnchor(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="tb-btn"
-                disabled={
-                  ![qi, di, b].every((v) => Number.isFinite(parseFloat(v))) ||
-                  !anchor
-                }
-                onClick={() =>
-                  onPatch(
-                    {
-                      params: {
-                        qi: parseFloat(qi),
-                        Di: parseFloat(di),
-                        b: parseFloat(b),
-                        anchor_date: anchor,
-                      },
-                    },
-                    "saving params",
-                  )
-                }
-              >
-                Apply
-              </button>
-            </fieldset>
-            <fieldset disabled={busy}>
-              <legend>Well uptime (all streams)</legend>
-              <input
-                className="tweak-input"
-                value={uptime}
-                onChange={(e) => setUptime(e.target.value)}
-              />
-              <button
-                type="button"
-                className="tb-btn"
-                disabled={!(parseFloat(uptime) > 0 && parseFloat(uptime) <= 1)}
-                onClick={() => onUptime(group.api10, parseFloat(uptime))}
-              >
-                Override
-              </button>
-              <button
-                type="button"
-                className="tb-btn"
-                disabled={row.uptime_basis.override === undefined}
-                onClick={() => onUptime(group.api10, null)}
-              >
-                Use computed
-              </button>
-            </fieldset>
-            <fieldset disabled={busy}>
-              <legend>Sign-off</legend>
-              <button
-                type="button"
-                className={locked ? "tb-btn tb-active" : "tb-btn"}
-                onClick={() =>
-                  onPatch({ locked: !locked }, locked ? "unlocking" : "locking")
-                }
-              >
-                {locked ? "🔒 Locked — unlock" : "Lock this stream"}
-              </button>
-            </fieldset>
-          </div>
-        </>
       )}
     </div>
   );

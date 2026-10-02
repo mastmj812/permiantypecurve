@@ -325,3 +325,46 @@ export async function downloadPdpExport(
   a.remove();
   URL.revokeObjectURL(url);
 }
+
+// Well-level sign-off: (un)lock every stream of the listed wells.
+export async function lockWells(
+  dealId: string,
+  api10s: string[],
+  locked = true,
+): Promise<{ wells: number; streams: number; changed: number }> {
+  return jsonOrThrow(
+    await apiFetch(`/api/deals/${dealId}/pdp/lock`, {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ api10s, locked }),
+    }),
+    locked ? "lock wells" : "unlock wells",
+  );
+}
+
+// Review-flag and method labels shared by the PDP tab components.
+export const PDP_FLAG_TEXT: Record<string, string> = {
+  unpeaked_transfer:
+    "Still inclining — declines now on the same-bench cohort Di",
+  at_bound: "A fit parameter sits on its bound",
+  tail_mismatch: "Model vs last-90-day actual outside ±15%",
+  recent_break: "Shut-in or material choke change in the last 18 months",
+  donor_water_allocated: "Donor water is Novi TX allocation (0.970 × gas)",
+  shut_in:
+    "No producing day in the last 365 d — forecast zero; set manual params with a future anchor for a restart",
+};
+
+export const PDP_METHOD_LABEL: Record<string, string> = {
+  daily_fit: "fit",
+  transfer_now: "cohort",
+  manual: "manual",
+  shut_in: "shut-in",
+};
+
+export const PDP_FLAG_SHORT: Record<string, string> = {
+  unpeaked_transfer: "unpeaked",
+  tail_mismatch: "tail",
+  recent_break: "break",
+  donor_water_allocated: "donor H₂O",
+  shut_in: "shut-in",
+};
