@@ -481,10 +481,16 @@ def _fit_with_b_prior(
     p0: list[float],
     model_type: str,
     config: ForecastConfig,
+    n_history_months: int | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], dict[str, Any] | None]:
     """``_fit_core``, then — on short histories — a second pass with b
     pulled toward ``config.b_prior``. Returns (popt, predicted, info);
     ``info`` is None when the prior carried no weight.
+
+    ``n_history_months`` decouples the history taper from the point
+    count: the monthly path leaves it None (one point per month); the
+    daily path (forecasting/daily.py) passes post-peak calendar months so
+    ~30 points/month don't zero the prior's weight from day one.
 
     The prior enters as ONE pseudo-observation appended to the residual
     vector, ``k * (b - b_prior)``, with
@@ -514,8 +520,9 @@ def _fit_with_b_prior(
     if config.b_prior is None or b_index is None:
         return popt, predicted, None
     n = len(df)
+    history_months = n if n_history_months is None else n_history_months
     weight = prior_weight(
-        n,
+        history_months,
         full_weight_months=config.b_prior_full_weight_months,
         zero_weight_months=config.b_prior_zero_weight_months,
     )
@@ -545,7 +552,7 @@ def _fit_with_b_prior(
         "b_prior": b_prior,
         "weight": round(weight, 4),
         "sigma": config.b_prior_sigma,
-        "n_fit_months": n,
+        "n_fit_months": history_months,
         "b_unregularized": float(popt[b_index]),
         "b_regularized": float(popt_reg[b_index]),
     }

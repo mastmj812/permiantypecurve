@@ -1,0 +1,232 @@
+"""PDP forecasting from seller data-room daily production.
+
+  GET    /api/vdr/sources                               data rooms in the warehouse
+  GET    /api/deals/{id}/pdp/config                     the deal's pdp_config
+  PUT    /api/deals/{id}/pdp/config                     set vdr_id / api10s / uptime_overrides
+  POST   /api/deals/{id}/pdp/sync                       copy the data room's daily rows locally
+  POST   /api/deals/{id}/pdp/forecast                   fit / transfer every (or listed) well
+  GET    /api/deals/{id}/pdp/forecasts                  persisted rows + review flags
+  PATCH  /api/deals/{id}/pdp/forecasts/{api10}/{stream} fit window, manual params, lock
+
+Method of record: app.forecasting.daily. Rows live in ``pdp_forecasts``,
+never the global ``forecasts`` table.
+"""
+
+from __future__ import annotations
+
+import uuid
+from contextlib import contextmanager
+from datetime import date
+from typing import Any, Literal
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.db.models import Deal, PdpForecast, Stream
+from app.db.session import get_session
+from app.pdp import service
+from app.warehouse_client.session import get_warehouse_session
+from app.warehouse_client.vdr import fetch_vdr_sources
+
+router = APIRouter(tags=["pdp"])
+
+StreamName = Literal["oil", "gas", "water"]
+
+
+class PdpConfigBody(BaseModel):
+    vdr_id: str = Field(pattern=r"^[a-z0-9_]+$")
+    api10s: list[str] | None = None
+    uptime_overrides: dict[str, float] = Field(default_factory=dict)
+
+
+class ForecastRequest(BaseModel):
+    api10s: list[str] | None = None
+
+
+class ManualParams(BaseModel):
+    qi: float = Field(gt=0)
+    Di: float = Field(gt=0)
+    b: float = Field(ge=0)
+    anchor_date: date
+
+
+class PatchRequest(BaseModel):
+    # Present-and-null clears the window; absent leaves it alone.
+    fit_start_date: date | None = None
+    clear_fit_start: bool = False
+    params: ManualParams | None = None
+    locked: bool | None = None
+
+
+def _deal(session: Session, deal_id: uuid.UUID) -> Deal:
+    deal = session.get(Deal, deal_id)
+    if deal is None:
+        raise HTTPException(404, "deal not found")
+    return deal
+
+
+def _cfg(deal: Deal) -> service.PdpConfig:
+    try:
+        return service.PdpConfig.from_deal(deal)
+    except service.PdpConfigError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+def _row(r: PdpForecast) -> dict[str, Any]:
+    return {
+        "api10": r.api10,
+        "stream": r.stream.value,
+        "method": r.method,
+        "qi": r.qi,
+        "Di": r.di_initial,
+        "b": r.b,
+        "Df": r.df_terminal,
+        "anchor_date": r.anchor_date,
+        "fit_start_date": r.fit_start_date,
+        "data_through": r.data_through,
+        "uptime_factor": r.uptime_factor,
+        "uptime_basis": r.uptime_basis,
+        "fit_r2_log": r.fit_r2_log,
+        "n_points": r.n_points,
+        "tail_ratio": r.tail_ratio,
+        "cum_to_date": r.cum_to_date,
+        "remaining": r.remaining,
+        "eur": r.eur,
+        "review_flags": r.review_flags,
+        "breaks": r.breaks,
+        "diagnostics": r.diagnostics,
+        "manual_override": r.manual_override,
+        "locked": r.locked,
+        "updated_at": r.updated_at,
+    }
+
+
+def _outcomes(results: dict[str, list[service.StreamOutcome]]) -> dict[str, Any]:
+    counts: dict[str, int] = {}
+    per_well: dict[str, dict[str, str]] = {}
+    for api10, outs in results.items():
+        per_well[api10] = {}
+        for o in outs:
+            counts[o.status] = counts.get(o.status, 0) + 1
+            per_well[api10][o.stream] = o.status if o.detail is None else f"{o.status}: {o.detail}"
+    return {"counts": counts, "wells": per_well}
+
+
+@router.get("/vdr/sources")
+def list_vdr_sources() -> list[dict[str, Any]]:
+    with contextmanager(get_warehouse_session)() as wh:
+        return [s.__dict__ for s in fetch_vdr_sources(wh)]
+
+
+@router.get("/deals/{deal_id}/pdp/config")
+def get_pdp_config(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> dict[str, Any] | None:
+    return _deal(session, deal_id).pdp_config
+
+
+@router.put("/deals/{deal_id}/pdp/config")
+def put_pdp_config(
+    deal_id: uuid.UUID, body: PdpConfigBody, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    deal = _deal(session, deal_id)
+    bad = {k: v for k, v in body.uptime_overrides.items() if not 0 < v <= 1}
+    if bad:
+        raise HTTPException(422, f"uptime overrides must be in (0, 1]: {bad}")
+    deal.pdp_config = body.model_dump()
+    session.commit()
+    return deal.pdp_config
+
+
+@router.post("/deals/{deal_id}/pdp/sync")
+def sync_pdp(deal_id: uuid.UUID, session: Session = Depends(get_session)) -> dict[str, Any]:
+    cfg = _cfg(_deal(session, deal_id))
+    with contextmanager(get_warehouse_session)() as wh:
+        try:
+            return service.sync_vdr_daily(session, wh, cfg)
+        except service.PdpConfigError as e:
+            raise HTTPException(409, str(e)) from e
+
+
+@router.post("/deals/{deal_id}/pdp/forecast")
+def run_pdp_forecast(
+    deal_id: uuid.UUID, req: ForecastRequest, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    deal = _deal(session, deal_id)
+    try:
+        return _outcomes(service.forecast_deal(session, deal, _cfg(deal), req.api10s))
+    except service.PdpConfigError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/deals/{deal_id}/pdp/forecasts")
+def list_pdp_forecasts(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> list[dict[str, Any]]:
+    _deal(session, deal_id)
+    rows = session.execute(
+        select(PdpForecast)
+        .where(PdpForecast.deal_id == deal_id)
+        .order_by(PdpForecast.api10, PdpForecast.stream)
+    ).scalars()
+    return [_row(r) for r in rows]
+
+
+@router.patch("/deals/{deal_id}/pdp/forecasts/{api10}/{stream}")
+def patch_pdp_forecast(
+    deal_id: uuid.UUID,
+    api10: str,
+    stream: StreamName,
+    req: PatchRequest,
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    deal = _deal(session, deal_id)
+    cfg = _cfg(deal)
+
+    def load() -> PdpForecast:
+        row = session.execute(
+            select(PdpForecast).where(
+                PdpForecast.deal_id == deal_id,
+                PdpForecast.api10 == api10,
+                PdpForecast.stream == Stream(stream),
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            raise HTTPException(404, f"no PDP forecast for {api10}/{stream}")
+        return row
+
+    row = load()
+    edits = req.params is not None or req.fit_start_date is not None or req.clear_fit_start
+    if row.locked and edits and req.locked is not False:
+        raise HTTPException(409, f"{api10}/{stream} is locked — unlock first")
+    if req.locked is False:
+        row.locked = False
+        session.commit()
+    if req.params is not None and (req.fit_start_date is not None or req.clear_fit_start):
+        raise HTTPException(422, "set either params or a fit window, not both")
+    if req.fit_start_date is not None or req.clear_fit_start:
+        outs = service.forecast_well(
+            session,
+            deal,
+            cfg,
+            api10,
+            streams=(stream,),
+            fit_start={stream: None if req.clear_fit_start else req.fit_start_date},
+        )
+        if outs[0].status not in ("fitted", "transferred"):
+            raise HTTPException(
+                422, f"refit {api10}/{stream}: {outs[0].status} {outs[0].detail or ''}".strip()
+            )
+    elif req.params is not None:
+        p = req.params
+        service.set_manual_params(
+            session, deal, cfg, load(), qi=p.qi, di=p.Di, b=p.b, anchor_date=p.anchor_date
+        )
+    if req.locked is True:
+        row = load()
+        row.locked = True
+        session.commit()
+    session.expire_all()
+    return _row(load())

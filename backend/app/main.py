@@ -12,6 +12,7 @@ from app.api import (
     deals,
     forecasts,
     health,
+    pdp,
     sync,
     type_curves,
 )
@@ -78,3 +79,4 @@ app.include_router(type_curves.router, prefix="/api", dependencies=protected)
 app.include_router(deal_polygons.router, prefix="/api", dependencies=protected)
 app.include_router(deals.router, prefix="/api", dependencies=protected)
 app.include_router(deals.narvi_router, prefix="/api", dependencies=protected)
+app.include_router(pdp.router, prefix="/api", dependencies=protected)
