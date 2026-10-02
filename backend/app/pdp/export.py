@@ -232,6 +232,13 @@ def assemble(session: Session, deal: Deal, cfg: PdpConfig, exp: ExportConfig) ->
         extra_manifest=[
             ("grouping", exp.grouping),
             ("review_status", f"{sum(r.locked for r in rows)} of {len(rows)} well-streams locked"),
+            (
+                "shut_in_wells",
+                "; ".join(
+                    sorted(w.well_name for w in wells.values() if w.methods.get("oil") == "shut_in")
+                )
+                or "none",
+            ),
         ],
     )
 

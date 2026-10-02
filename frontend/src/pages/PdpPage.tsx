@@ -49,6 +49,8 @@ const FLAG_TEXT: Record<string, string> = {
   tail_mismatch: "Model vs last-90-day actual outside ±15%",
   recent_break: "Shut-in or choke change in the last 18 months",
   donor_water_allocated: "Donor water is Novi TX allocation (0.970 × gas)",
+  shut_in:
+    "No producing day in the last 365 d — forecast zero; set manual params with a future anchor for a restart",
 };
 
 const FLAG_SHORT: Record<string, string> = {
@@ -56,12 +58,14 @@ const FLAG_SHORT: Record<string, string> = {
   tail_mismatch: "tail",
   recent_break: "break",
   donor_water_allocated: "donor H₂O",
+  shut_in: "shut-in",
 };
 
 const METHOD_LABEL: Record<string, string> = {
   daily_fit: "fit",
   transfer_now: "cohort",
   manual: "manual",
+  shut_in: "shut-in",
 };
 
 function pct(v: number | null | undefined): string {
@@ -96,6 +100,7 @@ export function PdpPage() {
   const [deals, setDeals] = useState<DealSummary[]>([]);
   const [sources, setSources] = useState<VdrSource[]>([]);
   const [vdrId, setVdrId] = useState<string>("");
+  const [includePdnp, setIncludePdnp] = useState(false);
   const [rows, setRows] = useState<PdpRow[]>([]);
   const [series, setSeries] = useState<PdpSeries | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -119,7 +124,10 @@ export function PdpPage() {
     void (async () => {
       try {
         const cfg = await getPdpConfig(dealId);
-        if (!cancelled) setVdrId(cfg?.vdr_id ?? "");
+        if (!cancelled) {
+          setVdrId(cfg?.vdr_id ?? "");
+          setIncludePdnp(!!cfg?.include_pdnp);
+        }
         const r = await listPdpForecasts(dealId);
         if (!cancelled) setRows(r);
       } catch (e) {
@@ -217,7 +225,7 @@ export function PdpPage() {
     void run("saving", async () => {
       // Only the data room — the backend merges, so stored uptime
       // overrides and export settings are kept.
-      await putPdpConfig(dealId, { vdr_id: vdrId });
+      await putPdpConfig(dealId, { vdr_id: vdrId, include_pdnp: includePdnp });
       return `data room ${vdrId} saved for this deal`;
     });
 
@@ -290,6 +298,18 @@ export function PdpPage() {
               </option>
             ))}
           </select>
+        </label>
+        <label
+          className="toolbar-group"
+          title="Seller 2PDNP wells convey: they get a sheet (zero forecast unless you set a restart). Save, then Sync daily."
+        >
+          <input
+            type="checkbox"
+            checked={includePdnp}
+            disabled={!dealId}
+            onChange={(e) => setIncludePdnp(e.target.checked)}
+          />{" "}
+          Include PDNP
         </label>
         <button
           type="button"

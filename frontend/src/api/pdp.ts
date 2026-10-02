@@ -6,7 +6,7 @@
 import { apiFetch } from "./auth";
 
 export type PdpStream = "oil" | "gas" | "water";
-export type PdpMethod = "daily_fit" | "transfer_now" | "manual";
+export type PdpMethod = "daily_fit" | "transfer_now" | "manual" | "shut_in";
 
 export const STREAM_COLOR: Record<PdpStream, string> = {
   oil: "#16a34a",
@@ -29,6 +29,8 @@ export interface PdpConfig {
   // Omitted on a data-room save: the backend merges, so stored overrides
   // and export settings survive.
   uptime_overrides?: Record<string, number>;
+  // Seller 2PDNP wells convey (zero forecast unless a restart is set).
+  include_pdnp?: boolean;
   export?: PdpExportConfig;
 }
 
