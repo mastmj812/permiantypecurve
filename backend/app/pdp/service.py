@@ -4,14 +4,20 @@ Method of record lives in ``app.forecasting.daily``; this module is the
 DB glue. Results go to ``pdp_forecasts`` (deal-scoped) — never to the
 global ``forecasts`` table.
 
-Unpeaked streams (managed-choke new wells) take Di from the same-bench
-warehouse cohort: anduin's own per-well forecasts (``forecasts``, monthly
-basis) for wells in the same donor bench group (``donor_benches`` —
-``formation_blueox``, with WCXY and WCA_1 pooled) within 5 mi (10 mi
-when fewer than ``MIN_DONORS``), >= 24 months of production, and a fitted
-(not transferred) row for the stream. Median Di of the pool; b from the
-bench prior (the same lender the monthly cohort transfer uses). No pool
--> the stream is left unforecast and flagged ``no_donors`` for manual.
+Unpeaked streams (managed-choke new wells) take Di from a same-bench
+offset cohort. Donors are SELECTED by criteria, not by whether someone
+already forecast them (Michael, 2026-10-02): wells in the same donor
+bench group (``donor_benches`` — ``formation_blueox``, WCXY and WCA_1
+pooled) within 5 mi (10 mi when fewer than ``MIN_DONORS``), first prod
+>= ``DONOR_MIN_FIRST_PROD``, >= 24 months of production. Candidates with
+NO ``forecasts`` rows at all are autoforecast with the house monthly
+engine and PERSISTED to the global ``forecasts`` table (reusable; they
+show up as ordinary unreviewed machine fits). Candidates that already
+have rows keep them untouched — refitting would overwrite unlocked
+engineer edits — and lend whatever streams they have. Median Di of the
+stream's fitted (not transferred / ratio) rows; b from the bench prior
+(the same lender the monthly cohort transfer uses). No pool -> the
+stream is left unforecast and flagged ``no_donors`` for manual.
 """
 
 from __future__ import annotations
@@ -32,6 +38,7 @@ from app.db.models import Deal, PdpForecast, Stream, VdrDailyProduction, Well
 from app.forecasting import daily
 from app.forecasting.b_prior import lookup_b_prior
 from app.forecasting.orchestrator import df_terminal_for_subbasin
+from app.forecasting.orchestrator import forecast_well as autoforecast_well
 from app.forecasting.types import ForecastConfig
 from app.warehouse_client.vdr import fetch_vdr_daily, fetch_vdr_wells
 
@@ -40,6 +47,7 @@ log = get_logger("pdp.service")
 DONOR_RADII_MI: tuple[float, ...] = (5.0, 10.0)
 MIN_DONORS: int = 5
 DONOR_MIN_MONTHS: int = 24
+DONOR_MIN_FIRST_PROD: date = date(2016, 1, 1)
 SELLER_PDP_CATEGORY: str = "1PDP"
 _M_PER_MI: float = 1609.344
 
@@ -156,22 +164,47 @@ def synced_api10s(session: Session, vdr_id: str) -> list[str]:
 # Cohort donors
 # ---------------------------------------------------------------------------
 
-_DONOR_SQL = text(
+_CANDIDATES_SQL = text(
     """
     WITH tgt AS (
         SELECT COALESCE(wellstick, sh_geom) AS g
         FROM wells WHERE api10 = :api10
     )
-    SELECT f.api10, f.di_initial, w.formation_blueox
+    SELECT w.api10, w.formation_blueox,
+           EXISTS (SELECT 1 FROM forecasts f WHERE f.api10 = w.api10) AS has_forecast
     FROM tgt
     JOIN wells w ON w.formation_blueox = ANY(:benches) AND w.api10 <> :api10
-    JOIN forecasts f ON f.api10 = w.api10 AND f.stream = CAST(:stream AS stream)
-    WHERE f.di_initial IS NOT NULL
-      AND f.fit_method NOT IN ('cohort_transfer', 'ratio_cum_oil')
+    WHERE w.first_prod_date >= :min_first_prod
       AND ST_DWithin(tgt.g::geography, COALESCE(w.wellstick, w.sh_geom)::geography, :radius_m)
       AND (SELECT count(*) FROM production_monthly p WHERE p.api10 = w.api10) >= :min_months
     """
 )
+
+_DONOR_DI_SQL = text(
+    """
+    SELECT f.api10, f.di_initial
+    FROM forecasts f
+    WHERE f.api10 = ANY(:api10s)
+      AND f.stream = CAST(:stream AS stream)
+      AND f.di_initial IS NOT NULL
+      AND f.fit_method NOT IN ('cohort_transfer', 'ratio_cum_oil')
+    """
+)
+
+
+def _ensure_donor_forecasts(session: Session, api10s: list[str]) -> list[str]:
+    """Autoforecast + persist candidates that have NO forecast rows.
+    Returns the api10s fitted now."""
+    fitted: list[str] = []
+    for a in api10s:
+        try:
+            res = autoforecast_well(session, a, persist=True)
+        except Exception as e:  # a bad donor never sinks the target well
+            log.warning("pdp_donor_autofit_failed", api10=a, err=str(e))
+            continue
+        if any(r is not None for r in res.values()):
+            fitted.append(a)
+    return fitted
 
 
 def cohort_donors(
@@ -181,29 +214,42 @@ def cohort_donors(
     if not benches:
         return None
     for radius in DONOR_RADII_MI:
-        rows = session.execute(
-            _DONOR_SQL,
+        cands = session.execute(
+            _CANDIDATES_SQL,
             {
                 "api10": api10,
-                "stream": stream,
                 "benches": benches,
+                "min_first_prod": DONOR_MIN_FIRST_PROD,
                 "radius_m": radius * _M_PER_MI,
                 "min_months": DONOR_MIN_MONTHS,
             },
         ).all()
-        if len(rows) >= MIN_DONORS:
-            dis = np.array([r.di_initial for r in rows], dtype=float)
-            return {
-                "di_median": float(np.median(dis)),
-                "di_p25": float(np.percentile(dis, 25)),
-                "di_p75": float(np.percentile(dis, 75)),
-                "n": len(rows),
-                "radius_mi": radius,
-                "min_months": DONOR_MIN_MONTHS,
-                "benches": benches,
-                "by_bench": {b: sum(r.formation_blueox == b for r in rows) for b in benches},
-                "api10s": sorted(r.api10 for r in rows),
-            }
+        if len(cands) < MIN_DONORS:
+            continue
+        fitted_now = set(
+            _ensure_donor_forecasts(session, [c.api10 for c in cands if not c.has_forecast])
+        )
+        bench_of = {c.api10: c.formation_blueox for c in cands}
+        rows = session.execute(_DONOR_DI_SQL, {"api10s": list(bench_of), "stream": stream}).all()
+        if len(rows) < MIN_DONORS:
+            continue
+        dis = np.array([r.di_initial for r in rows], dtype=float)
+        used = sorted(r.api10 for r in rows)
+        return {
+            "di_median": float(np.median(dis)),
+            "di_p25": float(np.percentile(dis, 25)),
+            "di_p75": float(np.percentile(dis, 75)),
+            "n": len(rows),
+            "n_candidates": len(cands),
+            "n_autofit_now": len(fitted_now & set(used)),
+            "radius_mi": radius,
+            "min_months": DONOR_MIN_MONTHS,
+            "min_first_prod": DONOR_MIN_FIRST_PROD.isoformat(),
+            "benches": benches,
+            "by_bench": {b: sum(bench_of[a] == b for a in used) for b in benches},
+            "api10s": used,
+            "autofit_api10s": sorted(fitted_now & set(used)),
+        }
     return None
 
 
