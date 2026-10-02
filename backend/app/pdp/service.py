@@ -164,19 +164,32 @@ def synced_api10s(session: Session, vdr_id: str) -> list[str]:
 # Cohort donors
 # ---------------------------------------------------------------------------
 
+# Spatial filter FIRST (GiST bounding-box prefilter on wellstick / sh_geom,
+# then the exact geography distance), production-month count only for the
+# survivors. Counting first scanned the hypertable for every basin-wide
+# bench well (~14k) — 11.6 s per call, ~3 min per alchemist run.
+# :box_deg pads the box generously (1 deg lon ~ 94 km at 32 N).
 _CANDIDATES_SQL = text(
     """
     WITH tgt AS (
         SELECT COALESCE(wellstick, sh_geom) AS g
         FROM wells WHERE api10 = :api10
+    ), near AS MATERIALIZED (
+        SELECT w.api10, w.formation_blueox
+        FROM tgt
+        JOIN wells w ON (
+            w.wellstick && ST_Expand(tgt.g, :box_deg)
+            OR w.sh_geom && ST_Expand(tgt.g, :box_deg)
+        )
+        WHERE w.formation_blueox = ANY(:benches)
+          AND w.api10 <> :api10
+          AND w.first_prod_date >= :min_first_prod
+          AND ST_DWithin(tgt.g::geography, COALESCE(w.wellstick, w.sh_geom)::geography, :radius_m)
     )
-    SELECT w.api10, w.formation_blueox,
-           EXISTS (SELECT 1 FROM forecasts f WHERE f.api10 = w.api10) AS has_forecast
-    FROM tgt
-    JOIN wells w ON w.formation_blueox = ANY(:benches) AND w.api10 <> :api10
-    WHERE w.first_prod_date >= :min_first_prod
-      AND ST_DWithin(tgt.g::geography, COALESCE(w.wellstick, w.sh_geom)::geography, :radius_m)
-      AND (SELECT count(*) FROM production_monthly p WHERE p.api10 = w.api10) >= :min_months
+    SELECT n.api10, n.formation_blueox,
+           EXISTS (SELECT 1 FROM forecasts f WHERE f.api10 = n.api10) AS has_forecast
+    FROM near n
+    WHERE (SELECT count(*) FROM production_monthly p WHERE p.api10 = n.api10) >= :min_months
     """
 )
 
@@ -221,6 +234,7 @@ def cohort_donors(
                 "benches": benches,
                 "min_first_prod": DONOR_MIN_FIRST_PROD,
                 "radius_m": radius * _M_PER_MI,
+                "box_deg": radius * _M_PER_MI / 60_000.0,
                 "min_months": DONOR_MIN_MONTHS,
             },
         ).all()
@@ -395,6 +409,34 @@ def forecast_well(
         if existing is not None and existing.locked:
             out.append(StreamOutcome(stream, "skipped_locked"))
             continue
+        if (
+            existing is not None
+            and existing.method == "manual"
+            and (fit_start is None or stream not in fit_start)
+        ):
+            # Engineer-set parameters survive every re-run (sync, deal-wide
+            # forecast, uptime change): keep the params, recompute volumes
+            # on the current data and uptime. Only an explicit window refit
+            # (or new manual params) replaces them.
+            _persist_manual(
+                session,
+                deal=deal,
+                cfg=cfg,
+                api10=api10,
+                stream=stream,
+                params=dict(existing.params),
+                anchor_date=existing.anchor_date,
+                fit_start=existing.fit_start_date,
+                prep=prep,
+                uptime=uptime,
+                uptime_factor=uptime_factor,
+                breaks=breaks,
+                first_prod=first_prod,
+                horizon_years=base_cfg.horizon_years,
+                diagnostics={k: v for k, v in existing.diagnostics.items() if k == "previous"},
+            )
+            out.append(StreamOutcome(stream, "kept_manual"))
+            continue
         window = (
             fit_start[stream]
             if fit_start is not None and stream in fit_start
@@ -480,6 +522,56 @@ def forecast_deal(
     return {a: forecast_well(session, deal, cfg, a) for a in targets}
 
 
+def _first_prod(prep: pd.DataFrame) -> date:
+    producing = prep.loc[~prep["well_down"], "prod_date"]
+    return (producing.min() if len(producing) else prep["prod_date"].min()).date()
+
+
+def _persist_manual(
+    session: Session,
+    *,
+    deal: Deal,
+    cfg: PdpConfig,
+    api10: str,
+    stream: str,
+    params: dict[str, float],
+    anchor_date: date,
+    fit_start: date | None,
+    prep: pd.DataFrame,
+    uptime: daily.Uptime,
+    uptime_factor: float,
+    breaks: list[dict[str, Any]],
+    first_prod: date,
+    horizon_years: float,
+    diagnostics: dict[str, Any],
+) -> None:
+    fc = daily.DailyForecast(
+        stream=stream,
+        method="manual",
+        params=params,
+        anchor_date=anchor_date,
+        data_through=prep["prod_date"].max().date(),
+        fit_start=fit_start,
+        diagnostics=diagnostics,
+    )
+    fc = replace(fc, tail_ratio=daily.tail_ratio(prep, stream, params, anchor_date))
+    _persist(
+        session,
+        deal=deal,
+        cfg=cfg,
+        api10=api10,
+        fc=fc,
+        prep=prep,
+        uptime=uptime,
+        uptime_factor=uptime_factor,
+        breaks=breaks,
+        flags=daily.review_flags(fc, "fit", breaks, data_through=fc.data_through),
+        first_prod=first_prod,
+        horizon_years=horizon_years,
+        manual=True,
+    )
+
+
 def set_manual_params(
     session: Session,
     deal: Deal,
@@ -491,43 +583,79 @@ def set_manual_params(
     b: float,
     anchor_date: date,
 ) -> None:
-    """Engineer-set parameters (method ``manual``); volumes recomputed."""
-    raw = load_daily(session, cfg.vdr_id, row.api10)
-    prep = daily.prepare_daily(raw)
-    fc = daily.DailyForecast(
-        stream=row.stream.value,
-        method="manual",
-        params={"qi": qi, "Di": di, "b": b, "Df": row.df_terminal},
-        anchor_date=anchor_date,
-        data_through=prep["prod_date"].max().date(),
-        fit_start=row.fit_start_date,
-        diagnostics={
-            "previous": {
-                "method": row.method,
-                "params": row.params,
-                "anchor_date": row.anchor_date.isoformat(),
-            }
-        },
-    )
-    fc = replace(fc, tail_ratio=daily.tail_ratio(prep, fc.stream, fc.params, anchor_date))
+    """Engineer-set parameters (method ``manual``); volumes recomputed.
+    The replaced fit is kept under ``diagnostics.previous`` (one level —
+    a manual-over-manual edit keeps the original machine fit there)."""
+    prep = daily.prepare_daily(load_daily(session, cfg.vdr_id, row.api10))
     uptime = daily.compute_uptime(prep)
-    breaks = daily.detect_breaks(prep)
-    first_prod = date.fromisoformat(
-        row.diagnostics.get("first_prod", prep["prod_date"].min().date().isoformat())
-    )
-    _persist(
+    previous = row.diagnostics.get("previous") if row.method == "manual" else None
+    _persist_manual(
         session,
         deal=deal,
         cfg=cfg,
         api10=row.api10,
-        fc=fc,
+        stream=row.stream.value,
+        params={"qi": qi, "Di": di, "b": b, "Df": row.df_terminal},
+        anchor_date=anchor_date,
+        fit_start=row.fit_start_date,
         prep=prep,
         uptime=uptime,
-        uptime_factor=row.uptime_factor,
-        breaks=breaks,
-        flags=daily.review_flags(fc, "fit", breaks, data_through=fc.data_through),
-        first_prod=first_prod,
+        uptime_factor=cfg.uptime_overrides.get(row.api10, uptime.factor),
+        breaks=daily.detect_breaks(prep),
+        first_prod=_first_prod(prep),
         horizon_years=float(row.diagnostics.get("horizon_years", 50.0)),
-        manual=True,
+        diagnostics={
+            "previous": previous
+            or {
+                "method": row.method,
+                "params": row.params,
+                "anchor_date": row.anchor_date.isoformat(),
+                "fit_start_date": row.fit_start_date.isoformat() if row.fit_start_date else None,
+            }
+        },
     )
     session.commit()
+
+
+SERIES_STEP_DAYS: int = 7
+
+
+def stream_series(
+    session: Session, cfg: PdpConfig, row: PdpForecast, years_ahead: float
+) -> dict[str, Any]:
+    """Chart payload for one stream: every calendar day's actual
+    producing-day rate with its down flag, and the model's producing-day
+    rate from the anchor to data_through + ``years_ahead`` (weekly)."""
+    prep = daily.prepare_daily(load_daily(session, cfg.vdr_id, row.api10))
+    stream = row.stream.value
+    col = daily.VOLUME_COL[stream]
+    down = prep[f"{stream}_down"] | prep["well_down"]
+    actual = [
+        {"d": d.date().isoformat(), "q": None if pd.isna(q) else float(q), "down": bool(dn)}
+        for d, q, dn in zip(prep["prod_date"], prep[col], down, strict=True)
+    ]
+    end = row.data_through + pd.Timedelta(days=round(years_ahead * daily.DAYS_PER_YEAR_CAL))
+    days = pd.date_range(row.anchor_date, end, freq=f"{SERIES_STEP_DAYS}D")
+    if len(days) == 0 or days[-1].date() != row.data_through:
+        days = days.union(pd.DatetimeIndex([pd.Timestamp(row.data_through)]))
+    q = daily.model_rate(dict(row.params), row.anchor_date, days)
+    events = [
+        {
+            "start": prep["prod_date"].iloc[a].date().isoformat(),
+            "end": prep["prod_date"].iloc[b - 1].date().isoformat(),
+        }
+        for a, b in daily.true_runs(prep["event_down"].to_numpy())
+    ]
+    return {
+        "api10": row.api10,
+        "stream": stream,
+        "method": row.method,
+        "anchor_date": row.anchor_date.isoformat(),
+        "fit_start_date": row.fit_start_date.isoformat() if row.fit_start_date else None,
+        "data_through": row.data_through.isoformat(),
+        "uptime_factor": row.uptime_factor,
+        "actual": actual,
+        "model": [{"d": d.date().isoformat(), "q": float(v)} for d, v in zip(days, q, strict=True)],
+        "events": events,
+        "breaks": row.breaks,
+    }

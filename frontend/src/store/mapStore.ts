@@ -25,12 +25,18 @@ import {
 } from "../api/types";
 
 export type DrawMode = "off" | "lasso" | "box" | "click";
-export type PageId = "map" | "review" | "type_curve";
+export type PageId = "map" | "review" | "type_curve" | "pdp";
 
 export interface MapState {
   // ---- top-level nav ----
   currentPage: PageId;
   setCurrentPage: (p: PageId) => void;
+  // ---- PDP review tab (seller data-room daily forecasts) ----
+  // Selection persists across tab switches like the rest of the nav state.
+  pdpDealId: string | null;
+  setPdpDealId: (id: string | null) => void;
+  pdpSelection: { api10: string; stream: "oil" | "gas" | "water" } | null;
+  setPdpSelection: (sel: { api10: string; stream: "oil" | "gas" | "water" } | null) => void;
   // api10s carried across nav from map → forecast page
   forecastApi10s: string[];
   setForecastApi10s: (api10s: string[]) => void;
@@ -248,6 +254,11 @@ export interface MapState {
 export const useMapStore = create<MapState>((set) => ({
   currentPage: "map",
   setCurrentPage: (currentPage) => set({ currentPage }),
+  pdpDealId: null,
+  // A different deal invalidates the well/stream selection.
+  setPdpDealId: (pdpDealId) => set({ pdpDealId, pdpSelection: null }),
+  pdpSelection: null,
+  setPdpSelection: (pdpSelection) => set({ pdpSelection }),
   forecastApi10s: [],
   // A new forecast batch invalidates any Review-page aggregate
   // snapshot — otherwise a stale typeCurveApi10s from the previous

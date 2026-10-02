@@ -214,7 +214,7 @@ def test_pre_production_days_are_not_an_event_or_uptime_loss() -> None:
 def test_early_life_choke_changes_recorded_but_not_flagged() -> None:
     n = 400
     days = pd.date_range(FIRST, periods=n, freq="D")
-    oil = np.full(n, 500.0)
+    oil = np.where(np.arange(n) < 300, 500.0, 375.0)  # late cut is a material -25% step
     choke = np.where(np.arange(n) < 60, 24.0, np.where(np.arange(n) < 300, 40.0, 32.0))
     p = daily.prepare_daily(
         pd.DataFrame({"prod_date": days, "oil_bbl": oil, "gas_mcf": oil * 5, "choke": choke})
@@ -224,6 +224,22 @@ def test_early_life_choke_changes_recorded_but_not_flagged() -> None:
         ((FIRST + timedelta(days=60)).isoformat(), True),
         ((FIRST + timedelta(days=300)).isoformat(), False),
     ]
+    through = days[-1].date()
+    assert daily.review_flags(None, "fit", br[:1], data_through=through) == []
+    assert daily.review_flags(None, "fit", br, data_through=through) == ["recent_break"]
+
+
+def test_only_material_choke_changes_flag() -> None:
+    n = 500
+    days = pd.date_range(FIRST, periods=n, freq="D")
+    idx = np.arange(n)
+    oil = np.where(idx < 400, 500.0, np.where(idx < 450, 490.0, 350.0))  # -2%, then -29%
+    choke = np.where(idx < 400, 64.0, np.where(idx < 450, 60.0, 40.0))
+    p = daily.prepare_daily(
+        pd.DataFrame({"prod_date": days, "oil_bbl": oil, "gas_mcf": oil * 5, "choke": choke})
+    )
+    br = daily.detect_breaks(p)
+    assert [(b["choke_to"], b["material"]) for b in br] == [(60.0, False), (40.0, True)]
     through = days[-1].date()
     assert daily.review_flags(None, "fit", br[:1], data_through=through) == []
     assert daily.review_flags(None, "fit", br, data_through=through) == ["recent_break"]

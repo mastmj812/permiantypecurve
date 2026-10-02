@@ -82,6 +82,11 @@ RECENT_BREAK_DAYS: int = 548
 # Choke changes this early are the managed-choke ramp, not operational
 # breaks: recorded (they belong on the review chart) but never flagged.
 EARLY_LIFE_DAYS: int = 180
+# A choke change is MATERIAL when the oil producing-day rate steps by at
+# least this much across it (or the step can't be measured). Operators
+# trim chokes constantly (alchemist Atlanta 73H: 11 adjustments, most
+# < 10% rate change); only material ones are operational breaks.
+MATERIAL_RATE_STEP: float = 0.15
 CHOKE_PERSIST_READINGS: int = 7
 RATE_STEP_WINDOW: int = 14
 
@@ -109,7 +114,7 @@ def stream_down(q: pd.Series, floor: float) -> pd.Series:
     return q.isna() | (q < 0) | (q < floor) | (q < relative)
 
 
-def _runs(mask: NDArray[np.bool_]) -> list[tuple[int, int]]:
+def true_runs(mask: NDArray[np.bool_]) -> list[tuple[int, int]]:
     """[start, end) index pairs of consecutive True runs."""
     out: list[tuple[int, int]] = []
     i, n = 0, len(mask)
@@ -158,7 +163,7 @@ def prepare_daily(df: pd.DataFrame, config: ForecastConfig | None = None) -> pd.
     pre[: up[0] if len(up) else len(d)] = True
     d["pre_production"] = pre
     event = np.zeros(len(d), dtype=bool)
-    for a, b in _runs(d["well_down"].to_numpy() & ~pre):
+    for a, b in true_runs(d["well_down"].to_numpy() & ~pre):
         if b - a >= EVENT_MIN_DAYS:
             event[a:b] = True
     d["event_down"] = event
@@ -219,7 +224,7 @@ def detect_breaks(prep: pd.DataFrame) -> list[dict[str, Any]]:
     fit window by itself (decision C)."""
     out: list[dict[str, Any]] = []
     oil, down = prep["oil_bbl"], prep["oil_down"]
-    for a, b in _runs(prep["event_down"].to_numpy()):
+    for a, b in true_runs(prep["event_down"].to_numpy()):
         pre = _median_producing(oil.iloc[max(0, a - 30) : a], down.iloc[max(0, a - 30) : a])
         lo, hi = b + 7, b + 37
         post = _median_producing(oil.iloc[lo:hi], down.iloc[lo:hi])
@@ -263,6 +268,8 @@ def detect_breaks(prep: pd.DataFrame) -> list[dict[str, Any]]:
                         "oil_rate_before": None if pre is None else round(pre, 1),
                         "oil_rate_after": None if post is None else round(post, 1),
                         "rate_ratio": round(post / pre, 3) if pre and post else None,
+                        "material": not (pre and post)
+                        or abs(post / pre - 1.0) >= MATERIAL_RATE_STEP,
                     }
                 )
                 i += CHOKE_PERSIST_READINGS
@@ -597,7 +604,10 @@ def review_flags(
         flags.append("tail_mismatch")
     cutoff = data_through - timedelta(days=RECENT_BREAK_DAYS)
     if any(
-        date.fromisoformat(b["start"]) >= cutoff and not b.get("early_life", False) for b in breaks
+        date.fromisoformat(b["start"]) >= cutoff
+        and not b.get("early_life", False)
+        and b.get("material", True)
+        for b in breaks
     ):
         flags.append("recent_break")
     return flags

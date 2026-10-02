@@ -1905,3 +1905,31 @@ input[type="date"], input[type="number"], input[type="search"] {
 .buildup-tone-cull { background: #fee2e2; color: #991b1b; }
 .buildup-tone-manual { background: #fef3c7; color: #92400e; }
 .buildup-tone-warn { background: #fde68a; color: #78350f; }
+
+/* ---- PDP review tab (pages/PdpPage.tsx) ---- */
+.pdp-page { display: flex; flex-direction: column; min-height: 0; padding: 10px 14px; gap: 8px; }
+.pdp-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pdp-toolbar select { max-width: 320px; }
+.pdp-totals { display: inline-flex; flex-wrap: wrap; gap: 14px; margin-left: auto; font-size: var(--fs-sm); }
+.pdp-message { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; }
+.pdp-body { display: grid; grid-template-columns: minmax(520px, 0.9fr) minmax(600px, 1.1fr); gap: 12px; flex: 1; min-height: 0; }
+.pdp-wells { overflow: auto; min-height: 0; }
+.pdp-wells .badge { margin-right: 4px; }
+.row-selected td { background: #eef2ff; }
+.pdp-detail { overflow: auto; min-height: 0; }
+.pdp-detail-inner { display: flex; flex-direction: column; gap: 8px; }
+.pdp-detail-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pdp-stream-tabs { display: inline-flex; gap: 4px; margin-left: auto; }
+.pdp-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--fs-sm); }
+.pdp-note { margin: 0; }
+.pdp-breaks { margin: 0; padding-left: 18px; font-size: var(--fs-sm); }
+.pdp-breaks .link-btn { margin-left: 8px; }
+.pdp-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pdp-controls fieldset { border: 1px solid #e5e7eb; border-radius: 4px; padding: 6px 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pdp-controls legend { font-size: var(--fs-sm); color: #374151; padding: 0 4px; }
+.pdp-controls .tweak-input { width: 72px; }
+.pdp-table { border-collapse: collapse; width: 100%; font-size: var(--fs-sm); }
+.pdp-table th, .pdp-table td { padding: 4px 6px; border-bottom: 1px solid #f3f4f6; text-align: right; white-space: nowrap; }
+.pdp-table th { background: #f9fafb; position: sticky; top: 0; z-index: 1; font-weight: 600; }
+.pdp-table th:nth-child(-n+3), .pdp-table td:nth-child(-n+3), .pdp-table td:last-child, .pdp-table th:last-child { text-align: left; }
+.pdp-table tbody tr:hover td { background: #f9fafb; }

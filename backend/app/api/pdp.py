@@ -6,7 +6,9 @@
   POST   /api/deals/{id}/pdp/sync                       copy the data room's daily rows locally
   POST   /api/deals/{id}/pdp/forecast                   fit / transfer every (or listed) well
   GET    /api/deals/{id}/pdp/forecasts                  persisted rows + review flags
+  GET    /api/deals/{id}/pdp/forecasts/{api10}/{stream}/series   chart payload
   PATCH  /api/deals/{id}/pdp/forecasts/{api10}/{stream} fit window, manual params, lock
+  PUT    /api/deals/{id}/pdp/wells/{api10}/uptime       per-well uptime override (+ re-run)
 
 Method of record: app.forecasting.daily. Rows live in ``pdp_forecasts``,
 never the global ``forecasts`` table.
@@ -19,12 +21,12 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.db.models import Deal, PdpForecast, Stream
+from app.db.models import Deal, PdpForecast, Stream, VdrDailyProduction, Well
 from app.db.session import get_session
 from app.pdp import service
 from app.warehouse_client.session import get_warehouse_session
@@ -166,12 +168,75 @@ def list_pdp_forecasts(
     deal_id: uuid.UUID, session: Session = Depends(get_session)
 ) -> list[dict[str, Any]]:
     _deal(session, deal_id)
-    rows = session.execute(
-        select(PdpForecast)
-        .where(PdpForecast.deal_id == deal_id)
-        .order_by(PdpForecast.api10, PdpForecast.stream)
-    ).scalars()
-    return [_row(r) for r in rows]
+    rows = list(
+        session.execute(
+            select(PdpForecast)
+            .where(PdpForecast.deal_id == deal_id)
+            .order_by(PdpForecast.api10, PdpForecast.stream)
+        ).scalars()
+    )
+    api10s = sorted({r.api10 for r in rows})
+    names = dict(
+        session.execute(
+            select(VdrDailyProduction.api10, VdrDailyProduction.well_name)
+            .where(VdrDailyProduction.api10.in_(api10s))
+            .distinct()
+        ).all()
+    )
+    benches = dict(
+        session.execute(
+            select(Well.api10, Well.formation_blueox).where(Well.api10.in_(api10s))
+        ).all()
+    )
+    return [
+        {**_row(r), "well_name": names.get(r.api10), "formation_blueox": benches.get(r.api10)}
+        for r in rows
+    ]
+
+
+@router.get("/deals/{deal_id}/pdp/forecasts/{api10}/{stream}/series")
+def pdp_series(
+    deal_id: uuid.UUID,
+    api10: str,
+    stream: StreamName,
+    years_ahead: float = Query(5.0, gt=0, le=50),
+    session: Session = Depends(get_session),
+) -> dict[str, Any]:
+    cfg = _cfg(_deal(session, deal_id))
+    row = session.execute(
+        select(PdpForecast).where(
+            PdpForecast.deal_id == deal_id,
+            PdpForecast.api10 == api10,
+            PdpForecast.stream == Stream(stream),
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        raise HTTPException(404, f"no PDP forecast for {api10}/{stream}")
+    return service.stream_series(session, cfg, row, years_ahead)
+
+
+class UptimeBody(BaseModel):
+    # null clears the override (back to the computed routine-downtime factor)
+    uptime: float | None = Field(default=None, gt=0, le=1)
+
+
+@router.put("/deals/{deal_id}/pdp/wells/{api10}/uptime")
+def put_well_uptime(
+    deal_id: uuid.UUID, api10: str, body: UptimeBody, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Per-well uptime override; re-runs that well (windows, manual params
+    and locks are all preserved — volumes pick up the new factor)."""
+    deal = _deal(session, deal_id)
+    cfg_json = dict(deal.pdp_config or {})
+    overrides = dict(cfg_json.get("uptime_overrides") or {})
+    if body.uptime is None:
+        overrides.pop(api10, None)
+    else:
+        overrides[api10] = body.uptime
+    cfg_json["uptime_overrides"] = overrides
+    deal.pdp_config = cfg_json
+    session.commit()
+    return _outcomes({api10: service.forecast_well(session, deal, _cfg(deal), api10)})
 
 
 @router.patch("/deals/{deal_id}/pdp/forecasts/{api10}/{stream}")

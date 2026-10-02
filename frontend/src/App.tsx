@@ -15,6 +15,7 @@ import { navigateHash } from "./navigation";
 import { DealDossierPage } from "./pages/DealDossierPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MapPage } from "./pages/MapPage";
+import { PdpPage } from "./pages/PdpPage";
 import { ReviewPage } from "./pages/ReviewPage";
 import { TypeCurvePage } from "./pages/TypeCurvePage";
 import { TypeCurveSlidePage } from "./pages/TypeCurveSlidePage";
@@ -93,10 +94,11 @@ function parseTypeCurveDetailHash(): { typeCurveId: string } | null {
   return m ? { typeCurveId: m[1]! } : null;
 }
 
-const TABS: Array<{ id: "map" | "review" | "type_curve"; label: string }> = [
+const TABS: Array<{ id: "map" | "review" | "type_curve" | "pdp"; label: string }> = [
   { id: "map", label: "Map" },
   { id: "review", label: "Review" },
   { id: "type_curve", label: "Type curve" },
+  { id: "pdp", label: "PDP" },
 ];
 
 export function App() {
@@ -382,6 +384,7 @@ export function App() {
         {activePage === "type_curve" && (
           <TypeCurvePage initialCurveId={tcDetailRoute?.typeCurveId ?? null} />
         )}
+        {activePage === "pdp" && <PdpPage />}
       </main>
     </div>
   );
