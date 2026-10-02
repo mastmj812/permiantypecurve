@@ -9,6 +9,7 @@
   GET    /api/deals/{id}/pdp/forecasts/{api10}/{stream}/series   chart payload
   PATCH  /api/deals/{id}/pdp/forecasts/{api10}/{stream} fit window, manual params, lock
   PUT    /api/deals/{id}/pdp/wells/{api10}/uptime       per-well uptime override (+ re-run)
+  POST   /api/deals/{id}/pdp/lock                       lock / unlock every stream of listed wells
   PUT    /api/deals/{id}/pdp/export-config              effective date / grouping / curve months
   GET    /api/deals/{id}/pdp/export/preview             group totals + readiness warnings
   GET    /api/deals/{id}/pdp/export.xlsx                Blue Ox PDP workbook (contract §2)
@@ -365,3 +366,39 @@ def download_pdp_export(deal_id: uuid.UUID, session: Session = Depends(get_sessi
         media_type=XLSX_MEDIA_TYPE,
         headers={"Content-Disposition": f'attachment; filename="{name}"'},
     )
+
+
+class LockRequest(BaseModel):
+    api10s: list[str] = Field(min_length=1)
+    locked: bool = True
+
+
+@router.post("/deals/{deal_id}/pdp/lock")
+def lock_wells(
+    deal_id: uuid.UUID, req: LockRequest, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    """Well-level sign-off: (un)lock every stream row of the listed wells.
+    Parameters are untouched — locking only shields rows from re-runs."""
+    _deal(session, deal_id)
+    rows = list(
+        session.execute(
+            select(PdpForecast).where(
+                PdpForecast.deal_id == deal_id, PdpForecast.api10.in_(req.api10s)
+            )
+        ).scalars()
+    )
+    missing = sorted(set(req.api10s) - {r.api10 for r in rows})
+    if missing:
+        raise HTTPException(404, f"no PDP forecasts for {missing}")
+    changed = 0
+    for r in rows:
+        if r.locked != req.locked:
+            r.locked = req.locked
+            changed += 1
+    session.commit()
+    return {
+        "wells": len(req.api10s),
+        "streams": len(rows),
+        "changed": changed,
+        "locked": req.locked,
+    }

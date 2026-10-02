@@ -1939,3 +1939,26 @@ input[type="date"], input[type="number"], input[type="search"] {
 .pdp-export-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .pdp-export .pdp-table { max-width: 760px; }
 .pdp-pre { white-space: pre-wrap; font-size: var(--fs-sm); margin: 0; }
+/* PDP well-level review (queue + stacked streams) */
+.pdp-body { grid-template-columns: minmax(360px, 0.55fr) minmax(640px, 1.45fr); }
+.pdp-queue-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.pdp-progress { position: relative; flex: 1; height: 22px; background: #f3f4f6; border-radius: 4px; overflow: hidden; font-size: var(--fs-sm); }
+.pdp-progress-bar { position: absolute; inset: 0 auto 0 0; background: #bbf7d0; }
+.pdp-progress span { position: relative; padding: 0 8px; line-height: 22px; }
+.pdp-status { width: 18px; text-align: center !important; color: #16a34a; font-weight: 700; }
+.row-signed td { color: #6b7280; }
+.pdp-review { display: flex; flex-direction: column; gap: 8px; }
+.pdp-review-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; position: sticky; top: 0; background: #fff; z-index: 2; padding: 4px 0; border-bottom: 1px solid #e5e7eb; }
+.pdp-review-actions { display: inline-flex; gap: 6px; }
+.pdp-review kbd { font-size: 11px; border: 1px solid #d1d5db; border-bottom-width: 2px; border-radius: 3px; padding: 0 4px; margin-left: 4px; background: #f9fafb; color: #374151; }
+.pdp-uptime-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: var(--fs-sm); }
+.pdp-uptime-row .tweak-input { width: 64px; }
+.pdp-stream { border: 1px solid #e5e7eb; border-radius: 6px; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
+.pdp-stream-locked { background: #f0fdf4; border-color: #bbf7d0; }
+.pdp-stream-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pdp-stream-stats { font-size: var(--fs-sm); color: #374151; margin-right: auto; }
+.pdp-stream-edit { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pdp-manual { display: inline-flex; }
+.pdp-manual[open] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pdp-manual .tweak-input { width: 64px; }
+.pdp-chart-placeholder { height: 210px; display: flex; align-items: center; justify-content: center; border: 1px dashed #e5e7eb; border-radius: 4px; }
