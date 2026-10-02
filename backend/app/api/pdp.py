@@ -9,6 +9,9 @@
   GET    /api/deals/{id}/pdp/forecasts/{api10}/{stream}/series   chart payload
   PATCH  /api/deals/{id}/pdp/forecasts/{api10}/{stream} fit window, manual params, lock
   PUT    /api/deals/{id}/pdp/wells/{api10}/uptime       per-well uptime override (+ re-run)
+  PUT    /api/deals/{id}/pdp/export-config              effective date / grouping / curve months
+  GET    /api/deals/{id}/pdp/export/preview             group totals + readiness warnings
+  GET    /api/deals/{id}/pdp/export.xlsx                Blue Ox PDP workbook (contract §2)
 
 Method of record: app.forecasting.daily. Rows live in ``pdp_forecasts``,
 never the global ``forecasts`` table.
@@ -21,13 +24,16 @@ from contextlib import contextmanager
 from datetime import date
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Deal, PdpForecast, Stream, VdrDailyProduction, Well
 from app.db.session import get_session
+from app.exports.blueox import XLSX_MEDIA_TYPE, BlueOxContractError
+from app.exports.blueox_pdp import build_pdp_workbook, pdp_filename
+from app.pdp import export as pdp_export
 from app.pdp import service
 from app.warehouse_client.session import get_warehouse_session
 from app.warehouse_client.vdr import fetch_vdr_sources
@@ -137,7 +143,10 @@ def put_pdp_config(
     bad = {k: v for k, v in body.uptime_overrides.items() if not 0 < v <= 1}
     if bad:
         raise HTTPException(422, f"uptime overrides must be in (0, 1]: {bad}")
-    deal.pdp_config = body.model_dump()
+    # MERGE, never replace: a data-room save must not wipe the per-well
+    # uptime overrides or the export settings stored alongside it. Only
+    # fields the client actually sent are written.
+    deal.pdp_config = {**(deal.pdp_config or {}), **body.model_dump(exclude_unset=True)}
     session.commit()
     return deal.pdp_config
 
@@ -295,3 +304,62 @@ def patch_pdp_forecast(
         session.commit()
     session.expire_all()
     return _row(load())
+
+
+class ExportConfigBody(BaseModel):
+    effective_date: date
+    grouping: Literal["well", "lease", "custom"] = "well"
+    groups: dict[str, list[str]] = Field(default_factory=dict)
+    curve_months: int | None = Field(default=None, gt=0, le=1200)
+    # Re-export: the prior governing filename this file replaces (§2 Principle 1/5).
+    supersedes: str | None = None
+
+
+@router.put("/deals/{deal_id}/pdp/export-config")
+def put_export_config(
+    deal_id: uuid.UUID, body: ExportConfigBody, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    deal = _deal(session, deal_id)
+    cfg_json = dict(deal.pdp_config or {})
+    cfg_json["export"] = body.model_dump(mode="json")
+    deal.pdp_config = cfg_json
+    session.commit()
+    return cfg_json["export"]
+
+
+def _assemble(session: Session, deal_id: uuid.UUID) -> Any:
+    deal = _deal(session, deal_id)
+    cfg = _cfg(deal)
+    try:
+        return pdp_export.assemble(session, deal, cfg, pdp_export.ExportConfig.from_deal(deal))
+    except pdp_export.PdpExportError as e:
+        raise HTTPException(409, str(e)) from e
+
+
+@router.get("/deals/{deal_id}/pdp/export/preview")
+def preview_pdp_export(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> dict[str, Any]:
+    data = _assemble(session, deal_id)
+    out = pdp_export.preview(data)
+    try:
+        build_pdp_workbook(data)
+        out["contract_errors"] = None
+    except BlueOxContractError as e:
+        out["contract_errors"] = str(e)
+    return out
+
+
+@router.get("/deals/{deal_id}/pdp/export.xlsx")
+def download_pdp_export(deal_id: uuid.UUID, session: Session = Depends(get_session)) -> Response:
+    data = _assemble(session, deal_id)
+    try:
+        body = build_pdp_workbook(data)
+    except BlueOxContractError as e:
+        raise HTTPException(422, str(e)) from e
+    name = pdp_filename(data.codename, data.export_date)
+    return Response(
+        content=body,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
