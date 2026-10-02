@@ -37,6 +37,7 @@ import {
   STREAM_COLOR,
 } from "../api/pdp";
 import { PdpChart } from "../components/PdpChart";
+import { PdpExportPanel } from "../components/PdpExportPanel";
 import { useMapStore } from "../store/mapStore";
 
 const STREAMS: PdpStream[] = ["oil", "gas", "water"];
@@ -101,6 +102,7 @@ export function PdpPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [showExport, setShowExport] = useState(false);
 
   useEffect(() => {
     listDeals()
@@ -213,11 +215,9 @@ export function PdpPage() {
   const saveConfig = () =>
     dealId &&
     void run("saving", async () => {
-      await putPdpConfig(dealId, {
-        vdr_id: vdrId,
-        api10s: null,
-        uptime_overrides: {},
-      });
+      // Only the data room — the backend merges, so stored uptime
+      // overrides and export settings are kept.
+      await putPdpConfig(dealId, { vdr_id: vdrId });
       return `data room ${vdrId} saved for this deal`;
     });
 
@@ -315,6 +315,14 @@ export function PdpPage() {
         >
           Run forecast
         </button>
+        <button
+          type="button"
+          className="tb-btn"
+          disabled={!dealId || rows.length === 0}
+          onClick={() => setShowExport((v) => !v)}
+        >
+          Export to Blue Ox…
+        </button>
         {busy && <span className="status-pill status-running">{busy}…</span>}
         {rows.length > 0 && (
           <span className="pdp-totals">
@@ -340,6 +348,9 @@ export function PdpPage() {
           </span>
         )}
       </div>
+      {showExport && dealId && (
+        <PdpExportPanel dealId={dealId} onClose={() => setShowExport(false)} />
+      )}
       {error && <div className="alert alert-error">{error}</div>}
       {message && <div className="alert pdp-message">{message}</div>}
 

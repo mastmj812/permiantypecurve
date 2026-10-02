@@ -25,8 +25,11 @@ export interface VdrSource {
 
 export interface PdpConfig {
   vdr_id: string;
-  api10s: string[] | null;
-  uptime_overrides: Record<string, number>;
+  api10s?: string[] | null;
+  // Omitted on a data-room save: the backend merges, so stored overrides
+  // and export settings survive.
+  uptime_overrides?: Record<string, number>;
+  export?: PdpExportConfig;
 }
 
 export interface PdpBreak {
@@ -250,4 +253,73 @@ export async function putWellUptime(
 export function effectiveFromNominal(Di: number, b: number): number {
   if (b < 1e-6) return 1 - Math.exp(-Di);
   return 1 - Math.pow(1 + b * Di, -1 / b);
+}
+
+// ---------------- Blue Ox PDP workbook (contract §2) ----------------
+
+export type PdpGrouping = "well" | "lease" | "custom";
+
+export interface PdpExportConfig {
+  effective_date: string;
+  grouping: PdpGrouping;
+  groups?: Record<string, string[]>;
+  curve_months?: number | null;
+  supersedes?: string | null;
+}
+
+export interface PdpExportPreview {
+  filename: string;
+  first_row_month: string;
+  curve_months: number;
+  production_history_through: string;
+  groups: Array<{
+    name: string;
+    well_count: number;
+    eur_oil: number;
+    eur_gas: number;
+    eur_water: number;
+  }>;
+  findings: Array<{ status: "warn" | "fail"; check: string; detail: string }>;
+  contract_errors: string | null;
+}
+
+export async function putPdpExportConfig(
+  dealId: string,
+  cfg: PdpExportConfig,
+): Promise<PdpExportConfig> {
+  return jsonOrThrow(
+    await apiFetch(`/api/deals/${dealId}/pdp/export-config`, {
+      method: "PUT",
+      headers: JSON_HEADERS,
+      body: JSON.stringify(cfg),
+    }),
+    "save export settings",
+  );
+}
+
+export async function previewPdpExport(
+  dealId: string,
+): Promise<PdpExportPreview> {
+  return jsonOrThrow(
+    await apiFetch(`/api/deals/${dealId}/pdp/export/preview`),
+    "preview PDP workbook",
+  );
+}
+
+// Blob download — <a download> can't attach the bearer token (same trick
+// as downloadDealExport).
+export async function downloadPdpExport(
+  dealId: string,
+  filename: string,
+): Promise<void> {
+  const r = await apiFetch(`/api/deals/${dealId}/pdp/export.xlsx`);
+  if (!r.ok) throw new Error(`PDP workbook failed: ${await detail(r)}`);
+  const url = URL.createObjectURL(await r.blob());
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

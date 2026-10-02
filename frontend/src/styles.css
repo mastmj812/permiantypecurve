@@ -1933,3 +1933,9 @@ input[type="date"], input[type="number"], input[type="search"] {
 .pdp-table th { background: #f9fafb; position: sticky; top: 0; z-index: 1; font-weight: 600; }
 .pdp-table th:nth-child(-n+3), .pdp-table td:nth-child(-n+3), .pdp-table td:last-child, .pdp-table th:last-child { text-align: left; }
 .pdp-table tbody tr:hover td { background: #f9fafb; }
+.pdp-export { border: 1px solid #c7d2fe; background: #f8faff; border-radius: 6px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+.pdp-export-head { display: flex; align-items: center; gap: 10px; }
+.pdp-export-head .link-btn { margin-left: auto; }
+.pdp-export-form { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.pdp-export .pdp-table { max-width: 760px; }
+.pdp-pre { white-space: pre-wrap; font-size: var(--fs-sm); margin: 0; }
