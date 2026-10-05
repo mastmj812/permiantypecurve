@@ -48,6 +48,7 @@ import {
   type VdrSource,
 } from "../api/pdp";
 import { PdpExportPanel } from "../components/PdpExportPanel";
+import { PdpHelp } from "../components/PdpHelp";
 import { PdpStreamPanel } from "../components/PdpStreamPanel";
 import {
   cleanUnsigned,
@@ -94,6 +95,8 @@ export function PdpPage() {
   const selection = useMapStore((s) => s.pdpSelection);
   const setSelection = useMapStore((s) => s.setPdpSelection);
   const current = selection?.api10 ?? null;
+  const helpOpen = useMapStore((s) => s.pdpHelpOpen);
+  const setHelpOpen = useMapStore((s) => s.setPdpHelpOpen);
   const select = useCallback(
     (api10: string | null) =>
       setSelection(api10 ? { api10, stream: "oil" } : null),
@@ -257,6 +260,11 @@ export function PdpPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target)) return;
+      if (e.key === "?") {
+        e.preventDefault();
+        setHelpOpen(!helpOpen);
+        return;
+      }
       const k = e.key.toLowerCase();
       if (k === "a") {
         e.preventDefault();
@@ -268,7 +276,7 @@ export function PdpPage() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [accept, queue, current, select]);
+  }, [accept, queue, current, select, helpOpen, setHelpOpen]);
 
   const firstRow = rows[0] ?? null;
 
@@ -348,6 +356,14 @@ export function PdpPage() {
         >
           Export to Blue Ox…
         </button>
+        <button
+          type="button"
+          className={helpOpen ? "tb-btn tb-active" : "tb-btn"}
+          onClick={() => setHelpOpen(!helpOpen)}
+          title="Instructions (?)"
+        >
+          How it works <kbd>?</kbd>
+        </button>
         {busy && <span className="status-pill status-running">{busy}…</span>}
         {rows.length > 0 && (
           <span className="pdp-totals">
@@ -373,6 +389,7 @@ export function PdpPage() {
           </span>
         )}
       </div>
+      {helpOpen && <PdpHelp onClose={() => setHelpOpen(false)} />}
       {showExport && dealId && (
         <PdpExportPanel dealId={dealId} onClose={() => setShowExport(false)} />
       )}
@@ -482,7 +499,7 @@ export function PdpPage() {
               {queue.length > 0 ? (
                 <>
                   Select a well, or press <kbd>N</kbd> to start at the top of
-                  the queue.
+                  the queue. Press <kbd>?</kbd> for instructions.
                 </>
               ) : (
                 "Select a deal to review its PDP forecasts."

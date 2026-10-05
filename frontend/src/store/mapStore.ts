@@ -36,7 +36,13 @@ export interface MapState {
   pdpDealId: string | null;
   setPdpDealId: (id: string | null) => void;
   pdpSelection: { api10: string; stream: "oil" | "gas" | "water" } | null;
-  setPdpSelection: (sel: { api10: string; stream: "oil" | "gas" | "water" } | null) => void;
+  setPdpSelection: (
+    sel: { api10: string; stream: "oil" | "gas" | "water" } | null,
+  ) => void;
+  // "How it works" panel on the PDP tab. Opens by itself until it has
+  // been closed once in this browser (per-viewer convenience only).
+  pdpHelpOpen: boolean;
+  setPdpHelpOpen: (open: boolean) => void;
   // api10s carried across nav from map → forecast page
   forecastApi10s: string[];
   setForecastApi10s: (api10s: string[]) => void;
@@ -251,6 +257,24 @@ export interface MapState {
   ) => void;
 }
 
+const PDP_HELP_SEEN_KEY = "anduin.pdpHelpSeen";
+
+function pdpHelpSeen(): boolean {
+  try {
+    return window.localStorage.getItem(PDP_HELP_SEEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function markPdpHelpSeen(): void {
+  try {
+    window.localStorage.setItem(PDP_HELP_SEEN_KEY, "1");
+  } catch {
+    // storage blocked (private window) — the panel just reopens next visit
+  }
+}
+
 export const useMapStore = create<MapState>((set) => ({
   currentPage: "map",
   setCurrentPage: (currentPage) => set({ currentPage }),
@@ -259,6 +283,11 @@ export const useMapStore = create<MapState>((set) => ({
   setPdpDealId: (pdpDealId) => set({ pdpDealId, pdpSelection: null }),
   pdpSelection: null,
   setPdpSelection: (pdpSelection) => set({ pdpSelection }),
+  pdpHelpOpen: !pdpHelpSeen(),
+  setPdpHelpOpen: (pdpHelpOpen) => {
+    if (!pdpHelpOpen) markPdpHelpSeen();
+    set({ pdpHelpOpen });
+  },
   forecastApi10s: [],
   // A new forecast batch invalidates any Review-page aggregate
   // snapshot — otherwise a stale typeCurveApi10s from the previous
@@ -347,8 +376,7 @@ export const useMapStore = create<MapState>((set) => ({
     set((s) => ({
       filters: { ...s.filters, well_name_contains },
     })),
-  setApi10s: (api10s) =>
-    set((s) => ({ filters: { ...s.filters, api10s } })),
+  setApi10s: (api10s) => set((s) => ({ filters: { ...s.filters, api10s } })),
   setWaterSources: (water_sources) =>
     set((s) => ({ filters: { ...s.filters, water_sources } })),
   setScenarioClasses: (scenario_classes) =>
