@@ -12,6 +12,7 @@ import {
   fetchWellCurves,
   patchForecast,
   previewForecast,
+  revertForecastToAutofit,
   switchForecastMode,
 } from "../api/forecasts";
 import {
@@ -543,6 +544,38 @@ export function ForecastDetailModal({
     }
   }
 
+  // Discard this stream's edit and restore the machine auto-fit
+  // (clears both manual_override and locked server-side). Unlocking
+  // alone leaves an edited row the bulk refit refuses on; this is the
+  // "I don't want my edit anymore" action.
+  async function revertToAutofit() {
+    if (!forecastForStream || modeBusy) return;
+    if (
+      !window.confirm(
+        `Discard the manual edit on ${api10} ${stream} and restore the auto-fit? This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setSaveError(null);
+    setModeBusy(true);
+    try {
+      const updated = await revertForecastToAutofit(forecastForStream.id);
+      onSaved(updated);
+      setPreviewPoints([]);
+      setPreviewCumPoints([]);
+      setPreviewEur(null);
+      setPreviewEurDisplayed(null);
+      setPreviewEurRemaining(null);
+      const r = await fetchWellCurves(api10);
+      setCurves(r.streams.find((s) => s.stream === stream) ?? null);
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setModeBusy(false);
+    }
+  }
+
   // Per-stream mode switch (gas/water): "ratio vs cum oil" derives the
   // stream from the oil forecast; "arps" re-fits its own decline. The
   // server stamps manual_override + locked either way (the engineer
@@ -869,12 +902,26 @@ export function ForecastDetailModal({
                       title={
                         forecastForStream.locked
                           ? "Locked — bulk re-fit will skip this stream"
-                          : "Unlocked — bulk re-fit will overwrite"
+                          : forecastForStream.manual_override
+                            ? "Unlocked edit — bulk re-fit will refuse until you lock it or revert to auto-fit"
+                            : "Unlocked — bulk re-fit will overwrite"
                       }
                     >
                       {forecastForStream.locked ? "locked" : "lock"}
                     </button>
                   )}
+                  {!tcContext &&
+                    (forecastForStream.manual_override || forecastForStream.locked) && (
+                      <button
+                        type="button"
+                        className="tb-btn"
+                        onClick={() => void revertToAutofit()}
+                        disabled={modeBusy}
+                        title="Discard the manual edit, re-fit this stream, and clear the edited + locked flags"
+                      >
+                        revert to auto-fit
+                      </button>
+                    )}
                 </div>
               )}
               {saveError && (

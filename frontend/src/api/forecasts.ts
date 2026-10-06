@@ -414,6 +414,43 @@ export async function switchForecastMode(
   return (await r.json()) as ForecastRow;
 }
 
+async function errorDetail(r: Response): Promise<string> {
+  try {
+    const body = (await r.json()) as { detail?: string };
+    return typeof body.detail === "string" ? ` — ${body.detail}` : "";
+  } catch {
+    return "";
+  }
+}
+
+// Discard the engineer's edit on one stream and restore the machine
+// auto-fit. The row comes back manual_override=false, locked=false.
+// 422 (row unchanged) when the stream can't be fit on today's data.
+export async function revertForecastToAutofit(id: string): Promise<ForecastRow> {
+  const r = await apiFetch(`/api/forecasts/${id}/revert-autofit`, { method: "POST" });
+  if (!r.ok) throw new Error(`revert failed: ${r.status}${await errorDetail(r)}`);
+  return (await r.json()) as ForecastRow;
+}
+
+export interface RevertEditedResponse {
+  reverted: Array<[string, Stream]>;
+  failed: Array<[string, Stream]>;
+}
+
+// Revert every edited-but-unlocked stream (the set the bulk-refit guard
+// refuses on) in scope to auto-fit. Locked streams are never touched.
+export async function revertEditedUnlocked(
+  api10s: string[],
+): Promise<RevertEditedResponse> {
+  const r = await apiFetch("/api/forecasts/revert-edited-unlocked", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ api10s }),
+  });
+  if (!r.ok) throw new Error(`revert failed: ${r.status}${await errorDetail(r)}`);
+  return (await r.json()) as RevertEditedResponse;
+}
+
 export async function patchForecast(
   id: string,
   body: {
