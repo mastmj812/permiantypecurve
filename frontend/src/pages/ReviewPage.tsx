@@ -20,6 +20,7 @@ import {
   fetchSyncJob,
   isBPriorFit,
   listForecasts,
+  revertEditedUnlocked,
   transferCohortParams,
   type Stream,
 } from "../api/forecasts";
@@ -116,6 +117,10 @@ export function ReviewPage() {
   const [openApi10, setOpenApi10] = useState<string | null>(null);
   // Transient "copied N rows" note next to the copy button.
   const [copyNote, setCopyNote] = useState<string | null>(null);
+  // Revert-to-auto-fit for the edited-but-unlocked set the bulk refit
+  // refuses on (manual-override guard).
+  const [revertBusy, setRevertBusy] = useState(false);
+  const [revertNote, setRevertNote] = useState<string | null>(null);
 
   // ---- Cohort transfer state (transient, stays local) ----
   // See the Autoforecast section in the right panel — status pill,
@@ -334,6 +339,39 @@ export function ReviewPage() {
       })),
     [allForecasts],
   );
+
+  // Streams the bulk-refit guard refuses on: edited (manual_override)
+  // but unlocked. Same predicate as orchestrator.at_risk_forecasts.
+  const editedUnlocked = useMemo(
+    () => allForecasts.filter((f) => f.manual_override && !f.locked),
+    [allForecasts],
+  );
+
+  async function onRevertEditedUnlocked() {
+    const n = editedUnlocked.length;
+    if (
+      !window.confirm(
+        `Discard the manual edits on ${n} unlocked ${n === 1 ? "stream" : "streams"} and restore the auto-fit? Locked streams are not touched. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
+    setRevertBusy(true);
+    setRevertNote(null);
+    try {
+      const res = await revertEditedUnlocked(api10s);
+      const failed = res.failed.map(([a, st]) => `${a}/${st}`).join(", ");
+      setRevertNote(
+        `Reverted ${res.reverted.length} to auto-fit.` +
+          (failed ? ` Could not fit (edit kept): ${failed}.` : " Re-run Forecast to refit the rest."),
+      );
+      await refreshForecasts();
+    } catch (e) {
+      setRevertNote(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRevertBusy(false);
+    }
+  }
 
   // Show one row per WELL (use the oil forecast — the brief frames type
   // curves as per-well, and gas/water inherit oil's peak). Merge in
@@ -810,6 +848,39 @@ export function ReviewPage() {
                 {shortApi10s.length === 1 ? "well" : "wells"}
               </button>
             </>
+          )}
+          {editedUnlocked.length > 0 && (
+            <div className="forecast-transfer-error">
+              <strong>{editedUnlocked.length}</strong> edited{" "}
+              {editedUnlocked.length === 1 ? "stream is" : "streams are"} unlocked
+              — Autoforecast will refuse to run. Lock the ones to keep (detail
+              modal), then revert the rest.
+              <div style={{ marginTop: 6 }}>
+                <button
+                  type="button"
+                  className="tb-btn"
+                  onClick={() => void onRevertEditedUnlocked()}
+                  disabled={revertBusy}
+                  title={editedUnlocked.map((f) => `${f.api10}/${f.stream}`).join(", ")}
+                >
+                  {revertBusy
+                    ? "reverting…"
+                    : `Revert ${editedUnlocked.length} to auto-fit`}
+                </button>
+              </div>
+            </div>
+          )}
+          {revertNote && (
+            <div className="muted forecast-transfer-summary">
+              {revertNote}{" "}
+              <button
+                type="button"
+                className="link-btn"
+                onClick={() => setRevertNote(null)}
+              >
+                dismiss
+              </button>
+            </div>
           )}
           {transferError && (
             <div className="forecast-transfer-error">

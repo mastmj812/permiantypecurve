@@ -79,6 +79,7 @@ from app.forecasting.orchestrator import (
     _load_monthly,
     _stream_rate_at_index,
     detect_stream_peaks,
+    find_at_risk_rows,
     forecast_well,
     forecast_wells,
     stream_rate_at_peak,
@@ -1233,13 +1234,11 @@ def apply_ratio_mode(
     f.updated_at = datetime.now(UTC)
 
 
-def apply_arps_refit(f: Forecast, result: ForecastResult) -> None:
-    """Mutate a Forecast row back to an independent Arps fit.
+def _write_fit_values(f: Forecast, result: ForecastResult) -> None:
+    """Copy a ForecastResult's fit values onto a row (pure ORM mutation).
 
-    Mirrors the value set ``orchestrator._persist`` writes, but — per
-    the mode-switch convention — stamps ``manual_override=True,
-    locked=True``: leaving ratio mode is an engineer's decision, not a
-    machine fit to be silently overwritten by the next bulk pass.
+    Mirrors the value set ``orchestrator._persist`` writes, minus the
+    flags / diagnostics — callers set those per their own convention.
     """
     f.model_type = ModelType(result.model_type)
     f.fit_method = FitMethod(result.fit_method)
@@ -1256,10 +1255,71 @@ def apply_arps_refit(f: Forecast, result: ForecastResult) -> None:
     f.fit_r2 = result.fit_r2
     f.fit_rmse = result.fit_rmse
     f.downtime_ratio = result.downtime_ratio
+    f.updated_at = datetime.now(UTC)
+
+
+def apply_arps_refit(f: Forecast, result: ForecastResult) -> None:
+    """Mutate a Forecast row back to an independent Arps fit.
+
+    Per the mode-switch convention, stamps ``manual_override=True,
+    locked=True``: leaving ratio mode is an engineer's decision, not a
+    machine fit to be silently overwritten by the next bulk pass.
+    """
+    _write_fit_values(f, result)
     f.diagnostics = {"source": "mode_switch_arps_refit"}
     f.manual_override = True
     f.locked = True
-    f.updated_at = datetime.now(UTC)
+
+
+def apply_autofit(f: Forecast, result: ForecastResult) -> None:
+    """Mutate a Forecast row back to a plain machine auto-fit.
+
+    The inverse of an engineer edit: exactly what ``_persist`` would
+    write on a bulk refit — machine diagnostics, ``manual_override=False,
+    locked=False``. A ratio-mode stream comes back as independent Arps
+    (auto-fit never selects ratio mode).
+    """
+    _write_fit_values(f, result)
+    f.diagnostics = result.diagnostics
+    f.manual_override = False
+    f.locked = False
+
+
+def revert_streams_to_autofit(
+    session: Session, targets: dict[str, set[str]]
+) -> tuple[list[Forecast], list[tuple[str, str]]]:
+    """Discard engineer edits on ``{api10: {stream, ...}}`` and re-fit.
+
+    One ``forecast_well(persist=False)`` per well (default config — the
+    same fit the mode switch and ``reset_forecast_flags --refit`` use),
+    then each target row gets the fresh fit via ``apply_autofit``.
+    Bypasses the bulk-refit guard on purpose: discarding these edits IS
+    the engineer's explicit choice. A stream the fitter can't fit today
+    is left untouched (edit + flags intact) and reported as failed —
+    never deleted, never half-reverted. Caller commits.
+    """
+    reverted: list[Forecast] = []
+    failed: list[tuple[str, str]] = []
+    for api10, streams in targets.items():
+        rows = (
+            session.execute(
+                select(Forecast).where(
+                    Forecast.api10 == api10,
+                    Forecast.stream.in_([Stream(s) for s in streams]),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        results = forecast_well(session, api10, persist=False)
+        for f in rows:
+            result = results.get(f.stream.value)
+            if result is None:
+                failed.append((api10, f.stream.value))
+                continue
+            apply_autofit(f, result)
+            reverted.append(f)
+    return reverted, failed
 
 
 _STREAM_VOLUME_ATTR: dict[str, str] = {
@@ -1390,6 +1450,77 @@ def switch_forecast_mode(
     session.commit()
     log.info("forecast_mode_arps", api10=f.api10, stream=f.stream.value)
     return _row_with_well_join(f, session)
+
+
+# ============================ revert to auto-fit ============================
+
+
+@router.post("/{forecast_id}/revert-autofit", response_model=ForecastRow)
+def revert_forecast_to_autofit(
+    forecast_id: uuid.UUID,
+    session: Session = Depends(get_session),
+) -> ForecastRow:
+    """Discard the engineer's edit on one stream and restore the auto-fit.
+
+    Re-fits the stream and comes out ``manual_override=False,
+    locked=False`` — the row is a machine fit again, so the next bulk
+    refit treats it normally. 422 (row unchanged) when today's data
+    can't support a fit for the stream.
+    """
+    f = session.get(Forecast, forecast_id)
+    if f is None:
+        raise HTTPException(status_code=404, detail="not found")
+    _, failed = revert_streams_to_autofit(session, {f.api10: {f.stream.value}})
+    if failed:
+        session.rollback()
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"auto-fit failed for {f.stream.value} — no detectable peak or the fit "
+                "did not converge; the edited forecast was kept"
+            ),
+        )
+    session.commit()
+    log.info("forecast_reverted_to_autofit", api10=f.api10, stream=f.stream.value)
+    return _row_with_well_join(f, session)
+
+
+class RevertEditedRequest(BaseModel):
+    api10s: list[str] = Field(..., min_length=1, max_length=500)
+
+
+class RevertEditedResponse(BaseModel):
+    reverted: list[tuple[str, str]]
+    failed: list[tuple[str, str]]
+
+
+@router.post("/revert-edited-unlocked", response_model=RevertEditedResponse)
+def revert_edited_unlocked(
+    req: RevertEditedRequest,
+    session: Session = Depends(get_session),
+) -> RevertEditedResponse:
+    """Triage helper for the bulk-refit guard: revert every
+    ``manual_override=True, locked=False`` stream in scope to auto-fit.
+
+    Exactly the set ``find_at_risk_rows`` reports — locked rows (the
+    keepers) are never touched. Afterwards the guard is clear for these
+    wells (bar any ``failed`` streams, which keep their edit and flags).
+    """
+    targets: dict[str, set[str]] = {}
+    for api10, stream in find_at_risk_rows(session, req.api10s):
+        targets.setdefault(api10, set()).add(stream)
+    reverted, failed = revert_streams_to_autofit(session, targets)
+    session.commit()
+    log.info(
+        "edited_unlocked_reverted",
+        wells=len(targets),
+        reverted=len(reverted),
+        failed=len(failed),
+    )
+    return RevertEditedResponse(
+        reverted=[(f.api10, f.stream.value) for f in reverted],
+        failed=failed,
+    )
 
 
 # ============================ curves (for detail modal) ============================
