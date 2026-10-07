@@ -363,7 +363,9 @@ export function ReviewPage() {
       const failed = res.failed.map(([a, st]) => `${a}/${st}`).join(", ");
       setRevertNote(
         `Reverted ${res.reverted.length} to auto-fit.` +
-          (failed ? ` Could not fit (edit kept): ${failed}.` : " Re-run Forecast to refit the rest."),
+          (failed
+            ? ` Could not fit (edit kept): ${failed}.`
+            : " Autoforecast is no longer blocked for this selection."),
       );
       await refreshForecasts();
     } catch (e) {

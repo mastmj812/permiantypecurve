@@ -562,6 +562,18 @@ export function ForecastDetailModal({
     try {
       const updated = await revertForecastToAutofit(forecastForStream.id);
       onSaved(updated);
+      // Re-seed the editor from the fresh fit: the seeding effect is
+      // keyed on id + model_type, and a revert keeps the same id, so
+      // the inputs would otherwise still hold the discarded edit (and a
+      // "save override" would silently re-apply it).
+      setEditQi(updated.params.qi ?? null);
+      setEditDi(updated.params.Di ?? null);
+      setEditB(updated.params.b ?? null);
+      setEditDf(updated.params.Df ?? 0.08);
+      setEditQo(updated.qo ?? updated.params.qo ?? null);
+      setEditPeakIndexMonths(
+        updated.peak_index_months ?? updated.params.peak_index_months ?? null,
+      );
       setPreviewPoints([]);
       setPreviewCumPoints([]);
       setPreviewEur(null);
