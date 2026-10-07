@@ -22,6 +22,7 @@ import re
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
+from dataclasses import asdict
 from datetime import UTC, date, datetime
 from typing import Annotated, Any, Literal
 
@@ -43,7 +44,8 @@ from app.api.type_curves import (
     _fitted_p50_params,
 )
 from app.core.logging import get_logger
-from app.db.models import Deal, NormalizationBasis, TypeCurve
+from app.db.models import Deal, Forecast, NormalizationBasis, TypeCurve
+from app.db.models.forecasts import Stream
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
 from app.exports.blueox import (
@@ -69,6 +71,16 @@ from app.exports.dossier import (
     ScenarioSlideInput,
     build_deal_dossier_pptx,
 )
+from app.exports.dossier_summary import (
+    SUMMARY_HEADERS,
+    SUMMARY_NOTE,
+    SUMMARY_STREAMS,
+    ZoneStick,
+    ZoneSummary,
+    build_zone_summary,
+    cohort_qc,
+    summary_cells,
+)
 from app.exports.well_rows import (
     EMPTY_GEO,
     PER_WELL_COL_FORMATS,
@@ -77,6 +89,8 @@ from app.exports.well_rows import (
     per_well_rows,
     well_geo_rows,
 )
+from app.forecasting.fit import _stream_di_hi
+from app.forecasting.types import ForecastConfig
 from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
 from app.warehouse_client.intel_forecast import (
@@ -1564,6 +1578,193 @@ def get_novi_comparison(
     return NoviComparisonResponse(zones=out)
 
 
+def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
+    """Per-zone summary of the SAVED Blue Ox config: the planned sticks
+    each zone takes (same routing as the drop), its type curve, cohort
+    QC and the TC-vs-Novi read. Shared by ``/dossier-zones`` (preview)
+    and the dossier .pptx (summary slide) so the two can't disagree.
+
+    A warehouse failure leaves the Novi columns empty with
+    ``novi_error`` set — the summary still renders; a routing error
+    (unmapped bench, scope miss) is a 422 exactly like the drop.
+    """
+    if not deal.blueox_config:
+        raise HTTPException(status_code=422, detail="this deal has no saved Blue Ox config")
+    cfg = BlueOxExportRequest.model_validate(deal.blueox_config)
+    curves: dict[str, TypeCurve] = {}
+    for spec in cfg.zones:
+        tc = session.get(TypeCurve, spec.type_curve_id)
+        if tc is None:
+            raise HTTPException(
+                status_code=422, detail=f"type curve {spec.type_curve_id} not found"
+            )
+        if spec.zone_name is None:
+            spec.zone_name = tc.name[:26].strip()
+        curves[spec.zone_name] = tc
+
+    narvi_by_zone: dict[str, list[NarviInventoryWell]] = {}
+    if cfg.narvi_selections:
+        errors: list[str] = []
+        narvi_by_zone, _exclusions, _unzoned = _fetch_narvi_by_zone(cfg, errors)
+        if errors:
+            raise HTTPException(status_code=422, detail="; ".join(errors))
+
+    api10s = sorted({a for tc in curves.values() for a in (tc.included_api10s or [])})
+    forecasts: dict[str, dict[str, Forecast]] = {s: {} for s in SUMMARY_STREAMS}
+    if api10s:
+        rows = session.execute(
+            select(Forecast)
+            .where(Forecast.api10.in_(api10s))
+            .where(Forecast.stream.in_([Stream(s) for s in SUMMARY_STREAMS]))
+        ).scalars()
+        for f in rows:
+            forecasts[f.stream.value][f.api10] = f
+    di_hi = {s: _stream_di_hi(s, ForecastConfig()) for s in SUMMARY_STREAMS}
+
+    novi: dict[str, NoviComparisonZone] = {}
+    novi_error: str | None = None
+    if narvi_by_zone:
+        try:
+            with contextmanager(get_warehouse_session)() as wh:
+                vintage = fetch_intel_vintage(wh)
+                for zone_name, tc in curves.items():
+                    novi[zone_name] = _collect_novi_comparison(
+                        wh,
+                        zone_name,
+                        narvi_by_zone.get(zone_name, []),
+                        is_risked(tc.risk_multipliers or {}),
+                        vintage,
+                    )
+        except Exception as exc:  # the summary renders without Novi
+            log.warning("dossier_zones_novi_failed", deal=str(deal.id), error=str(exc))
+            novi, novi_error = {}, f"Novi comparison unavailable: {exc}"
+
+    out: list[ZoneSummary] = []
+    for spec in cfg.zones:
+        zone_name = spec.zone_name or ""
+        tc = curves[zone_name]
+        sticks = [
+            ZoneStick(
+                well_name=w.well_name,
+                formation=w.formation,
+                category=_handoff_category(w),
+                scenario_ref=f"{w.deal_id}/{w.scenario_id}",
+                completed_lateral_ft=w.completed_lateral_ft,
+                target_tvd_ft=w.target_tvd_ft,
+                legs_lonlat=tuple(w.legs_lonlat),
+            )
+            for w in narvi_by_zone.get(zone_name, [])
+            if (w.category or "").lower() != "pdp"
+        ]
+        comp = novi.get(zone_name)
+        out.append(
+            build_zone_summary(
+                zone_name=zone_name,
+                reserve_category=spec.reserve_category,
+                benches=spec.benches,
+                tc=tc,
+                sticks=sticks,
+                novi_volumes={"oil": comp.oil_bbl, "gas": comp.gas_mcf} if comp else None,
+                novi_n_sticks=comp.n_sticks if comp else 0,
+                novi_low_n=comp.low_n if comp else False,
+                novi_stale=comp.stale_vintage if comp else False,
+                qc=cohort_qc(tc, forecasts, di_hi),
+                novi_error=novi_error,
+            )
+        )
+    return out
+
+
+class DossierStickOut(BaseModel):
+    well_name: str
+    formation: str | None
+    category: str
+    scenario_ref: str
+    completed_lateral_ft: float | None
+    target_tvd_ft: float | None
+    legs_lonlat: list[list[float]]
+
+
+class DossierZoneOut(BaseModel):
+    zone_name: str
+    type_curve_id: uuid.UUID
+    curve_name: str
+    reserve_category: str
+    benches: list[str]
+    n_sticks: int
+    n_pud: int
+    n_upside: int
+    n_scenarios: int
+    planned_lateral_ft_median: float | None
+    streams: dict[str, dict[str, Any]]
+    qc: dict[str, Any]
+    novi_n_sticks: int
+    novi_low_n: bool
+    novi_stale: bool
+    novi_error: str | None
+    flags: list[str]
+    cells: list[str]  # pre-formatted summary row (same strings as the deck)
+    sticks: list[DossierStickOut]
+
+
+class DossierZonesResponse(BaseModel):
+    headers: list[str]
+    note: str
+    zones: list[DossierZoneOut]
+
+
+def _zone_out(z: ZoneSummary) -> DossierZoneOut:
+    return DossierZoneOut(
+        zone_name=z.zone_name,
+        type_curve_id=uuid.UUID(z.type_curve_id),
+        curve_name=z.curve_name,
+        reserve_category=z.reserve_category,
+        benches=list(z.benches),
+        n_sticks=z.n_sticks,
+        n_pud=z.n_pud,
+        n_upside=z.n_upside,
+        n_scenarios=z.n_scenarios,
+        planned_lateral_ft_median=z.planned_lateral_ft_median,
+        streams={k: asdict(v) for k, v in z.streams.items()},
+        qc=asdict(z.qc),
+        novi_n_sticks=z.novi_n_sticks,
+        novi_low_n=z.novi_low_n,
+        novi_stale=z.novi_stale,
+        novi_error=z.novi_error,
+        flags=z.flags,
+        cells=list(summary_cells(z)),
+        sticks=[
+            DossierStickOut(
+                well_name=s.well_name,
+                formation=s.formation,
+                category=s.category,
+                scenario_ref=s.scenario_ref,
+                completed_lateral_ft=s.completed_lateral_ft,
+                target_tvd_ft=s.target_tvd_ft,
+                legs_lonlat=[list(q) for q in s.legs_lonlat],
+            )
+            for s in z.sticks
+        ],
+    )
+
+
+@router.get("/{deal_id}/dossier-zones", response_model=DossierZonesResponse)
+def get_dossier_zones(
+    deal_id: uuid.UUID, session: Session = Depends(get_session)
+) -> DossierZonesResponse:
+    """Per-zone summary for the dossier preview: which planned sticks
+    take which type curve, the cohort behind it, and the TC-vs-Novi
+    read. The .pptx export builds its summary slide from the same
+    assembly."""
+    deal = _load_or_404(session, deal_id)
+    zones = _assemble_dossier_zones(session, deal)
+    return DossierZonesResponse(
+        headers=list(SUMMARY_HEADERS),
+        note=SUMMARY_NOTE,
+        zones=[_zone_out(z) for z in zones],
+    )
+
+
 @router.get("/{deal_id}/blueox-config", response_model=BlueOxConfigResponse)
 def get_blueox_config(
     deal_id: uuid.UUID, session: Session = Depends(get_session)
@@ -1822,6 +2023,9 @@ async def export_deal_dossier(
                 c{i}_rate_{stream}, c{i}_cum_{stream} (oil/gas/water)
                 and c{i}_map per curve.
 
+    The zone summary slide (first) is assembled server-side from the
+    saved Blue Ox config (``_assemble_dossier_zones``) — no client input.
+
     Dynamic file counts rule out fixed UploadFile params — the form is
     parsed by hand and missing parts are 422s, never silently skipped.
     """
@@ -1884,7 +2088,9 @@ async def export_deal_dossier(
         )
 
     try:
-        content = build_deal_dossier_pptx(session, scenarios, curves, comparisons)
+        content = build_deal_dossier_pptx(
+            session, scenarios, curves, comparisons, summary=_assemble_dossier_zones(session, deal)
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -1,6 +1,8 @@
 """Deal dossier PPTX — a working discussion deck, not a final exhibit.
 
-Structure: one slide per narvi scenario (plan-view map left, gunbarrel
+Structure: a zone summary slide first (which planned sticks take which
+type curve, the cohort behind it, TC vs Novi — built server-side from
+``dossier_summary``), then one slide per narvi scenario (plan-view map left, gunbarrel
 right, well-count subtitle), then the deal's type curves rendered
 exactly like the existing per-curve slide export (param table + rate /
 cum charts + cohort map, one slide per stream). The wells-table slide
@@ -21,6 +23,7 @@ from typing import Any
 from uuid import UUID
 
 from pptx import Presentation
+from pptx.dml.color import RGBColor
 from pptx.shapes.graphfrm import GraphicFrame
 from pptx.shapes.picture import Picture
 from pptx.slide import Slide
@@ -29,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import TypeCurve
 from app.exports.blueox import RATIO_REFUSAL_NOTE, ratio_mode_streams
+from app.exports.dossier_summary import SUMMARY_HEADERS, SUMMARY_NOTE, ZoneSummary, summary_cells
 from app.exports.pptx_builder import (
     _STREAM_TITLE,
     TEMPLATE_PATH,
@@ -103,15 +107,17 @@ def build_deal_dossier_pptx(
     scenarios: list[ScenarioSlideInput],
     curves: list[CurveSlideInput],
     comparisons: list[ComparisonSlideInput] | None = None,
+    summary: list[ZoneSummary] | None = None,
 ) -> bytes:
     """Assemble the dossier deck from the brand template.
 
-    Slide order: scenarios (one each), then per curve the oil / gas /
+    Slide order: the zone summary (when given; paginated), then
+    scenarios (one each), then per curve the oil / gas /
     water stream slides, then one TC-vs-Novi comparison slide per zone
     that has one. Raises ValueError on an unknown type curve or a
     missing stream panel.
     """
-    if not scenarios and not curves:
+    if not scenarios and not curves and not summary:
         raise ValueError("dossier needs at least one scenario or curve")
 
     pres = Presentation(str(TEMPLATE_PATH))
@@ -121,6 +127,17 @@ def build_deal_dossier_pptx(
     # Template is [stream_template, wells]. Every dossier slide starts
     # as a duplicate of the stream template (appended at the end); the
     # two template slides are deleted once all content slides exist.
+    zones = summary or []
+    for page in range(0, len(zones), SUMMARY_ROWS_PER_SLIDE):
+        _duplicate_slide(pres, source_idx=0)
+        n_pages = -(-len(zones) // SUMMARY_ROWS_PER_SLIDE)
+        _build_summary_slide(
+            pres.slides[-1],
+            zones[page : page + SUMMARY_ROWS_PER_SLIDE],
+            "Zone summary"
+            + (f" ({page // SUMMARY_ROWS_PER_SLIDE + 1}/{n_pages})" if n_pages > 1 else ""),
+        )
+
     for sc in scenarios:
         _duplicate_slide(pres, source_idx=0)
         _build_scenario_slide(pres.slides[-1], sc)
@@ -238,6 +255,90 @@ def _build_comparison_slide(slide: Slide, cp: ComparisonSlideInput) -> None:
         width=Inches(_COMPARISON_WIDTH_IN),
         height=Inches(_COMPARISON_HEIGHT_IN),
     )
+
+
+# 10 rows keep a fully wrapped table (3-line QC cells) clear of the note
+# band pinned above the template footer.
+SUMMARY_ROWS_PER_SLIDE = 10
+_SUMMARY_NOTE_TOP_IN = 6.25
+# Relative column widths for SUMMARY_HEADERS (zone + curve names and the
+# QC notes are the wide ones).
+_SUMMARY_COL_WEIGHTS = (
+    1.3,
+    1.7,
+    0.9,
+    0.75,
+    0.6,
+    0.75,
+    0.7,
+    0.75,
+    1.0,
+    0.5,
+    0.75,
+    0.7,
+    0.75,
+    0.6,
+    1.6,
+)
+_FLAG_RED = RGBColor(0xDC, 0x26, 0x26)  # type: ignore[no-untyped-call]
+_HEADER_FILL = RGBColor(0xF3, 0xF4, 0xF6)  # type: ignore[no-untyped-call]
+
+
+def _build_summary_slide(slide: Slide, zones: list[ZoneSummary], title: str) -> None:
+    """Native table, one row per zone (``summary_cells``), with the
+    conventions note under it. Gap-flagged TC-vs-Novi cells in red."""
+    _set_title_text(slide, title)
+    for shape in list(slide.shapes):
+        is_table = isinstance(shape, GraphicFrame) and shape.has_table
+        if is_table or isinstance(shape, Picture):
+            shape._element.getparent().remove(shape._element)
+    assert len(_SUMMARY_COL_WEIGHTS) == len(SUMMARY_HEADERS)
+    width = _SLIDE_WIDTH_IN - 2 * _MARGIN_IN
+    gf = slide.shapes.add_table(
+        len(zones) + 1,
+        len(SUMMARY_HEADERS),
+        Inches(_MARGIN_IN),
+        Inches(_SUBTITLE_TOP_IN),
+        Inches(width),
+        Inches(0.3 * (len(zones) + 1)),
+    )
+    table = gf.table
+    total = sum(_SUMMARY_COL_WEIGHTS)
+    for j, w in enumerate(_SUMMARY_COL_WEIGHTS):
+        table.columns[j].width = Inches(width * w / total)
+    flagged_cols = {
+        SUMMARY_HEADERS.index("Oil TC vs Novi"): "oil",
+        SUMMARY_HEADERS.index("Gas TC vs Novi"): "gas",
+    }
+    rows = [(SUMMARY_HEADERS, None)] + [(summary_cells(z), z) for z in zones]
+    for i, (cells, z) in enumerate(rows):
+        for j, text in enumerate(cells):
+            cell = table.cell(i, j)
+            cell.margin_left = cell.margin_right = Inches(0.04)
+            cell.margin_top = cell.margin_bottom = Inches(0.02)
+            tf = cell.text_frame
+            tf.word_wrap = True
+            run = tf.paragraphs[0].add_run()
+            run.text = text
+            run.font.size = Pt(8)
+            if z is None:
+                run.font.bold = True
+                cell.fill.solid()  # type: ignore[no-untyped-call]
+                cell.fill.fore_color.rgb = _HEADER_FILL
+                run.font.color.rgb = RGBColor(0x11, 0x18, 0x27)  # type: ignore[no-untyped-call]
+            elif j in flagged_cols and z.streams[flagged_cols[j]].gap_flag:
+                run.font.bold = True
+                run.font.color.rgb = _FLAG_RED
+    # Fixed band: table rows grow when cells wrap, so a position computed
+    # from the row count lands inside the table.
+    tb = slide.shapes.add_textbox(
+        Inches(_MARGIN_IN), Inches(_SUMMARY_NOTE_TOP_IN), Inches(width), Inches(0.6)
+    )
+    tf = tb.text_frame
+    tf.word_wrap = True
+    run = tf.paragraphs[0].add_run()
+    run.text = SUMMARY_NOTE
+    run.font.size = Pt(9)
 
 
 def _delete_slide(pres: Any, idx: int) -> None:

@@ -1,6 +1,8 @@
 // Deal dossier preview + export. Mounted chrome-free at
 // `#/deals/<id>/dossier` (like the type-curve slide page). Renders the
-// deal's SAVED Blue Ox config: one section per pinned narvi scenario
+// deal's SAVED Blue Ox config: a zone summary (which sticks take which
+// curve, the cohort behind it, TC vs Novi — the deck's first slide,
+// built server-side), then one section per pinned narvi scenario
 // (live plan-view map + gunbarrel) followed by one section per zone
 // type curve (param table + rate/cum charts + cohort map — the same
 // panels as the slide export). The Export button captures every panel
@@ -15,8 +17,10 @@ import {
   type BlueOxConfig,
   type DealRow,
   type DossierManifest,
+  type DossierZonesResponse,
   type NoviComparisonZone,
   exportDealDossierPptx,
+  fetchDossierZones,
   fetchNoviComparison,
   getBlueOxConfig,
   getDeal,
@@ -84,6 +88,8 @@ export function DealDossierPage({ dealId }: Props) {
   const [scenarios, setScenarios] = useState<NarviScenarioDetail[] | null>(null);
   const [comparisons, setComparisons] = useState<NoviComparisonZone[] | null>(null);
   const [comparisonError, setComparisonError] = useState<string | null>(null);
+  const [zoneSummary, setZoneSummary] = useState<DossierZonesResponse | null>(null);
+  const [zoneSummaryError, setZoneSummaryError] = useState<string | null>(null);
   const [curvesReady, setCurvesReady] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -150,6 +156,15 @@ export function DealDossierPage({ dealId }: Props) {
           ),
         );
         if (!cancelled) setScenarios(details);
+        // Zone summary — the export rebuilds it server-side, so a
+        // failure here only blanks the preview table; say why.
+        fetchDossierZones(dealId)
+          .then((zs) => {
+            if (!cancelled) setZoneSummary(zs);
+          })
+          .catch((e: unknown) => {
+            if (!cancelled) setZoneSummaryError(e instanceof Error ? e.message : String(e));
+          });
         // TC-vs-Novi benchmark — optional: an older backend or a
         // warehouse hiccup degrades to "no comparison sections", the
         // rest of the dossier still previews and exports. But say WHY:
@@ -364,6 +379,8 @@ export function DealDossierPage({ dealId }: Props) {
       </div>
 
       {scenarios === null && <p className="muted">loading narvi scenarios…</p>}
+
+      <ZoneSummarySection summary={zoneSummary} error={zoneSummaryError} />
 
       {overview && (
         <section style={{ marginTop: 16 }}>
@@ -697,6 +714,86 @@ function NoviComparisonSection({ zone, idx }: NoviComparisonSectionProps) {
       <div className="slide-panel" data-dossier-panel={`n${idx}_figure`}>
         <NoviComparisonPanel curve={curve} zone={zone} />
       </div>
+    </section>
+  );
+}
+
+// Deck slide 1: one row per zone. Cells arrive pre-formatted from the
+// backend (the same strings the .pptx table carries), so preview and
+// deck can't drift; only the gap-flag colouring happens here.
+function ZoneSummarySection({
+  summary,
+  error,
+}: {
+  summary: DossierZonesResponse | null;
+  error: string | null;
+}) {
+  if (error) {
+    return (
+      <section style={{ marginTop: 16 }}>
+        <h1 className="slide-title">Zone summary</h1>
+        <p style={{ color: "#dc2626", fontSize: 14 }}>{error}</p>
+      </section>
+    );
+  }
+  if (!summary) return <p className="muted">loading zone summary…</p>;
+  const flagCol: Record<number, "oil" | "gas"> = {
+    [summary.headers.indexOf("Oil TC vs Novi")]: "oil",
+    [summary.headers.indexOf("Gas TC vs Novi")]: "gas",
+  };
+  return (
+    <section style={{ marginTop: 16 }}>
+      <h1 className="slide-title">Zone summary</h1>
+      <p className="muted" style={{ margin: "2px 0 6px", fontSize: 15 }}>
+        which planned sticks take which type curve, the cohort that builds
+        it, and the TC-vs-Novi read — the deck&apos;s first slide
+      </p>
+      <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr>
+            {summary.headers.map((h) => (
+              <th
+                key={h}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  background: "#f3f4f6",
+                  padding: "3px 6px",
+                  textAlign: "left",
+                }}
+              >
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {summary.zones.map((z) => (
+            <tr key={z.zone_name}>
+              {z.cells.map((c, j) => {
+                const stream = flagCol[j];
+                const flagged = stream !== undefined && z.streams[stream].gap_flag;
+                return (
+                  <td
+                    key={j}
+                    style={{
+                      border: "1px solid #e5e7eb",
+                      padding: "3px 6px",
+                      verticalAlign: "top",
+                      color: flagged ? "#dc2626" : undefined,
+                      fontWeight: flagged ? 700 : undefined,
+                    }}
+                  >
+                    {c}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted" style={{ fontSize: 13, maxWidth: 1160 }}>
+        {summary.note}
+      </p>
     </section>
   );
 }
