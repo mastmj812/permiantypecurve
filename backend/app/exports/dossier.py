@@ -21,6 +21,7 @@ brand template, so charts and maps stay pixel-identical to the app.
 from __future__ import annotations
 
 import io
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 from uuid import UUID
@@ -35,7 +36,14 @@ from sqlalchemy.orm import Session
 
 from app.db.models import TypeCurve
 from app.exports.blueox import RATIO_REFUSAL_NOTE, ratio_mode_streams
-from app.exports.dossier_summary import SUMMARY_HEADERS, SUMMARY_NOTE, ZoneSummary, summary_cells
+from app.exports.dossier_summary import (
+    COHORT_HEADERS,
+    COHORT_NOTE,
+    SUMMARY_HEADERS,
+    SUMMARY_NOTE,
+    ZoneSummary,
+    summary_cells,
+)
 from app.exports.pptx_builder import (
     _STREAM_TITLE,
     TEMPLATE_PATH,
@@ -115,6 +123,14 @@ class CurveSlideInput:
     map_png: bytes = b""
 
 
+@dataclass(frozen=True)
+class CohortTableInput:
+    """One curve's well table (``COHORT_HEADERS`` cells, server-built)."""
+
+    curve_name: str
+    rows: list[list[str]]
+
+
 def build_deal_dossier_pptx(
     session: Session,
     scenarios: list[ScenarioSlideInput],
@@ -123,12 +139,14 @@ def build_deal_dossier_pptx(
     summary: list[ZoneSummary] | None = None,
     overview: ComparisonSlideInput | None = None,
     supports: list[ScenarioSlideInput] | None = None,
+    cohort_tables: dict[UUID, CohortTableInput] | None = None,
 ) -> bytes:
     """Assemble the dossier deck from the brand template.
 
     Slide order: the zone summary (when given; paginated), the
     curve-assignment overview, the zone support slides, then
-    scenarios (one each), then per curve the oil / gas /
+    scenarios (one each), then per curve its well table (when given)
+    and the oil / gas /
     water stream slides, then one TC-vs-Novi comparison slide per zone
     that has one. Raises ValueError on an unknown type curve or a
     missing stream panel.
@@ -178,6 +196,9 @@ def build_deal_dossier_pptx(
                 f"curve {tc.name}: stream(s) {', '.join(ratio_streams)} are "
                 f"ratio-mode — {RATIO_REFUSAL_NOTE}"
             )
+        ct = (cohort_tables or {}).get(cv.type_curve_id)
+        if ct is not None:
+            _build_cohort_slides(pres, ct)
         for stream in streams:
             if stream not in cv.stream_pngs:
                 raise ValueError(f"curve {tc.name}: missing {stream} panels")
@@ -317,34 +338,38 @@ _FLAG_RED = RGBColor(0xDC, 0x26, 0x26)  # type: ignore[no-untyped-call]
 _HEADER_FILL = RGBColor(0xF3, 0xF4, 0xF6)  # type: ignore[no-untyped-call]
 
 
-def _build_summary_slide(slide: Slide, zones: list[ZoneSummary], title: str) -> None:
-    """Native table, one row per zone (``summary_cells``), with the
-    conventions note under it. Gap-flagged TC-vs-Novi cells in red."""
-    _set_title_text(slide, title)
+def _build_table_slide(
+    slide: Slide,
+    title: str,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    weights: Sequence[float],
+    note: str,
+    flag: Callable[[int, int], bool] | None = None,
+) -> None:
+    """Native table under the title (header row shaded, 8 pt), the
+    conventions note in a fixed band above the footer. ``flag(i, j)``
+    (0-based data row, column) marks a cell bold red."""
+    _fit_title(slide, title)
     for shape in list(slide.shapes):
         is_table = isinstance(shape, GraphicFrame) and shape.has_table
         if is_table or isinstance(shape, Picture):
             shape._element.getparent().remove(shape._element)
-    assert len(_SUMMARY_COL_WEIGHTS) == len(SUMMARY_HEADERS)
+    assert len(weights) == len(headers)
     width = _SLIDE_WIDTH_IN - 2 * _MARGIN_IN
     gf = slide.shapes.add_table(
-        len(zones) + 1,
-        len(SUMMARY_HEADERS),
+        len(rows) + 1,
+        len(headers),
         Inches(_MARGIN_IN),
         Inches(_SUBTITLE_TOP_IN),
         Inches(width),
-        Inches(0.3 * (len(zones) + 1)),
+        Inches(0.25 * (len(rows) + 1)),
     )
     table = gf.table
-    total = sum(_SUMMARY_COL_WEIGHTS)
-    for j, w in enumerate(_SUMMARY_COL_WEIGHTS):
+    total = sum(weights)
+    for j, w in enumerate(weights):
         table.columns[j].width = Inches(width * w / total)
-    flagged_cols = {
-        SUMMARY_HEADERS.index("Oil TC vs Novi"): "oil",
-        SUMMARY_HEADERS.index("Gas TC vs Novi"): "gas",
-    }
-    rows = [(SUMMARY_HEADERS, None)] + [(summary_cells(z), z) for z in zones]
-    for i, (cells, z) in enumerate(rows):
+    for i, cells in enumerate([headers, *rows]):
         for j, text in enumerate(cells):
             cell = table.cell(i, j)
             cell.margin_left = cell.margin_right = Inches(0.04)
@@ -354,12 +379,12 @@ def _build_summary_slide(slide: Slide, zones: list[ZoneSummary], title: str) -> 
             run = tf.paragraphs[0].add_run()
             run.text = text
             run.font.size = Pt(8)
-            if z is None:
+            if i == 0:
                 run.font.bold = True
                 cell.fill.solid()  # type: ignore[no-untyped-call]
                 cell.fill.fore_color.rgb = _HEADER_FILL
                 run.font.color.rgb = RGBColor(0x11, 0x18, 0x27)  # type: ignore[no-untyped-call]
-            elif j in flagged_cols and z.streams[flagged_cols[j]].gap_flag:
+            elif flag is not None and flag(i - 1, j):
                 run.font.bold = True
                 run.font.color.rgb = _FLAG_RED
     # Fixed band: table rows grow when cells wrap, so a position computed
@@ -370,8 +395,58 @@ def _build_summary_slide(slide: Slide, zones: list[ZoneSummary], title: str) -> 
     tf = tb.text_frame
     tf.word_wrap = True
     run = tf.paragraphs[0].add_run()
-    run.text = SUMMARY_NOTE
+    run.text = note
     run.font.size = Pt(9)
+
+
+def _build_summary_slide(slide: Slide, zones: list[ZoneSummary], title: str) -> None:
+    """One row per zone (``summary_cells``); gap-flagged TC-vs-Novi cells red."""
+    flagged_cols = {
+        SUMMARY_HEADERS.index("Oil TC vs Novi"): "oil",
+        SUMMARY_HEADERS.index("Gas TC vs Novi"): "gas",
+    }
+    _build_table_slide(
+        slide,
+        title,
+        SUMMARY_HEADERS,
+        [summary_cells(z) for z in zones],
+        _SUMMARY_COL_WEIGHTS,
+        SUMMARY_NOTE,
+        flag=lambda i, j: j in flagged_cols and zones[i].streams[flagged_cols[j]].gap_flag,
+    )
+
+
+_COHORT_COL_WEIGHTS = (2.2, 1.6, 0.9, 0.65, 0.6, 0.65, 0.65, 0.85, 0.8, 2.0)
+# Cohort rows are one line each (names don't wrap at these widths), so a
+# slide holds more of them than the summary.
+COHORT_ROWS_PER_SLIDE = 16
+
+
+def _di_pinned(rows: Sequence[Sequence[str]], col: int) -> Callable[[int, int], bool]:
+    """Flag predicate: the pinned cell carries a Di bound."""
+    return lambda i, j: j == col and "Di" in rows[i][j]
+
+
+def _build_cohort_slides(pres: Any, table: CohortTableInput) -> None:
+    """The curve's wells, paginated; a pinned oil Di is flagged red (b at
+    its 0.9/1.2 bound is common by design and stays black)."""
+    pin_col = COHORT_HEADERS.index("Oil fit pinned")
+    n_pages = max(1, -(-len(table.rows) // COHORT_ROWS_PER_SLIDE))
+    # Balanced pages (17 wells -> 9 + 8, not 16 + an orphan row).
+    per_page = max(1, -(-len(table.rows) // n_pages))
+    for page in range(n_pages):
+        rows = table.rows[page * per_page : (page + 1) * per_page]
+        _duplicate_slide(pres, source_idx=0)
+        _build_table_slide(
+            pres.slides[-1],
+            f"{table.curve_name} — curve wells ({len(table.rows)})"
+            + (f" {page + 1}/{n_pages}" if n_pages > 1 else ""),
+            COHORT_HEADERS,
+            rows,
+            _COHORT_COL_WEIGHTS,
+            COHORT_NOTE,
+            flag=_di_pinned(rows, pin_col),
+        )
 
 
 def _delete_slide(pres: Any, idx: int) -> None:

@@ -17,6 +17,7 @@ import {
   type BlueOxConfig,
   type DealRow,
   type DossierManifest,
+  type DossierCurveTable,
   type DossierZone,
   type DossierZonesResponse,
   type NoviComparisonZone,
@@ -552,6 +553,9 @@ export function DealDossierPage({ dealId }: Props) {
           key={id}
           curveId={id}
           idx={i}
+          table={zoneSummary?.curve_tables.find((t) => t.type_curve_id === id) ?? null}
+          tableHeaders={zoneSummary?.cohort_headers ?? []}
+          tableNote={zoneSummary?.cohort_note ?? ""}
           dealVisibility={dealVisibility}
           onReady={() =>
             setCurvesReady((prev) => new Set(prev).add(i))
@@ -629,6 +633,11 @@ interface CurveSectionProps {
   // Header acreage picker's selection — live prop on the SlideMap.
   dealVisibility: Record<string, boolean>;
   onReady: () => void;
+  // Server-built well table (the deck carries the same rows); null while
+  // the zone summary loads or when it failed.
+  table: DossierCurveTable | null;
+  tableHeaders: string[];
+  tableNote: string;
 }
 
 interface CurveData {
@@ -640,7 +649,15 @@ interface CurveData {
 
 // One type curve's dossier section — the same data + panels as the
 // slide export page (TypeCurveSlidePage), all streams stacked visibly.
-function DossierCurveSection({ curveId, idx, dealVisibility, onReady }: CurveSectionProps) {
+function DossierCurveSection({
+  curveId,
+  idx,
+  dealVisibility,
+  onReady,
+  table,
+  tableHeaders,
+  tableNote,
+}: CurveSectionProps) {
   const [data, setData] = useState<CurveData | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -709,6 +726,7 @@ function DossierCurveSection({ curveId, idx, dealVisibility, onReady }: CurveSec
   return (
     <section style={{ marginTop: 28 }}>
       <h1 className="slide-title">{data.curve.name}</h1>
+      {table && <CohortTable table={table} headers={tableHeaders} note={tableNote} />}
       <SlideParamTable current={data.curve} previous={null} />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
         <div className="slide-panel slide-panel-map" data-dossier-panel={`c${idx}_map`}>
@@ -936,5 +954,56 @@ function SupportLegend({ color, range }: { color: string; range: { lo: number; h
         <span style={{ width: 22, height: 4, background: NO_FIT_COLOR, display: "inline-block" }} /> no anduin fit
       </span>
     </div>
+  );
+}
+
+// The curve's wells (deck: the slides before its Oil/Gas/Water).
+// A pinned oil Di is red; b at its 0.9/1.2 bound is common by design.
+function CohortTable({
+  table,
+  headers,
+  note,
+}: {
+  table: DossierCurveTable;
+  headers: string[];
+  note: string;
+}) {
+  const pinCol = headers.indexOf("Oil fit pinned");
+  const cell = { border: "1px solid #e5e7eb", padding: "2px 6px", verticalAlign: "top" as const };
+  return (
+    <details open style={{ margin: "4px 0 10px" }}>
+      <summary style={{ cursor: "pointer", fontSize: 15 }}>
+        Curve wells — {table.rows.length} (nearest the planned sticks first)
+      </summary>
+      <table style={{ borderCollapse: "collapse", fontSize: 12, marginTop: 4 }}>
+        <thead>
+          <tr>
+            {headers.map((h) => (
+              <th key={h} style={{ ...cell, background: "#f3f4f6", textAlign: "left" }}>
+                {h}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((r) => (
+            <tr key={r[2]}>
+              {r.map((c, j) => {
+                const flagged = j === pinCol && c.includes("Di");
+                return (
+                  <td
+                    key={j}
+                    style={{ ...cell, color: flagged ? "#dc2626" : undefined, fontWeight: flagged ? 700 : undefined }}
+                  >
+                    {c}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted" style={{ fontSize: 12, maxWidth: 1160 }}>{note}</p>
+    </details>
   );
 }

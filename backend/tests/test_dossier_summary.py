@@ -271,3 +271,101 @@ def test_long_title_shrinks_and_long_subtitle_wraps() -> None:
     assert sub.text_frame.word_wrap is True
     pic = next(sh for sh in slide.shapes if sh.shape_type == 13)  # picture
     assert (pic.top + pic.height) / 914400 <= 6.85  # clear of the footer band
+
+
+def _cw(api: str, lon: float, **k: Any) -> Any:
+    from app.exports.dossier_summary import CohortWell
+
+    return CohortWell(
+        api10=api,
+        name=f"W{api}",
+        lateral_ft=10_000.0,
+        oil_eur_per_ft=60.0,
+        coords=((lon, 31.6), (lon, 31.62)),
+        **k,
+    )
+
+
+def test_came_on_and_pinned_tags() -> None:
+    from app.exports.dossier_summary import came_on, pinned_params
+
+    assert came_on(_cw("1", 0, scenario_class="topfill", parents_below=("WCA_1",))) == "over WCA_1"
+    assert (
+        came_on(_cw("1", 0, scenario_class="underfill", parents_above=("BS3_C",))) == "under BS3_C"
+    )
+    assert (
+        came_on(_cw("1", 0, scenario_class="sandwich", parents_above=("A",), parents_below=("B",)))
+        == "between A / B"
+    )
+    assert (
+        came_on(_cw("1", 0, scenario_class="codev_stack", codev_benches=("BS2_C",)))
+        == "co-developed with BS2_C"
+    )
+    assert came_on(_cw("1", 0, scenario_class="standalone")) == "alone"
+    assert came_on(_cw("1", 0)) == "—"  # not in dev_scenario
+    assert pinned_params("Di at upper bound (4.0); b at lower bound (0.9)") == ("Di hi", "b lo")
+    assert pinned_params(None) == ()
+
+
+def test_cohort_rows_nearest_first_with_fit_source() -> None:
+    from app.exports.dossier_summary import COHORT_HEADERS, cohort_rows
+
+    stick = ZoneStick(
+        well_name="s",
+        formation="WCB_2",
+        category="PUD",
+        scenario_ref="d/s",
+        completed_lateral_ft=10_000.0,
+        target_tvd_ft=None,
+        legs_lonlat=((-103.5, 31.6, -103.5, 31.62),),
+    )
+    far = _cw("2", -103.3, fit_source="override", pinned=("Di hi",))
+    near = _cw("1", -103.51, fit_source="global", fit_edited=True)
+    nogeo = _cw("3", 0.0, fit_source="none")
+    nogeo = type(nogeo)(**{**nogeo.__dict__, "coords": ()})
+    rows = cohort_rows([far, nogeo, near], [stick])
+    col = {h: i for i, h in enumerate(COHORT_HEADERS)}
+    assert [r[col["api10"]] for r in rows] == ["1", "2", "3"]  # nearest first, no geometry last
+    assert rows[0][col["Oil fit"]] == "global (edited)" and rows[1][col["Oil fit"]] == "TC override"
+    assert rows[1][col["Oil fit pinned"]] == "Di hi" and rows[2][col["To nearest stick mi"]] == "—"
+    assert float(rows[0][col["To nearest stick mi"]]) == pytest.approx(
+        0.6, abs=0.05
+    )  # 0.01 deg lon at 31.6N
+
+
+def test_cohort_table_precedes_stream_slides_and_paginates() -> None:
+    from app.exports.dossier import COHORT_ROWS_PER_SLIDE, CohortTableInput
+    from tests.test_deal_export import _curve
+    from tests.test_dossier_export import _curve_input, _StubSession
+
+    tc = _curve("holdTheLine_wca_v1")
+    rows = [
+        [
+            f"W{i}",
+            "op",
+            str(i),
+            "2024-01",
+            "10,000",
+            "1.0",
+            "60.0",
+            "global",
+            "Di hi" if i == 0 else "—",
+            "alone",
+        ]
+        for i in range(COHORT_ROWS_PER_SLIDE + 3)
+    ]
+    content = build_deal_dossier_pptx(
+        _StubSession([tc]),  # type: ignore[arg-type]
+        [],
+        [_curve_input(tc)],
+        cohort_tables={tc.id: CohortTableInput(curve_name=tc.name, rows=rows)},
+    )
+    pres = Presentation(io.BytesIO(content))
+    titles = [
+        " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame) for sl in pres.slides
+    ]
+    assert len(pres.slides) == 5  # 2 table pages + oil/gas/water
+    assert "curve wells (19) 1/2" in titles[0] and "curve wells (19) 2/2" in titles[1]
+    assert "holdTheLine_wca_v1 Oil" in titles[2]
+    t = next(s for s in pres.slides[0].shapes if isinstance(s, GraphicFrame) and s.has_table).table
+    assert len(t.rows) == 10 + 1  # 19 wells -> balanced 10 + 9

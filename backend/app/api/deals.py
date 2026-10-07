@@ -45,7 +45,7 @@ from app.api.type_curves import (
     oil_eur_well_stats,
 )
 from app.core.logging import get_logger
-from app.db.models import Deal, Forecast, NormalizationBasis, TypeCurve
+from app.db.models import Deal, Forecast, NormalizationBasis, TypeCurve, Well
 from app.db.models.forecasts import Stream
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
@@ -67,12 +67,15 @@ from app.exports.blueox import (
 )
 from app.exports.buildup import write_buildup_sheet
 from app.exports.dossier import (
+    CohortTableInput,
     ComparisonSlideInput,
     CurveSlideInput,
     ScenarioSlideInput,
     build_deal_dossier_pptx,
 )
 from app.exports.dossier_summary import (
+    COHORT_HEADERS,
+    COHORT_NOTE,
     SUMMARY_HEADERS,
     SUMMARY_NOTE,
     SUMMARY_STREAMS,
@@ -81,7 +84,9 @@ from app.exports.dossier_summary import (
     ZoneSummary,
     build_zone_summary,
     cohort_qc,
+    cohort_rows,
     parse_linestring_wkt,
+    pinned_params,
     summary_cells,
 )
 from app.exports.well_rows import (
@@ -92,7 +97,7 @@ from app.exports.well_rows import (
     per_well_rows,
     well_geo_rows,
 )
-from app.forecasting.fit import _stream_di_hi
+from app.forecasting.fit import _stream_di_hi, detect_at_bound
 from app.forecasting.types import ForecastConfig
 from app.type_curves.aggregate import PERCENTILE_KEYS
 from app.type_curves.risking import apply_risking, is_risked, normalize_multipliers
@@ -1642,24 +1647,62 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
             log.warning("dossier_zones_novi_failed", deal=str(deal.id), error=str(exc))
             novi, novi_error = {}, f"Novi comparison unavailable: {exc}"
 
-    # Support-map cohort per curve (two zones may share one): the
-    # /well-stats EUR/ft (probit dots) + each well's wellstick.
+    # Cohort per curve (two zones may share one): the /well-stats EUR/ft
+    # (probit dots) + wellstick for the support map, and the table fields
+    # — operator, first prod, how the oil fit resolves for THIS curve
+    # (override vs global, pinned params) and the dev_scenario passthrough.
+    well_rows = {
+        w.api10: w
+        for w in session.execute(select(Well).where(Well.api10.in_(api10s))).scalars()
+    } if api10s else {}
     cohorts: dict[uuid.UUID, list[CohortWell]] = {}
     for tc in curves.values():
         if tc.id in cohorts:
             continue
         geo = well_geo_rows(session, list(tc.included_api10s or []))
         wkt_idx = len(WELL_GEO_HEADERS) - 1
-        cohorts[tc.id] = [
-            CohortWell(
-                api10=w.api10,
-                name=w.name,
-                lateral_ft=w.lateral_ft,
-                oil_eur_per_ft=w.oil_eur_per_ft,
-                coords=parse_linestring_wkt(geo.get(w.api10, EMPTY_GEO)[wkt_idx]),
+        overrides = tc.forecast_overrides or {}
+        built: list[CohortWell] = []
+        for st in oil_eur_well_stats(session, tc):
+            wr = well_rows.get(st.api10)
+            payload = (overrides.get(st.api10) or {}).get("oil")
+            glob = forecasts["oil"].get(st.api10)
+            if payload:
+                source, edited = "override", False
+                qi, di, b, peak = (payload.get(k) for k in ("qi", "di_initial", "b", "peak_rate"))
+            elif glob is not None:
+                source, edited = "global", bool(glob.manual_override)
+                qi, di, b, peak = glob.qi, glob.di_initial, glob.b, glob.peak_rate
+            else:
+                source, edited, qi, di, b, peak = "none", False, None, None, None, None
+            note = None
+            if qi is not None and di is not None and peak is not None:
+                _, note = detect_at_bound(
+                    qi=float(qi),
+                    di=float(di),
+                    b=None if b is None else float(b),
+                    peak_rate=float(peak),
+                    di_hi=di_hi["oil"],
+                )
+            built.append(
+                CohortWell(
+                    api10=st.api10,
+                    name=st.name,
+                    lateral_ft=st.lateral_ft,
+                    oil_eur_per_ft=st.oil_eur_per_ft,
+                    coords=parse_linestring_wkt(geo.get(st.api10, EMPTY_GEO)[wkt_idx]),
+                    operator=wr.operator if wr else None,
+                    first_prod=wr.first_prod_date.isoformat()[:7] if wr and wr.first_prod_date else None,
+                    fit_source=source,
+                    fit_edited=edited,
+                    pinned=pinned_params(note),
+                    scenario_class=wr.scenario_class if wr else None,
+                    parents_below=tuple(wr.parent_benches_below or ()) if wr else (),
+                    parents_above=tuple(wr.parent_benches_above or ()) if wr else (),
+                    codev_benches=tuple(wr.codev_benches_other or ()) if wr else (),
+                )
             )
-            for w in oil_eur_well_stats(session, tc)
-        ]
+        cohorts[tc.id] = built
 
     out: list[ZoneSummary] = []
     for spec in cfg.zones:
@@ -1739,10 +1782,37 @@ class DossierZoneOut(BaseModel):
     cohort: list[DossierCohortWellOut]
 
 
+class DossierCurveTableOut(BaseModel):
+    type_curve_id: uuid.UUID
+    curve_name: str
+    zones: list[str]  # the zones taking this curve
+    rows: list[list[str]]  # COHORT_HEADERS cells, nearest the sticks first
+
+
 class DossierZonesResponse(BaseModel):
     headers: list[str]
     note: str
     zones: list[DossierZoneOut]
+    cohort_headers: list[str] = []
+    cohort_note: str = ""
+    curve_tables: list[DossierCurveTableOut] = []
+
+
+def curve_tables(zones: list[ZoneSummary]) -> list[DossierCurveTableOut]:
+    """One cohort table per unique curve, in zone order; distances run to
+    the nearest stick of ANY zone taking that curve."""
+    by_tc: dict[str, list[ZoneSummary]] = {}
+    for z in zones:
+        by_tc.setdefault(z.type_curve_id, []).append(z)
+    return [
+        DossierCurveTableOut(
+            type_curve_id=uuid.UUID(tc_id),
+            curve_name=zs[0].curve_name,
+            zones=[z.zone_name for z in zs],
+            rows=[list(r) for r in cohort_rows(zs[0].cohort, [s for z in zs for s in z.sticks])],
+        )
+        for tc_id, zs in by_tc.items()
+    ]
 
 
 def _zone_out(z: ZoneSummary) -> DossierZoneOut:
@@ -1804,6 +1874,9 @@ def get_dossier_zones(
         headers=list(SUMMARY_HEADERS),
         note=SUMMARY_NOTE,
         zones=[_zone_out(z) for z in zones],
+        cohort_headers=list(COHORT_HEADERS),
+        cohort_note=COHORT_NOTE,
+        curve_tables=curve_tables(zones),
     )
 
 
@@ -2150,15 +2223,20 @@ async def export_deal_dossier(
             )
         )
 
+    zone_summaries = _assemble_dossier_zones(session, deal)
     try:
         content = build_deal_dossier_pptx(
             session,
             scenarios,
             curves,
             comparisons,
-            summary=_assemble_dossier_zones(session, deal),
+            summary=zone_summaries,
             overview=overview,
             supports=supports,
+            cohort_tables={
+                t.type_curve_id: CohortTableInput(curve_name=t.curve_name, rows=t.rows)
+                for t in curve_tables(zone_summaries)
+            },
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
