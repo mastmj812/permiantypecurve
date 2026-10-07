@@ -36,6 +36,7 @@ from typing import Any
 from app.db.models import Forecast, TypeCurve
 from app.forecasting.fit import detect_at_bound
 from app.type_curves.risking import normalize_multipliers, risked_name_suffix
+from app.warehouse_client.intel_forecast import REP_LATERAL_TOL, REP_LATERAL_TOL_BY_BASIN
 
 GAP_FLAG_RATIO = 1.5
 SUMMARY_STREAMS = ("oil", "gas")
@@ -77,6 +78,7 @@ class ZoneStick:
     completed_lateral_ft: float | None
     target_tvd_ft: float | None
     legs_lonlat: tuple[tuple[float, float, float, float], ...] = ()
+    scenario_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,7 @@ class CohortWell:
     parents_below: tuple[str, ...] = ()
     parents_above: tuple[str, ...] = ()
     codev_benches: tuple[str, ...] = ()
+    subbasin: str | None = None  # wells.subbasin (Delaware / Midland / ...)
 
 
 def parse_linestring_wkt(wkt: str | None) -> tuple[tuple[float, float], ...]:
@@ -530,3 +533,126 @@ SUMMARY_NOTE = (
     f"⚑ = TC and Novi more than {GAP_FLAG_RATIO:g}x apart (flag, not a gate). Sticks = planned narvi wells "
     "routed to the zone; PDP context excluded. No economics."
 )
+
+
+# ---- step 4: lateral scaling per zone x scenario --------------------------
+# Same rule as the deal-intake dossier (engineering_db dealintake
+# lateral_support + thresholds.yaml): band = the per-basin Novi-rep
+# tolerance (imported — a cross-repo contract, never copied), widened to
+# 0.40 for long laterals >= 12,500 ft (Michael 2026-09-25); fewer than 3
+# cohort wells inside the band = thin; a planned lateral outside the
+# cohort's observed range = the per-1,000-ft curve is a linear
+# EXTRAPOLATION there. Flags only — nothing is gated.
+LONG_LATERAL_MIN_FT = 12_500.0
+LONG_LATERAL_TOL = 0.40
+MIN_WELLS_NEAR_PLANNED = 3
+
+
+def lateral_tolerance(subbasin: str | None, planned_lateral_ft: float | None) -> float:
+    base = REP_LATERAL_TOL_BY_BASIN.get((subbasin or "").strip().lower(), REP_LATERAL_TOL)
+    if planned_lateral_ft is not None and planned_lateral_ft >= LONG_LATERAL_MIN_FT:
+        return max(base, LONG_LATERAL_TOL)
+    return base
+
+
+def cohort_subbasin(wells: Sequence[CohortWell]) -> str | None:
+    """Majority sub-basin of the cohort (ties -> alphabetical)."""
+    counts: dict[str, int] = {}
+    for w in wells:
+        if w.subbasin:
+            counts[w.subbasin] = counts.get(w.subbasin, 0) + 1
+    if not counts:
+        return None
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[0][0]
+
+
+@dataclass(frozen=True)
+class LateralRow:
+    zone_name: str
+    scenario: str
+    n_sticks: int
+    planned_lateral_ft: float | None  # median completed lateral of the group
+    oil_eur_per_well: float | None  # risked P50 per 1,000 ft x planned / 1,000
+    gas_eur_per_well: float | None
+    n_within_band: int
+    band_tol: float
+    cohort_min_ft: float | None
+    cohort_max_ft: float | None
+    extrapolated: bool
+    thin: bool
+
+
+def lateral_rows(z: ZoneSummary) -> list[LateralRow]:
+    """One row per scenario feeding the zone (a scenario ~ one DSU)."""
+    lls = sorted(w.lateral_ft for w in z.cohort if w.lateral_ft)
+    sub = cohort_subbasin(z.cohort)
+    groups: dict[str, list[ZoneStick]] = {}
+    for st in z.sticks:
+        groups.setdefault(st.scenario_ref, []).append(st)
+    out = []
+    for ref, sticks in groups.items():
+        planned = [st.completed_lateral_ft for st in sticks if st.completed_lateral_ft]
+        ll = statistics.median(planned) if planned else None
+        tol = lateral_tolerance(sub, ll)
+        near = 0 if ll is None else sum(1 for v in lls if ll * (1 - tol) <= v <= ll * (1 + tol))
+        outside = bool(lls) and ll is not None and not lls[0] <= ll <= lls[-1]
+        o, g = z.streams["oil"].eur_per_1000ft, z.streams["gas"].eur_per_1000ft
+        out.append(
+            LateralRow(
+                zone_name=z.zone_name,
+                scenario=sticks[0].scenario_name or ref.split("/")[-1],
+                n_sticks=len(sticks),
+                planned_lateral_ft=ll,
+                oil_eur_per_well=o * ll / 1000.0 if o is not None and ll else None,
+                gas_eur_per_well=g * ll / 1000.0 if g is not None and ll else None,
+                n_within_band=near,
+                band_tol=tol,
+                cohort_min_ft=lls[0] if lls else None,
+                cohort_max_ft=lls[-1] if lls else None,
+                extrapolated=outside,
+                thin=bool(lls) and ll is not None and not outside and near < MIN_WELLS_NEAR_PLANNED,
+            )
+        )
+    return out
+
+
+LATERAL_HEADERS: tuple[str, ...] = (
+    "Zone",
+    "Scenario",
+    "Sticks",
+    "Planned lateral ft",
+    "Oil EUR / well bbl",
+    "Gas EUR / well mcf",
+    "Cohort wells in band",
+    "Cohort lateral range ft",
+    "Read",
+)
+
+LATERAL_NOTE = (
+    "Per-1,000-ft risked P50 scaled LINEARLY to each scenario's median completed lateral; EUR = raw 50-yr "
+    "technical integral per well, no economics. Band = the per-basin lateral tolerance (Delaware 25% / "
+    "Midland 40%; 40% for laterals >= 12,500 ft). EXTRAPOLATED = planned lateral outside the cohort's observed "
+    f"range; thin = fewer than {MIN_WELLS_NEAR_PLANNED} cohort wells inside the band. Flags, not gates."
+)
+
+
+def lateral_read(r: LateralRow) -> str:
+    if r.extrapolated:
+        return "EXTRAPOLATED"
+    if r.thin:
+        return "thin at this length"
+    return "inside range" if r.cohort_min_ft is not None else "—"
+
+
+def lateral_cells(r: LateralRow) -> tuple[str, ...]:
+    return (
+        r.zone_name,
+        r.scenario,
+        str(r.n_sticks),
+        _f(r.planned_lateral_ft),
+        _f(r.oil_eur_per_well),
+        _f(r.gas_eur_per_well),
+        f"{r.n_within_band} (±{r.band_tol:.0%})",
+        "—" if r.cohort_min_ft is None else f"{r.cohort_min_ft:,.0f}-{r.cohort_max_ft:,.0f}",
+        lateral_read(r),
+    )

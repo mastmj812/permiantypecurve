@@ -39,6 +39,8 @@ from app.exports.blueox import RATIO_REFUSAL_NOTE, ratio_mode_streams
 from app.exports.dossier_summary import (
     COHORT_HEADERS,
     COHORT_NOTE,
+    LATERAL_HEADERS,
+    LATERAL_NOTE,
     SUMMARY_HEADERS,
     SUMMARY_NOTE,
     ZoneSummary,
@@ -124,11 +126,22 @@ class CurveSlideInput:
 
 
 @dataclass(frozen=True)
+class FunnelInput:
+    """One curve's buildup funnel (``exports.buildup.funnel_tables``)."""
+
+    degraded: bool
+    rows: list[list[str]]  # stage, description, culled, remaining
+    criteria: list[tuple[str, str]]
+
+
+@dataclass(frozen=True)
 class CohortTableInput:
-    """One curve's well table (``COHORT_HEADERS`` cells, server-built)."""
+    """One curve's well table (``COHORT_HEADERS`` cells, server-built)
+    and, when given, its buildup funnel slide."""
 
     curve_name: str
     rows: list[list[str]]
+    funnel: FunnelInput | None = None
 
 
 def build_deal_dossier_pptx(
@@ -140,10 +153,12 @@ def build_deal_dossier_pptx(
     overview: ComparisonSlideInput | None = None,
     supports: list[ScenarioSlideInput] | None = None,
     cohort_tables: dict[UUID, CohortTableInput] | None = None,
+    lateral: list[tuple[list[str], bool, bool]] | None = None,
 ) -> bytes:
     """Assemble the dossier deck from the brand template.
 
-    Slide order: the zone summary (when given; paginated), the
+    Slide order: the zone summary (when given; paginated), lateral
+    scaling (when given; paginated), the
     curve-assignment overview, the zone support slides, then
     scenarios (one each), then per curve its well table (when given)
     and the oil / gas /
@@ -170,6 +185,22 @@ def build_deal_dossier_pptx(
             zones[page : page + SUMMARY_ROWS_PER_SLIDE],
             "Zone summary"
             + (f" ({page // SUMMARY_ROWS_PER_SLIDE + 1}/{n_pages})" if n_pages > 1 else ""),
+        )
+
+    lat = lateral or []
+    lat_pages = -(-len(lat) // SUMMARY_ROWS_PER_SLIDE)
+    for page in range(lat_pages):
+        chunk = lat[page * SUMMARY_ROWS_PER_SLIDE : (page + 1) * SUMMARY_ROWS_PER_SLIDE]
+        read_col = LATERAL_HEADERS.index("Read")
+        _duplicate_slide(pres, source_idx=0)
+        _build_table_slide(
+            pres.slides[-1],
+            "Lateral scaling" + (f" ({page + 1}/{lat_pages})" if lat_pages > 1 else ""),
+            LATERAL_HEADERS,
+            [c for c, _, _ in chunk],
+            _LATERAL_COL_WEIGHTS,
+            LATERAL_NOTE,
+            flag=_lateral_flag(chunk, read_col),
         )
 
     if overview is not None:
@@ -199,6 +230,9 @@ def build_deal_dossier_pptx(
         ct = (cohort_tables or {}).get(cv.type_curve_id)
         if ct is not None:
             _build_cohort_slides(pres, ct)
+            if ct.funnel is not None:
+                _duplicate_slide(pres, source_idx=0)
+                _build_funnel_slide(pres.slides[-1], ct.curve_name, ct.funnel)
         for stream in streams:
             if stream not in cv.stream_pngs:
                 raise ValueError(f"curve {tc.name}: missing {stream} panels")
@@ -336,6 +370,7 @@ _SUMMARY_COL_WEIGHTS = (
 )
 _FLAG_RED = RGBColor(0xDC, 0x26, 0x26)  # type: ignore[no-untyped-call]
 _HEADER_FILL = RGBColor(0xF3, 0xF4, 0xF6)  # type: ignore[no-untyped-call]
+_HEADER_TEXT = RGBColor(0x11, 0x18, 0x27)  # type: ignore[no-untyped-call]
 
 
 def _build_table_slide(
@@ -383,7 +418,7 @@ def _build_table_slide(
                 run.font.bold = True
                 cell.fill.solid()  # type: ignore[no-untyped-call]
                 cell.fill.fore_color.rgb = _HEADER_FILL
-                run.font.color.rgb = RGBColor(0x11, 0x18, 0x27)  # type: ignore[no-untyped-call]
+                run.font.color.rgb = _HEADER_TEXT
             elif flag is not None and flag(i - 1, j):
                 run.font.bold = True
                 run.font.color.rgb = _FLAG_RED
@@ -420,6 +455,10 @@ _COHORT_COL_WEIGHTS = (2.2, 1.6, 0.9, 0.65, 0.6, 0.65, 0.65, 0.85, 0.8, 2.0)
 # Cohort rows are one line each (names don't wrap at these widths), so a
 # slide holds more of them than the summary.
 COHORT_ROWS_PER_SLIDE = 16
+# The deck carries the NEAREST wells only (3 slides max); a 201-well
+# cohort would otherwise run 13 slides. The preview and the Blue Ox drop
+# workbook's analog sheet list every well.
+COHORT_DECK_MAX_ROWS = 48
 
 
 def _di_pinned(rows: Sequence[Sequence[str]], col: int) -> Callable[[int, int], bool]:
@@ -431,22 +470,122 @@ def _build_cohort_slides(pres: Any, table: CohortTableInput) -> None:
     """The curve's wells, paginated; a pinned oil Di is flagged red (b at
     its 0.9/1.2 bound is common by design and stays black)."""
     pin_col = COHORT_HEADERS.index("Oil fit pinned")
-    n_pages = max(1, -(-len(table.rows) // COHORT_ROWS_PER_SLIDE))
+    shown = table.rows[:COHORT_DECK_MAX_ROWS]
+    count = (
+        f"nearest {len(shown)} of {len(table.rows)}"
+        if len(shown) < len(table.rows)
+        else str(len(table.rows))
+    )
+    note = COHORT_NOTE + (
+        f" Deck shows the nearest {len(shown)} of {len(table.rows)}; the dossier preview and the drop "
+        "workbook's analog sheet list every well."
+        if len(shown) < len(table.rows)
+        else ""
+    )
+    n_pages = max(1, -(-len(shown) // COHORT_ROWS_PER_SLIDE))
     # Balanced pages (17 wells -> 9 + 8, not 16 + an orphan row).
-    per_page = max(1, -(-len(table.rows) // n_pages))
+    per_page = max(1, -(-len(shown) // n_pages))
     for page in range(n_pages):
-        rows = table.rows[page * per_page : (page + 1) * per_page]
+        rows = shown[page * per_page : (page + 1) * per_page]
         _duplicate_slide(pres, source_idx=0)
         _build_table_slide(
             pres.slides[-1],
-            f"{table.curve_name} — curve wells ({len(table.rows)})"
+            f"{table.curve_name} — curve wells ({count})"
             + (f" {page + 1}/{n_pages}" if n_pages > 1 else ""),
             COHORT_HEADERS,
             rows,
             _COHORT_COL_WEIGHTS,
-            COHORT_NOTE,
+            note,
             flag=_di_pinned(rows, pin_col),
         )
+
+
+_LATERAL_COL_WEIGHTS = (1.0, 2.6, 0.55, 0.85, 0.9, 0.9, 0.95, 1.1, 1.1)
+_FUNNEL_COL_WEIGHTS = (1.2, 2.8, 0.6, 0.8)
+_CRITERIA_COL_WEIGHTS = (1.2, 2.6)
+
+
+def _lateral_flag(
+    chunk: Sequence[tuple[list[str], bool, bool]], col: int
+) -> Callable[[int, int], bool]:
+    """Red Read cell for EXTRAPOLATED or thin rows."""
+    return lambda i, j: j == col and (chunk[i][1] or chunk[i][2])
+
+
+def _add_table(
+    slide: Slide,
+    left_in: float,
+    top_in: float,
+    width_in: float,
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    weights: Sequence[float],
+) -> None:
+    gf = slide.shapes.add_table(
+        len(rows) + 1,
+        len(headers),
+        Inches(left_in),
+        Inches(top_in),
+        Inches(width_in),
+        Inches(0.25 * (len(rows) + 1)),
+    )
+    table = gf.table
+    total = sum(weights)
+    for j, w in enumerate(weights):
+        table.columns[j].width = Inches(width_in * w / total)
+    for i, cells in enumerate([headers, *rows]):
+        for j, text in enumerate(cells):
+            cell = table.cell(i, j)
+            cell.margin_left = cell.margin_right = Inches(0.04)
+            cell.margin_top = cell.margin_bottom = Inches(0.02)
+            cell.text_frame.word_wrap = True
+            run = cell.text_frame.paragraphs[0].add_run()
+            run.text = text
+            run.font.size = Pt(8)
+            if i == 0:
+                run.font.bold = True
+                cell.fill.solid()  # type: ignore[no-untyped-call]
+                cell.fill.fore_color.rgb = _HEADER_FILL
+                # the template's table style paints header text white
+                run.font.color.rgb = _HEADER_TEXT
+
+
+def _build_funnel_slide(slide: Slide, curve_name: str, funnel: FunnelInput) -> None:
+    """Buildup funnel: waterfall (left) + the selection criteria the
+    curve was saved with (right). A degraded curve (provenance not
+    captured) says so — never a fabricated funnel."""
+    _fit_title(slide, f"{curve_name} — how the cohort was built")
+    for shape in list(slide.shapes):
+        is_table = isinstance(shape, GraphicFrame) and shape.has_table
+        if is_table or isinstance(shape, Picture):
+            shape._element.getparent().remove(shape._element)
+    if funnel.degraded:
+        _add_subtitle(
+            slide,
+            "Provenance not captured for this curve (saved before buildup capture) — the funnel can't be "
+            "reconstructed; re-save the curve from the Type Curve tab to record it.",
+        )
+        return
+    width = _SLIDE_WIDTH_IN - 2 * _MARGIN_IN
+    left_w = width * 0.58
+    _add_table(
+        slide,
+        _MARGIN_IN,
+        _SUBTITLE_TOP_IN,
+        left_w,
+        ("Stage", "What it removes", "Culled", "Remaining"),
+        funnel.rows,
+        _FUNNEL_COL_WEIGHTS,
+    )
+    _add_table(
+        slide,
+        _MARGIN_IN + left_w + _PANEL_GAP_IN,
+        _SUBTITLE_TOP_IN,
+        width - left_w - _PANEL_GAP_IN,
+        ("Criterion", "Value"),
+        [list(c) for c in funnel.criteria],
+        _CRITERIA_COL_WEIGHTS,
+    )
 
 
 def _delete_slide(pres: Any, idx: int) -> None:

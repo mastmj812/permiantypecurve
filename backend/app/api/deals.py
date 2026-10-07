@@ -65,17 +65,20 @@ from app.exports.blueox import (
     monthly_volumes_from_rates,
     ratio_mode_streams,
 )
-from app.exports.buildup import write_buildup_sheet
+from app.exports.buildup import funnel_tables, write_buildup_sheet
 from app.exports.dossier import (
     CohortTableInput,
     ComparisonSlideInput,
     CurveSlideInput,
+    FunnelInput,
     ScenarioSlideInput,
     build_deal_dossier_pptx,
 )
 from app.exports.dossier_summary import (
     COHORT_HEADERS,
     COHORT_NOTE,
+    LATERAL_HEADERS,
+    LATERAL_NOTE,
     SUMMARY_HEADERS,
     SUMMARY_NOTE,
     SUMMARY_STREAMS,
@@ -85,6 +88,8 @@ from app.exports.dossier_summary import (
     build_zone_summary,
     cohort_qc,
     cohort_rows,
+    lateral_cells,
+    lateral_rows,
     parse_linestring_wkt,
     pinned_params,
     summary_cells,
@@ -1631,9 +1636,14 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
 
     novi: dict[str, NoviComparisonZone] = {}
     novi_error: str | None = None
+    scenario_names: dict[str, str] = {}
     if narvi_by_zone:
         try:
             with contextmanager(get_warehouse_session)() as wh:
+                scenario_names = {
+                    f"{sc.deal_id}/{sc.scenario_id}": sc.name or sc.scenario_id
+                    for sc in fetch_narvi_scenarios(wh)
+                }
                 vintage = fetch_intel_vintage(wh)
                 for zone_name, tc in curves.items():
                     novi[zone_name] = _collect_novi_comparison(
@@ -1700,6 +1710,7 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
                     parents_below=tuple(wr.parent_benches_below or ()) if wr else (),
                     parents_above=tuple(wr.parent_benches_above or ()) if wr else (),
                     codev_benches=tuple(wr.codev_benches_other or ()) if wr else (),
+                    subbasin=wr.subbasin if wr else None,
                 )
             )
         cohorts[tc.id] = built
@@ -1717,6 +1728,7 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
                 completed_lateral_ft=w.completed_lateral_ft,
                 target_tvd_ft=w.target_tvd_ft,
                 legs_lonlat=tuple(w.legs_lonlat),
+                scenario_name=scenario_names.get(f"{w.deal_id}/{w.scenario_id}"),
             )
             for w in narvi_by_zone.get(zone_name, [])
             if (w.category or "").lower() != "pdp"
@@ -1782,11 +1794,24 @@ class DossierZoneOut(BaseModel):
     cohort: list[DossierCohortWellOut]
 
 
+class DossierFunnelOut(BaseModel):
+    degraded: bool  # provenance not captured (old save) — no funnel shown
+    rows: list[list[str]]  # stage, description, culled, remaining
+    criteria: list[list[str]]  # [label, value]
+
+
 class DossierCurveTableOut(BaseModel):
     type_curve_id: uuid.UUID
     curve_name: str
     zones: list[str]  # the zones taking this curve
     rows: list[list[str]]  # COHORT_HEADERS cells, nearest the sticks first
+    funnel: DossierFunnelOut | None = None
+
+
+class DossierLateralRowOut(BaseModel):
+    cells: list[str]  # LATERAL_HEADERS
+    extrapolated: bool
+    thin: bool
 
 
 class DossierZonesResponse(BaseModel):
@@ -1796,23 +1821,44 @@ class DossierZonesResponse(BaseModel):
     cohort_headers: list[str] = []
     cohort_note: str = ""
     curve_tables: list[DossierCurveTableOut] = []
+    lateral_headers: list[str] = []
+    lateral_note: str = ""
+    lateral_rows: list[DossierLateralRowOut] = []
 
 
-def curve_tables(zones: list[ZoneSummary]) -> list[DossierCurveTableOut]:
-    """One cohort table per unique curve, in zone order; distances run to
-    the nearest stick of ANY zone taking that curve."""
+def lateral_out(zones: list[ZoneSummary]) -> list[DossierLateralRowOut]:
+    return [
+        DossierLateralRowOut(cells=list(lateral_cells(r)), extrapolated=r.extrapolated, thin=r.thin)
+        for z in zones
+        for r in lateral_rows(z)
+    ]
+
+
+def curve_tables(session: Session, zones: list[ZoneSummary]) -> list[DossierCurveTableOut]:
+    """One cohort table + buildup funnel per unique curve, in zone order;
+    distances run to the nearest stick of ANY zone taking that curve."""
     by_tc: dict[str, list[ZoneSummary]] = {}
     for z in zones:
         by_tc.setdefault(z.type_curve_id, []).append(z)
-    return [
-        DossierCurveTableOut(
-            type_curve_id=uuid.UUID(tc_id),
-            curve_name=zs[0].curve_name,
-            zones=[z.zone_name for z in zs],
-            rows=[list(r) for r in cohort_rows(zs[0].cohort, [s for z in zs for s in z.sticks])],
+    out = []
+    for tc_id, zs in by_tc.items():
+        tc = session.get(TypeCurve, uuid.UUID(tc_id))
+        funnel = None
+        if tc is not None:
+            degraded, rows, criteria = funnel_tables(tc)
+            funnel = DossierFunnelOut(
+                degraded=degraded, rows=rows, criteria=[[k, v] for k, v in criteria]
+            )
+        out.append(
+            DossierCurveTableOut(
+                type_curve_id=uuid.UUID(tc_id),
+                curve_name=zs[0].curve_name,
+                zones=[z.zone_name for z in zs],
+                rows=[list(r) for r in cohort_rows(zs[0].cohort, [s for z in zs for s in z.sticks])],
+                funnel=funnel,
+            )
         )
-        for tc_id, zs in by_tc.items()
-    ]
+    return out
 
 
 def _zone_out(z: ZoneSummary) -> DossierZoneOut:
@@ -1876,7 +1922,10 @@ def get_dossier_zones(
         zones=[_zone_out(z) for z in zones],
         cohort_headers=list(COHORT_HEADERS),
         cohort_note=COHORT_NOTE,
-        curve_tables=curve_tables(zones),
+        curve_tables=curve_tables(session, zones),
+        lateral_headers=list(LATERAL_HEADERS),
+        lateral_note=LATERAL_NOTE,
+        lateral_rows=lateral_out(zones),
     )
 
 
@@ -2234,9 +2283,20 @@ async def export_deal_dossier(
             overview=overview,
             supports=supports,
             cohort_tables={
-                t.type_curve_id: CohortTableInput(curve_name=t.curve_name, rows=t.rows)
-                for t in curve_tables(zone_summaries)
+                t.type_curve_id: CohortTableInput(
+                    curve_name=t.curve_name,
+                    rows=t.rows,
+                    funnel=None
+                    if t.funnel is None
+                    else FunnelInput(
+                        degraded=t.funnel.degraded,
+                        rows=t.funnel.rows,
+                        criteria=[(k, v) for k, v in t.funnel.criteria],
+                    ),
+                )
+                for t in curve_tables(session, zone_summaries)
             },
+            lateral=[(r.cells, r.extrapolated, r.thin) for r in lateral_out(zone_summaries)],
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
