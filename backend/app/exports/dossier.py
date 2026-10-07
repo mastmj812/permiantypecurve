@@ -2,7 +2,8 @@
 
 Structure: a zone summary slide first (which planned sticks take which
 type curve, the cohort behind it, TC vs Novi — built server-side from
-``dossier_summary``), the curve-assignment overview map, one curve
+``dossier_summary``), lateral scaling, one type-curve split map per
+formation whose proposed wells take more than one curve, one curve
 support slide per zone (sticks + the wells that build its curve, wells
 coloured by anduin oil EUR/ft | zoom on the sticks), then one slide per
 narvi scenario (plan-view map left, gunbarrel
@@ -151,7 +152,7 @@ def build_deal_dossier_pptx(
     curves: list[CurveSlideInput],
     comparisons: list[ComparisonSlideInput] | None = None,
     summary: list[ZoneSummary] | None = None,
-    overview: ComparisonSlideInput | None = None,
+    splits: list[ComparisonSlideInput] | None = None,
     supports: list[ScenarioSlideInput] | None = None,
     cohort_tables: dict[UUID, CohortTableInput] | None = None,
     lateral: list[tuple[list[str], bool, bool]] | None = None,
@@ -159,8 +160,8 @@ def build_deal_dossier_pptx(
     """Assemble the dossier deck from the brand template.
 
     Slide order: the zone summary (when given; paginated), lateral
-    scaling (when given; paginated), the
-    curve-assignment overview, the zone support slides, then
+    scaling (when given; paginated), the type-curve split maps (one
+    per formation taking > 1 curve), the zone support slides, then
     scenarios (one each), then per curve its well table (when given)
     and the oil / gas /
     water stream slides, then one TC-vs-Novi comparison slide per zone
@@ -204,10 +205,10 @@ def build_deal_dossier_pptx(
             flag=_lateral_flag(chunk, read_col),
         )
 
-    if overview is not None:
+    for sp in splits or []:
         # Full-width single figure: same layout as a comparison slide.
         _duplicate_slide(pres, source_idx=0)
-        _build_comparison_slide(pres.slides[-1], overview)
+        _build_comparison_slide(pres.slides[-1], sp)
     # Support slides: support map left, stick zoom right — the scenario
     # slide's two-panel layout.
     for sc in [*(supports or []), *scenarios]:

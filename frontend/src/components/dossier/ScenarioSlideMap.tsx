@@ -20,7 +20,6 @@ import {
   registerPmtilesProtocol,
 } from "../slide/mapShared";
 import { useNearViewport } from "../slide/useNearViewport";
-import { type LegendSpec, composeSnapshot } from "./mapLegend";
 
 interface Props {
   aoiGeojson: string | null;
@@ -33,22 +32,6 @@ interface Props {
   // dossier sets this — a dozen scenario sections of live maps blow the
   // browser's WebGL-context cap and OOM the tab.
   lazy?: boolean;
-  // Per-well leg color override. Default is formation coloring; the
-  // dossier's curve-assignment views pass a zone→curve palette instead.
-  // Load-time input like the wells themselves — changing it after
-  // mount does not restyle a live map.
-  colorForWell?: (w: NarviWellGeo) => string;
-  // Perpendicular screen-px offset per well (MapLibre line-offset).
-  // Vertically-stacked benches often share IDENTICAL plan-view
-  // laterals (Novi stacks e.g. BS2_S under BS3_C on one stick), so the
-  // later-drawn zone paints over the other — the assignment overview
-  // fans them apart a few px per zone so every color stays visible.
-  // Cosmetic: positions shift by the offset at every zoom; leave unset
-  // on maps meant to be spatially faithful.
-  offsetForWell?: (w: NarviWellGeo) => number;
-  // Legend burned into the snapshot (the deck sees only the snapshot),
-  // e.g. the curve-assignment overview's zone palette.
-  legend?: LegendSpec;
 }
 
 const AOI_SOURCE = "dossier-aoi";
@@ -88,9 +71,6 @@ export function ScenarioSlideMap({
   width,
   height,
   lazy = false,
-  colorForWell,
-  offsetForWell,
-  legend,
 }: Props) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -132,9 +112,8 @@ export function ScenarioSlideMap({
             type: "Feature",
             geometry: legs,
             properties: {
-              color: colorForWell ? colorForWell(w) : colorForFormation(w.formation),
+              color: colorForFormation(w.formation),
               category: w.category,
-              offset: offsetForWell ? offsetForWell(w) : 0,
             },
           });
         }
@@ -204,9 +183,6 @@ export function ScenarioSlideMap({
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": ["get", "color"],
-          // Screen-px fan-out for coincident stacked-bench laterals
-          // (0 everywhere except the curve-assignment overview).
-          "line-offset": ["get", "offset"],
           "line-width": legWidth,
           "line-opacity": 0.45,
         },
@@ -219,7 +195,6 @@ export function ScenarioSlideMap({
         layout: { "line-cap": "butt", "line-join": "round" },
         paint: {
           "line-color": ["get", "color"],
-          "line-offset": ["get", "offset"],
           "line-width": legWidth,
           "line-opacity": 0.95,
           "line-dasharray": [2, 1.2],
@@ -248,7 +223,7 @@ export function ScenarioSlideMap({
         }
         const refresh = () => {
           try {
-            setSnapshot(composeSnapshot(map.getCanvas(), width, legend ?? null));
+            setSnapshot(map.getCanvas().toDataURL("image/png"));
           } catch (e) {
             console.error("scenario map snapshot failed", e);
           }

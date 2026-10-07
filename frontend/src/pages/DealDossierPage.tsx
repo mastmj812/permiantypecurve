@@ -31,10 +31,9 @@ import {
 import { type Stream, type WellCurvesResponse, fetchWellCurves } from "../api/forecasts";
 import {
   type NarviScenarioDetail,
-  type NarviWellGeo,
   fetchNarviScenarioDetail,
 } from "../api/narvi";
-import { UNASSIGNED_COLOR, resolveZone, zoneColor } from "../map/blueoxZones";
+import { zoneColor } from "../map/blueoxZones";
 import {
   type TypeCurveRow,
   type TypeCurveWellStat,
@@ -48,6 +47,7 @@ import { ShapefileSelect } from "../components/dossier/ShapefileSelect";
 import { ScenarioGunBarrel } from "../components/dossier/ScenarioGunBarrel";
 import { ScenarioSlideMap } from "../components/dossier/ScenarioSlideMap";
 import { ZoneSupportMap } from "../components/dossier/ZoneSupportMap";
+import { CurveSplitMap, type SplitGroup } from "../components/dossier/CurveSplitMap";
 import { NO_FIT_COLOR } from "../components/dossier/mapLegend";
 import { capturePanel } from "../components/slide/captureSlideComposite";
 import { SlideCumChart } from "../components/slide/SlideCumChart";
@@ -199,57 +199,43 @@ export function DealDossierPage({ dealId }: Props) {
     return [...new Set(cfg.zones.map((z) => z.type_curve_id))];
   }, [cfg]);
 
-  // Curve-assignment overview: every scenario's AOI + wells on ONE map,
-  // each planned well colored by the zone (=> type curve) that captures
-  // it under the SAVED config — the direct answer to "which curve is
-  // each well getting" on a deal whose DSUs sit 20+ miles apart. PDP
-  // producers are context, not assigned, and paint gray like uncovered
-  // benches. Colors key on object identity (well names can repeat only
-  // for PDP api10s shared across scenarios — same color either way).
-  const overview = useMemo(() => {
-    if (!scenarios || !cfg || cfg.zones.length === 0) return null;
-    const wells: NarviWellGeo[] = [];
-    const colors = new Map<NarviWellGeo, string>();
-    const offsets = new Map<NarviWellGeo, number>();
-    const geoms: unknown[] = [];
-    // Stacked benches often share IDENTICAL plan-view laterals (Novi
-    // puts e.g. BS2_S under BS3_C on one stick), so without a fan-out
-    // the later-drawn zone paints over the other and its color
-    // disappears from the overview (toucan: 4 red BS2_S sticks hidden
-    // under 4 blue BS3_C). Offset each zone's legs a few screen px
-    // perpendicular so every assignment stays visible.
-    const zoneOffsetPx = (index: number) =>
-      (index - (cfg.zones.length - 1) / 2) * 3;
-    for (const sd of scenarios) {
-      if (sd.aoi_geojson) {
-        try {
-          geoms.push(JSON.parse(sd.aoi_geojson));
-        } catch {
-          // skip an unparseable AOI; wells still render
-        }
-      }
-      const ref = { deal_id: sd.deal_id, scenario_id: sd.scenario_id };
-      for (const w of sd.wells) {
-        wells.push(w);
-        const rz =
-          w.category === "PDP" ? null : resolveZone(w.formation, ref, cfg.zones);
-        colors.set(w, rz ? zoneColor(rz.index) : UNASSIGNED_COLOR);
-        offsets.set(w, rz ? zoneOffsetPx(rz.index) : 0);
-      }
+  // Type-curve splits: a formation whose proposed wells take MORE THAN
+  // ONE curve (bro_time WCB_2 West / East). One map each — every curve in
+  // its zone colour, proposed wells dashed, the wells that built it solid.
+  // Formations with a single curve get none (it would add nothing). Index
+  // order defines the x{i}_map capture names.
+  const splits = useMemo(() => {
+    if (!zoneSummary) return [] as Array<{ bench: string; groups: SplitGroup[]; aois: string[] }>;
+    const aoiByRef = new Map<string, string>();
+    for (const sd of scenarios ?? []) {
+      if (sd.aoi_geojson) aoiByRef.set(`${sd.deal_id}/${sd.scenario_id}`, sd.aoi_geojson);
     }
-    return {
-      wells,
-      colors,
-      offsets,
-      aoi: geoms.length
-        ? JSON.stringify({ type: "GeometryCollection", geometries: geoms })
-        : null,
-    };
-  }, [scenarios, cfg]);
+    const benches = [...new Set(zoneSummary.zones.flatMap((z) => z.benches))];
+    const out: Array<{ bench: string; groups: SplitGroup[]; aois: string[] }> = [];
+    for (const bench of benches) {
+      const zs = zoneSummary.zones
+        .map((z, i) => ({ z, i }))
+        .filter(({ z }) => z.benches.includes(bench));
+      if (new Set(zs.map(({ z }) => z.type_curve_id)).size < 2) continue;
+      const groups = zs.map(({ z, i }) => ({
+        label: `${z.zone_name} — ${z.curve_name}`,
+        color: zoneColor(i),
+        sticks: z.sticks.filter((st) => st.formation === bench),
+        cohort: z.cohort,
+      }));
+      const refs = new Set(groups.flatMap((g) => g.sticks.map((st) => st.scenario_ref)));
+      out.push({
+        bench,
+        groups,
+        aois: [...refs].map((r) => aoiByRef.get(r)).filter((a): a is string => !!a),
+      });
+    }
+    return out;
+  }, [zoneSummary, scenarios]);
 
   // Curve support slides: one per zone with planned sticks; index
   // order defines the z{i}_map / z{i}_zoom capture names. Colour = the
-  // zone's index in the saved config (same palette as the overview).
+  // zone's index in the saved config (same palette as the split maps).
   const supportZones = useMemo(() => {
     if (!zoneSummary || !cfg) return [] as Array<{ zone: DossierZone; color: string; aois: string[] }>;
     const aoiByRef = new Map<string, string>();
@@ -338,13 +324,7 @@ export function DealDossierPage({ dealId }: Props) {
           subtitle: scenarioSubtitle(sd),
         })),
         curves: curveIds.map((id) => ({ type_curve_id: id })),
-        overview: overview
-          ? {
-              title: "Curve assignment overview",
-              subtitle:
-                "every selected scenario — planned wells coloured by the type curve their zone assigns; gray = PDP context or uncaptured",
-            }
-          : null,
+        splits: splits.map(splitTitles),
         supports: supportZones.map(({ zone }) => supportTitles(zone)),
         comparisons: comparisonZones.map((z) => ({
           title: `${z.zone_name} — Type Curve vs Novi ML (n=${z.n_sticks}: ${z.n_pud} PUD / ${z.n_res} RES)`,
@@ -378,7 +358,7 @@ export function DealDossierPage({ dealId }: Props) {
         await ensureMapSnapshot(panel);
         files[name] = await capturePanel(document, panel, 2);
       };
-      if (overview) await grab("overview_map");
+      for (let i = 0; i < splits.length; i++) await grab(`x${i}_map`);
       for (let i = 0; i < supportZones.length; i++) {
         await grab(`z${i}_map`);
         await grab(`z${i}_zoom`);
@@ -468,6 +448,19 @@ export function DealDossierPage({ dealId }: Props) {
       <ZoneSummarySection summary={zoneSummary} error={zoneSummaryError} />
       {zoneSummary && zoneSummary.lateral_rows.length > 0 && <LateralSection summary={zoneSummary} />}
 
+      {splits.map((sp, i) => {
+        const t = splitTitles(sp);
+        return (
+          <section key={sp.bench} style={{ marginTop: 20 }}>
+            <h1 className="slide-title">{t.title}</h1>
+            <p className="muted" style={{ margin: "2px 0 6px", fontSize: 15 }}>{t.subtitle}</p>
+            <div className="slide-panel" data-dossier-panel={`x${i}_map`}>
+              <CurveSplitMap groups={sp.groups} aois={sp.aois} width={1160} height={520} lazy />
+            </div>
+          </section>
+        );
+      })}
+
       {supportZones.map(({ zone, color, aois }, i) => {
         const t = supportTitles(zone);
         return (
@@ -494,60 +487,6 @@ export function DealDossierPage({ dealId }: Props) {
           </section>
         );
       })}
-
-      {overview && (
-        <section style={{ marginTop: 16 }}>
-          <h1 className="slide-title">Curve assignment overview</h1>
-          <p className="muted" style={{ margin: "2px 0 6px", fontSize: 15 }}>
-            every selected scenario on one map — planned wells colored by
-            the type curve their zone assigns under the saved config; gray
-            = PDP context or a well no zone captures
-          </p>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", margin: "0 0 6px", fontSize: 14 }}>
-            {cfg.zones.map((z, i) => (
-              <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-                <span style={{
-                  width: 12, height: 12, borderRadius: 2, display: "inline-block",
-                  background: zoneColor(i),
-                }} />
-                {z.zone_name ?? z.type_curve_id.slice(0, 8)}
-                {!!z.scenario_scope?.length && (
-                  <span className="muted">({z.scenario_scope.length} DSU{z.scenario_scope.length === 1 ? "" : "s"})</span>
-                )}
-              </span>
-            ))}
-            <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-              <span style={{
-                width: 12, height: 12, borderRadius: 2, display: "inline-block",
-                background: UNASSIGNED_COLOR,
-              }} />
-              <span className="muted">PDP / unassigned</span>
-            </span>
-          </div>
-          <div className="slide-panel" data-dossier-panel="overview_map">
-            <ScenarioSlideMap
-              aoiGeojson={overview.aoi}
-              wells={overview.wells}
-              width={1160}
-              height={520}
-              lazy
-              colorForWell={(w) => overview.colors.get(w) ?? UNASSIGNED_COLOR}
-              offsetForWell={(w) => overview.offsets.get(w) ?? 0}
-              legend={{
-                rows: [
-                  ...cfg.zones.map((z, i) => ({
-                    color: zoneColor(i),
-                    label: z.zone_name ?? z.type_curve_id.slice(0, 8),
-                    kind: "dash" as const,
-                  })),
-                  { color: UNASSIGNED_COLOR, label: "proposed, no zone captures it", kind: "dash" as const },
-                  { color: UNASSIGNED_COLOR, label: "PDP (existing producer)", kind: "line" as const },
-                ],
-              }}
-            />
-          </div>
-        </section>
-      )}
 
       {scenarios?.map((sd, i) => (
         <section key={`${sd.deal_id}/${sd.scenario_id}`} style={{ marginTop: 20 }}>
@@ -1134,4 +1073,15 @@ function FunnelTables({ funnel }: { funnel: DossierFunnel }) {
       </div>
     </details>
   );
+}
+
+// Split slide title + subtitle (also the manifest strings).
+function splitTitles(sp: { bench: string; groups: SplitGroup[] }): { title: string; subtitle: string } {
+  return {
+    title: `${sp.bench}: ${sp.groups.length} type curves`,
+    subtitle:
+      sp.groups
+        .map((g) => `${g.label} (${g.sticks.length} proposed, ${g.cohort.length} curve wells)`)
+        .join(" · ") + " — proposed wells dashed, curve wells solid, same colour per curve",
+  };
 }
