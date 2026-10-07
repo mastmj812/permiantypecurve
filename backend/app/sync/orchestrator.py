@@ -7,7 +7,7 @@ list we just loaded.
 
 Sync flow:
     1. ``fetch_well_headers`` from ``curated.wells_enriched`` (Permian-
-       wide, vintage 2010+ horizontals by default), stream into the
+       wide, every horizontal of any vintage by default), stream into the
        local ``wells`` table via ``upsert_well_headers``.
     2. ``fetch_production_for_api10s`` from ``curated.production`` for
        all just-loaded api10s, stream into ``production_monthly``.
@@ -68,8 +68,11 @@ log = get_logger("sync.orchestrator")
 DEFAULT_BASIN: str = "Permian"
 DEFAULT_COUNTY: str | None = None
 DEFAULT_COUNTIES: tuple[str, ...] = ()
-DEFAULT_FIRST_PROD_AFTER: date = date(2010, 1, 1)
-DEFAULT_FIRST_COMPLETION_AFTER: date = date(2010, 1, 1)
+# No vintage floor (removed 2026-10-07 — the 2010-01-01 floor hid ~2,100
+# pre-2010 horizontals). ``fetch_well_headers`` still accepts a floor for
+# ad-hoc / test use; the sync passes None.
+DEFAULT_FIRST_PROD_AFTER: date | None = None
+DEFAULT_FIRST_COMPLETION_AFTER: date | None = None
 DEFAULT_MIN_LATERAL_FT: float | None = None
 DEFAULT_HORIZONTAL_ONLY: bool = True
 
@@ -157,9 +160,7 @@ def _production_reconcile_targets(
     (0 warehouse rows) is a target too: its whole local history is
     retracted. Pure function so the decision rule is unit-testable.
     """
-    return sorted(
-        a for a, n in local_counts.items() if fetched_counts.get(a, 0) != n
-    )
+    return sorted(a for a, n in local_counts.items() if fetched_counts.get(a, 0) != n)
 
 
 def _reconcile_production_deletions(

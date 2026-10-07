@@ -16,8 +16,8 @@ from app.warehouse_client.base import WellHeader
 
 # Mapping from Novi's well_status vocabulary (as it appears in
 # curated.wells.well_status) to the app's existing WellStatus enum.
-# Derived empirically from the full fetch scope (horizontal, 2010+
-# completion or NULL-completion non-permit; 2026-08 census: Active
+# Derived empirically from the full fetch scope (horizontal, any
+# completion date or NULL-completion non-permit; 2026-08 census: Active
 # 57,805 / Spud 2,260 / Inactive 1,974 / P&A 1,569 / Completed 1,351 /
 # DUC 654 / Abandoned 601 — Spud/DUC are almost entirely the
 # NULL-completion wellbores). Any value not in this map collapses
@@ -248,25 +248,28 @@ _HEADER_COLUMNS_SQL = f"""
 def fetch_well_headers(
     session: Session,
     *,
-    first_completion_after: date | None = date(2010, 1, 1),
+    first_completion_after: date | None = None,
     horizontal_only: bool = True,
 ) -> Iterator[WellHeader]:
     """Stream well headers matching the scope filters from
     ``curated.wells_enriched``.
 
-    Defaults match the type-curve app's canonical scope: first completion
-    2010-01-01 onward, horizontal only. Both are overridable for testing
-    or future scope changes; passing ``first_completion_after=None`` or
-    ``horizontal_only=False`` widens the result.
+    Defaults match the type-curve app's canonical scope: every horizontal
+    wellbore in the warehouse, any vintage. ``first_completion_after``
+    is an optional floor (the pre-2026-10 default was 2010-01-01; Michael
+    removed it 2026-10-07 — it hid ~2,100 pre-2010 horizontals, 800 of
+    them Active, that engineers searched for by api10 and could not
+    find). ``horizontal_only=False`` widens to verticals.
 
-    The completion-date floor admits one extra class: horizontals that
-    carry NO completion date at all (``first_completion_date IS NULL`` —
-    P&A / Abandoned / Spud / DUC / etc.). These are real drilled wellbores
-    that narvi already shows, so anduin surfaces them too. Permits
-    (``well_status`` ``Permit Approved`` / ``Permit Cancelled``) are the
-    one exclusion — they are phantom locations with no physical wellbore.
-    NULL-completion wells map to non-PDP statuses, so they never appear on
-    the default PDP map view; they show only when their status facet is on.
+    Horizontals that carry NO completion date at all
+    (``first_completion_date IS NULL`` — P&A / Abandoned / Spud / DUC /
+    etc.) are admitted: real drilled wellbores that narvi already shows,
+    so anduin surfaces them too. Permits (``well_status`` ``Permit
+    Approved`` / ``Permit Cancelled``) are the one exclusion — they are
+    phantom locations with no physical wellbore. The floor, when given,
+    applies only to wells that HAVE a completion date. NULL-completion
+    wells map to non-PDP statuses, so they never appear on the default
+    PDP map view; they show only when their status facet is on.
 
     Permian scope is enforced upstream at the engineering_db layer
     (raw_enverus is filtered ``envregion='PERMIAN'`` at ingest, Novi's
@@ -277,16 +280,19 @@ def fetch_well_headers(
 
     Caller is responsible for session lifecycle.
     """
-    where_clauses: list[str] = ["TRUE"]
+    # A real drilled wellbore: it has a completion date, OR it has none
+    # but is not a permit (phantom location, no wellbore). Unconditional
+    # — this is the universe regardless of any vintage floor.
+    where_clauses: list[str] = [
+        "(we.first_completion_date IS NOT NULL OR COALESCE(we.well_status, '') NOT ILIKE 'Permit%')"
+    ]
     params: dict[str, object] = {}
     if first_completion_after is not None:
-        # Vintage floor for wells that HAVE a completion date, OR a real
-        # drilled wellbore with no completion date at all — but never a
-        # permit (phantom location, no wellbore). See the docstring.
+        # Optional vintage floor for wells that HAVE a completion date;
+        # NULL-completion wellbores pass through it. See the docstring.
         where_clauses.append(
             "(we.first_completion_date >= :first_completion_after"
-            " OR (we.first_completion_date IS NULL"
-            " AND COALESCE(we.well_status, '') NOT ILIKE 'Permit%'))"
+            " OR we.first_completion_date IS NULL)"
         )
         params["first_completion_after"] = first_completion_after
     if horizontal_only:
