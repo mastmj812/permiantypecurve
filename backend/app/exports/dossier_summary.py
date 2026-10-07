@@ -17,7 +17,8 @@ Conventions (stated on the slide):
   * EUR per 1,000 ft of completed lateral, raw 50-yr technical integral
     (no economic limit).
   * Novi = the zone's Novi comparison series: per-1,000-ft median of the
-    representative sticks, 600 x 30-day periods (~49.3 yr), summed. A
+    representative sticks, 600 x 30-day periods (~49.3 yr), trapezoid-
+    integrated like the comparison figure's cum panel. A
     median-series EUR, not a P50 and not erebor's cohort mean.
   * Di is NOMINAL per year with the 1-yr effective decline beside it.
   * The TC/Novi gap flag fires beyond 1.5x either way — the deal-intake
@@ -79,6 +80,36 @@ class ZoneStick:
 
 
 @dataclass(frozen=True)
+class CohortWell:
+    """One well that builds the zone's curve, for the support map: its
+    lateral (wellstick, lon/lat) and anduin's own resolved oil EUR per
+    ft (override -> global, raw 50-yr, UNRISKED — the /well-stats
+    number the probit dots use)."""
+
+    api10: str
+    name: str | None
+    lateral_ft: float | None
+    oil_eur_per_ft: float | None
+    coords: tuple[tuple[float, float], ...] = ()
+
+
+def parse_linestring_wkt(wkt: str | None) -> tuple[tuple[float, float], ...]:
+    """``LINESTRING(x y, x y, ...)`` -> ((x, y), ...); () when absent or
+    not a plain linestring (the wellstick column is always one)."""
+    if not wkt:
+        return ()
+    head, _, body = wkt.partition("(")
+    if head.strip().upper() != "LINESTRING" or not body.endswith(")"):
+        return ()
+    out = []
+    for pair in body[:-1].split(","):
+        parts = pair.split()
+        if len(parts) >= 2:
+            out.append((float(parts[0]), float(parts[1])))
+    return tuple(out)
+
+
+@dataclass(frozen=True)
 class ZoneSummary:
     zone_name: str
     type_curve_id: str
@@ -96,6 +127,7 @@ class ZoneSummary:
     novi_low_n: bool
     novi_stale: bool
     novi_error: str | None = None
+    cohort: tuple[CohortWell, ...] = ()
 
     @property
     def n_sticks(self) -> int:
@@ -139,8 +171,12 @@ def _num(v: Any) -> float | None:
 
 
 def novi_eur_per_1000ft(period_volumes: Sequence[float]) -> float | None:
-    """Sum of the zone's Novi median period volumes (per 1,000 ft)."""
-    total = sum(float(v) for v in period_volumes)
+    """EUR of the zone's Novi median series (per 1,000 ft): trapezoid over
+    the 30-day periods, anchored at t=0, last period held flat — exactly
+    the comparison figure's ``cumFrom`` so the summary and the figure's
+    end-point label read the same number."""
+    v = [float(x) if math.isfinite(float(x)) else 0.0 for x in period_volumes]
+    total = sum((a + (v[i + 1] if i + 1 < len(v) else a)) / 2.0 for i, a in enumerate(v))
     return total if total > 0 else None
 
 
@@ -242,6 +278,7 @@ def build_zone_summary(
     novi_stale: bool,
     qc: CohortQC,
     novi_error: str | None = None,
+    cohort: Sequence[CohortWell] = (),
 ) -> ZoneSummary:
     streams = {
         s: stream_summary(tc, s, novi_eur_per_1000ft((novi_volumes or {}).get(s, ())))
@@ -265,6 +302,7 @@ def build_zone_summary(
         novi_low_n=novi_low_n,
         novi_stale=novi_stale,
         novi_error=novi_error,
+        cohort=tuple(cohort),
     )
 
 
@@ -355,7 +393,7 @@ def summary_cells(z: ZoneSummary) -> tuple[str, ...]:
 SUMMARY_NOTE = (
     "Per 1,000 ft of completed lateral. TC = published P50 fit, risked as delivered; EUR = raw 50-yr technical "
     "integral (no economic limit). Novi = median of each zone's representative sticks (per-1,000-ft median "
-    "series, 600 x 30-day periods) — not a P50. Di = nominal /yr with 1-yr effective in brackets. "
+    "series, 600 x 30-day periods, trapezoid as on the comparison figure) — not a P50. Di = nominal /yr with 1-yr effective in brackets. "
     f"⚑ = TC and Novi more than {GAP_FLAG_RATIO:g}x apart (flag, not a gate). Sticks = planned narvi wells "
     "routed to the zone; PDP context excluded. No economics."
 )

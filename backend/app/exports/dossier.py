@@ -2,7 +2,10 @@
 
 Structure: a zone summary slide first (which planned sticks take which
 type curve, the cohort behind it, TC vs Novi — built server-side from
-``dossier_summary``), then one slide per narvi scenario (plan-view map left, gunbarrel
+``dossier_summary``), the curve-assignment overview map, one curve
+support slide per zone (sticks + the wells that build its curve, wells
+coloured by anduin oil EUR/ft | zoom on the sticks), then one slide per
+narvi scenario (plan-view map left, gunbarrel
 right, well-count subtitle), then the deal's type curves rendered
 exactly like the existing per-curve slide export (param table + rate /
 cum charts + cohort map, one slide per stream). The wells-table slide
@@ -39,6 +42,7 @@ from app.exports.pptx_builder import (
     _duplicate_slide,
     _fill_param_table,
     _find_table,
+    _find_title_shape,
     _place_chart_images,
     _set_title_text,
 )
@@ -63,13 +67,22 @@ SCENARIO_PANEL_PX = (
 
 # TC-vs-Novi comparison slide: one full-width figure (the 6-panel
 # rate/cum grid) under the title + subtitle.
-_COMPARISON_TOP_IN = 1.6
 _COMPARISON_HEIGHT_IN = 5.5
 _COMPARISON_WIDTH_IN = _SLIDE_WIDTH_IN - 2 * _MARGIN_IN
 COMPARISON_PANEL_PX = (
     round(_COMPARISON_WIDTH_IN * 96),
     round(_COMPARISON_HEIGHT_IN * 96),
 )
+# Placed size: the capture above at its own aspect, bottom kept above the
+# template's footer band (top 1.75" + 5.05" = 6.8").
+_COMPARISON_PLACED_HEIGHT_IN = 5.05
+# Title sizes for long titles: the template's title box fits ~38
+# characters on one line; longer titles wrapped into the subtitle line.
+_TITLE_STEPS = ((38, None), (50, 30), (64, 24))
+_TITLE_MIN_PT = 20
+# Subtitles longer than one 11pt line wrap at 9pt (two lines fit above
+# the panels).
+_SUBTITLE_ONE_LINE_CHARS = 165
 
 
 @dataclass(frozen=True)
@@ -108,16 +121,19 @@ def build_deal_dossier_pptx(
     curves: list[CurveSlideInput],
     comparisons: list[ComparisonSlideInput] | None = None,
     summary: list[ZoneSummary] | None = None,
+    overview: ComparisonSlideInput | None = None,
+    supports: list[ScenarioSlideInput] | None = None,
 ) -> bytes:
     """Assemble the dossier deck from the brand template.
 
-    Slide order: the zone summary (when given; paginated), then
+    Slide order: the zone summary (when given; paginated), the
+    curve-assignment overview, the zone support slides, then
     scenarios (one each), then per curve the oil / gas /
     water stream slides, then one TC-vs-Novi comparison slide per zone
     that has one. Raises ValueError on an unknown type curve or a
     missing stream panel.
     """
-    if not scenarios and not curves and not summary:
+    if not scenarios and not curves and not summary and not supports:
         raise ValueError("dossier needs at least one scenario or curve")
 
     pres = Presentation(str(TEMPLATE_PATH))
@@ -138,7 +154,13 @@ def build_deal_dossier_pptx(
             + (f" ({page // SUMMARY_ROWS_PER_SLIDE + 1}/{n_pages})" if n_pages > 1 else ""),
         )
 
-    for sc in scenarios:
+    if overview is not None:
+        # Full-width single figure: same layout as a comparison slide.
+        _duplicate_slide(pres, source_idx=0)
+        _build_comparison_slide(pres.slides[-1], overview)
+    # Support slides: support map left, stick zoom right — the scenario
+    # slide's two-panel layout.
+    for sc in [*(supports or []), *scenarios]:
         _duplicate_slide(pres, source_idx=0)
         _build_scenario_slide(pres.slides[-1], sc)
 
@@ -184,28 +206,13 @@ def _build_scenario_slide(slide: Slide, sc: ScenarioSlideInput) -> None:
     """Turn a duplicated stream-template slide into a scenario slide:
     keep the title, strip the param table and template picture, place
     map (left) + gunbarrel (right) with a subtitle line between."""
-    _set_title_text(slide, sc.title)
+    _fit_title(slide, sc.title)
     for shape in list(slide.shapes):
         is_table = isinstance(shape, GraphicFrame) and shape.has_table
         if is_table or isinstance(shape, Picture):
             shape._element.getparent().remove(shape._element)
 
-    if sc.subtitle:
-        tb = slide.shapes.add_textbox(
-            Inches(_MARGIN_IN),
-            Inches(_SUBTITLE_TOP_IN),
-            Inches(_SLIDE_WIDTH_IN - 2 * _MARGIN_IN),
-            Inches(0.3),
-        )
-        tf = tb.text_frame
-        tf.margin_left = 0
-        tf.margin_right = 0
-        tf.margin_top = 0
-        tf.margin_bottom = 0
-        tf.word_wrap = False
-        run = tf.paragraphs[0].add_run()
-        run.text = sc.subtitle
-        run.font.size = Pt(_SUBTITLE_FONT_PT)
+    _add_subtitle(slide, sc.subtitle)
 
     slide.shapes.add_picture(
         io.BytesIO(sc.map_png),
@@ -223,37 +230,63 @@ def _build_scenario_slide(slide: Slide, sc: ScenarioSlideInput) -> None:
     )
 
 
+def _fit_title(slide: Slide, text: str) -> None:
+    """Set the title, stepping the font down for long titles so they stay
+    on one line instead of wrapping into the subtitle."""
+    _set_title_text(slide, text)
+    size = next((pt for limit, pt in _TITLE_STEPS if len(text) <= limit), _TITLE_MIN_PT)
+    if size is None:
+        return
+    title = _find_title_shape(slide)
+    if title is None:
+        return
+    for para in title.text_frame.paragraphs:
+        for run in para.runs:
+            run.font.size = Pt(size)
+
+
+def _add_subtitle(slide: Slide, text: str) -> None:
+    """One line at 11pt; a longer subtitle wraps at 9pt (it used to run
+    off the slide edge with wrapping off)."""
+    if not text:
+        return
+    tb = slide.shapes.add_textbox(
+        Inches(_MARGIN_IN),
+        Inches(_SUBTITLE_TOP_IN),
+        Inches(_SLIDE_WIDTH_IN - 2 * _MARGIN_IN),
+        Inches(0.3),
+    )
+    tf = tb.text_frame
+    tf.margin_left = 0
+    tf.margin_right = 0
+    tf.margin_top = 0
+    tf.margin_bottom = 0
+    long_ = len(text) > _SUBTITLE_ONE_LINE_CHARS
+    tf.word_wrap = long_
+    run = tf.paragraphs[0].add_run()
+    run.text = text
+    run.font.size = Pt(9 if long_ else _SUBTITLE_FONT_PT)
+
+
 def _build_comparison_slide(slide: Slide, cp: ComparisonSlideInput) -> None:
     """Title + subtitle + one full-width 6-panel comparison figure."""
-    _set_title_text(slide, cp.title)
+    _fit_title(slide, cp.title)
     for shape in list(slide.shapes):
         is_table = isinstance(shape, GraphicFrame) and shape.has_table
         if is_table or isinstance(shape, Picture):
             shape._element.getparent().remove(shape._element)
 
-    if cp.subtitle:
-        tb = slide.shapes.add_textbox(
-            Inches(_MARGIN_IN),
-            Inches(_SUBTITLE_TOP_IN),
-            Inches(_SLIDE_WIDTH_IN - 2 * _MARGIN_IN),
-            Inches(0.3),
-        )
-        tf = tb.text_frame
-        tf.margin_left = 0
-        tf.margin_right = 0
-        tf.margin_top = 0
-        tf.margin_bottom = 0
-        tf.word_wrap = False
-        run = tf.paragraphs[0].add_run()
-        run.text = cp.subtitle
-        run.font.size = Pt(_SUBTITLE_FONT_PT)
+    _add_subtitle(slide, cp.subtitle)
 
+    # Placed at the captured aspect, shrunk to clear the template footer
+    # band (~6.9") and centred.
+    width = _COMPARISON_PLACED_HEIGHT_IN * _COMPARISON_WIDTH_IN / _COMPARISON_HEIGHT_IN
     slide.shapes.add_picture(
         io.BytesIO(cp.figure_png),
-        Inches(_MARGIN_IN),
-        Inches(_COMPARISON_TOP_IN),
-        width=Inches(_COMPARISON_WIDTH_IN),
-        height=Inches(_COMPARISON_HEIGHT_IN),
+        Inches((_SLIDE_WIDTH_IN - width) / 2),
+        Inches(_PANEL_TOP_IN),
+        width=Inches(width),
+        height=Inches(_COMPARISON_PLACED_HEIGHT_IN),
     )
 
 

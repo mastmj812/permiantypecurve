@@ -20,6 +20,7 @@ import {
   registerPmtilesProtocol,
 } from "../slide/mapShared";
 import { useNearViewport } from "../slide/useNearViewport";
+import { type LegendSpec, composeSnapshot } from "./mapLegend";
 
 interface Props {
   aoiGeojson: string | null;
@@ -45,6 +46,9 @@ interface Props {
   // Cosmetic: positions shift by the offset at every zoom; leave unset
   // on maps meant to be spatially faithful.
   offsetForWell?: (w: NarviWellGeo) => number;
+  // Legend burned into the snapshot (the deck sees only the snapshot),
+  // e.g. the curve-assignment overview's zone palette.
+  legend?: LegendSpec;
 }
 
 const AOI_SOURCE = "dossier-aoi";
@@ -86,6 +90,7 @@ export function ScenarioSlideMap({
   lazy = false,
   colorForWell,
   offsetForWell,
+  legend,
 }: Props) {
   const outerRef = useRef<HTMLDivElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -226,7 +231,7 @@ export function ScenarioSlideMap({
         }
         const refresh = () => {
           try {
-            setSnapshot(map.getCanvas().toDataURL("image/png"));
+            setSnapshot(composeSnapshot(map.getCanvas(), width, legend ?? null));
           } catch (e) {
             console.error("scenario map snapshot failed", e);
           }

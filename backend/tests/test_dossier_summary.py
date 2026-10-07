@@ -87,8 +87,10 @@ def test_stream_summary_risked_and_gap_flag() -> None:
     assert none.tc_vs_novi is None and not none.gap_flag
 
 
-def test_novi_eur_is_the_summed_median_series() -> None:
-    assert novi_eur_per_1000ft([10.0] * 600) == 6_000.0
+def test_novi_eur_matches_the_figure_trapezoid() -> None:
+    assert novi_eur_per_1000ft([10.0] * 600) == 6_000.0  # flat: trapezoid == sum
+    # declining: trapezoid (the figure's cumFrom), not the rectangle sum
+    assert novi_eur_per_1000ft([30.0, 20.0, 10.0]) == pytest.approx(25.0 + 15.0 + 10.0)
     assert novi_eur_per_1000ft(()) is None
 
 
@@ -193,3 +195,79 @@ def test_summary_paginates() -> None:
         summary=_summary(SUMMARY_ROWS_PER_SLIDE + 1),  # type: ignore[arg-type]
     )
     assert len(Presentation(io.BytesIO(content)).slides) == 2
+
+
+def test_parse_linestring_wkt() -> None:
+    from app.exports.dossier_summary import parse_linestring_wkt
+
+    assert parse_linestring_wkt("LINESTRING(-103.5 31.6, -103.49 31.62)") == (
+        (-103.5, 31.6),
+        (-103.49, 31.62),
+    )
+    assert parse_linestring_wkt(None) == ()
+    assert parse_linestring_wkt("POINT(1 2)") == ()
+
+
+def test_overview_and_support_slides_follow_the_summary() -> None:
+    from pptx.shapes.picture import Picture
+
+    from app.exports.dossier import ComparisonSlideInput, ScenarioSlideInput
+    from tests.test_dossier_export import _PNG
+
+    content = build_deal_dossier_pptx(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        [ScenarioSlideInput(title="plan_a", subtitle="", map_png=_PNG, gunbarrel_png=_PNG)],
+        [],
+        summary=_summary(1),
+        overview=ComparisonSlideInput(
+            title="Curve assignment overview", subtitle="", figure_png=_PNG
+        ),
+        supports=[
+            ScenarioSlideInput(
+                title="WCB_2 — 2 sticks take wcb2, built from 18 wells",
+                subtitle="TC oil 60.6 bbl/ft",
+                map_png=_PNG,
+                gunbarrel_png=_PNG,
+            )
+        ],
+    )
+    pres = Presentation(io.BytesIO(content))
+    titles = [
+        " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame) for sl in pres.slides
+    ]
+    assert len(pres.slides) == 4
+    assert "Zone summary" in titles[0]
+    assert "Curve assignment overview" in titles[1]
+    assert "2 sticks take wcb2" in titles[2]
+    assert "plan_a" in titles[3]
+    assert len([s for s in pres.slides[2].shapes if isinstance(s, Picture)]) == 2  # map | zoom
+
+
+def test_long_title_shrinks_and_long_subtitle_wraps() -> None:
+    from pptx.util import Pt
+
+    from app.exports.dossier import ComparisonSlideInput
+    from tests.test_dossier_export import _PNG
+
+    title = "BS1_S — Type Curve vs Novi ML (n=20: 20 PUD / 0 RES)"  # 52 chars: wrapped before
+    content = build_deal_dossier_pptx(
+        SimpleNamespace(),  # type: ignore[arg-type]
+        [],
+        [],
+        summary=_summary(1),
+        overview=ComparisonSlideInput(title=title, subtitle="x" * 250, figure_png=_PNG),
+    )
+    slide = Presentation(io.BytesIO(content)).slides[1]
+    boxes = [sh for sh in slide.shapes if sh.has_text_frame]
+    title_runs = [
+        r
+        for sh in boxes
+        if sh.text_frame.text == title
+        for p in sh.text_frame.paragraphs
+        for r in p.runs
+    ]
+    assert title_runs and all(r.font.size == Pt(24) for r in title_runs)
+    sub = next(sh for sh in boxes if sh.text_frame.text.startswith("xxx"))
+    assert sub.text_frame.word_wrap is True
+    pic = next(sh for sh in slide.shapes if sh.shape_type == 13)  # picture
+    assert (pic.top + pic.height) / 914400 <= 6.85  # clear of the footer band
