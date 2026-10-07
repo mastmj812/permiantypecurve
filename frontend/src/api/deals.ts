@@ -225,6 +225,10 @@ export interface DossierManifest {
   // TC-vs-Novi comparison slides (one per zone with sticks); files
   // named n{i}_figure. Optional — older callers omit it.
   comparisons?: Array<{ title: string; subtitle: string }>;
+  // Curve-assignment overview (one full-width map, file overview_map)
+  // and per-zone curve support slides (files z{i}_map + z{i}_zoom).
+  overview?: { title: string; subtitle: string } | null;
+  supports?: Array<{ title: string; subtitle: string }>;
 }
 
 // ---------------- TC-vs-Novi comparison (dossier figure data) ----------------
@@ -286,6 +290,17 @@ export interface DossierStick {
   legs_lonlat: number[][];
 }
 
+// One well that builds the zone's curve: wellstick + anduin's resolved
+// per-well oil EUR/ft (override -> global, raw 50-yr, unrisked — the
+// /well-stats number).
+export interface DossierCohortWell {
+  api10: string;
+  name: string | null;
+  lateral_ft: number | null;
+  oil_eur_per_ft: number | null;
+  coords: number[][];
+}
+
 export interface DossierStreamSummary {
   eur_per_1000ft: number | null; // risked P50, raw 50-yr
   qi_per_1000ft: number | null;
@@ -324,6 +339,7 @@ export interface DossierZone {
   // pre-formatted row, same strings as the deck's summary slide
   cells: string[];
   sticks: DossierStick[];
+  cohort: DossierCohortWell[];
 }
 
 export interface DossierZonesResponse {

@@ -1669,12 +1669,18 @@ def get_type_curve_well_stats(
     via ``scipy.integrate.quad`` (continuous integral); the trapezoid
     agrees with it to <0.1% on Permian fits.
     """
-    from app.forecasting.ramp_arps import display_eur_from_params
-    from app.type_curves.overrides import resolve_forecast
-
     tc = session.get(TypeCurve, type_curve_id)
     if tc is None:
         raise HTTPException(status_code=404, detail="not found")
+    return oil_eur_well_stats(session, tc)
+
+
+def oil_eur_well_stats(session: Session, tc: TypeCurve) -> list[TypeCurveWellStat]:
+    """The /well-stats body, shared with the dossier's zone support map
+    so its per-well colours are exactly the probit dots' EUR/ft."""
+    from app.forecasting.ramp_arps import display_eur_from_params
+    from app.type_curves.overrides import resolve_forecast
+
     api10s = list(tc.included_api10s or [])
     if not api10s:
         return []

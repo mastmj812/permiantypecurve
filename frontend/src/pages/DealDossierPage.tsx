@@ -17,6 +17,7 @@ import {
   type BlueOxConfig,
   type DealRow,
   type DossierManifest,
+  type DossierZone,
   type DossierZonesResponse,
   type NoviComparisonZone,
   exportDealDossierPptx,
@@ -44,6 +45,8 @@ import { NoviComparisonPanel } from "../components/dossier/NoviComparisonPanel";
 import { ShapefileSelect } from "../components/dossier/ShapefileSelect";
 import { ScenarioGunBarrel } from "../components/dossier/ScenarioGunBarrel";
 import { ScenarioSlideMap } from "../components/dossier/ScenarioSlideMap";
+import { ZoneSupportMap } from "../components/dossier/ZoneSupportMap";
+import { NO_FIT_COLOR } from "../components/dossier/mapLegend";
 import { capturePanel } from "../components/slide/captureSlideComposite";
 import { SlideCumChart } from "../components/slide/SlideCumChart";
 import { SlideMap } from "../components/slide/SlideMap";
@@ -242,6 +245,46 @@ export function DealDossierPage({ dealId }: Props) {
     };
   }, [scenarios, cfg]);
 
+  // Curve support slides: one per zone with planned sticks; index
+  // order defines the z{i}_map / z{i}_zoom capture names. Colour = the
+  // zone's index in the saved config (same palette as the overview).
+  const supportZones = useMemo(() => {
+    if (!zoneSummary || !cfg) return [] as Array<{ zone: DossierZone; color: string; aois: string[] }>;
+    const aoiByRef = new Map<string, string>();
+    for (const sd of scenarios ?? []) {
+      if (sd.aoi_geojson) aoiByRef.set(`${sd.deal_id}/${sd.scenario_id}`, sd.aoi_geojson);
+    }
+    return zoneSummary.zones
+      .map((zone, i) => ({
+        zone,
+        color: zoneColor(i),
+        aois: [...new Set(zone.sticks.map((s) => s.scenario_ref))]
+          .map((r) => aoiByRef.get(r))
+          .filter((a): a is string => !!a),
+      }))
+      .filter((z) => z.zone.n_sticks > 0);
+  }, [zoneSummary, cfg, scenarios]);
+
+  const scenarioNames = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const sd of scenarios ?? []) out[`${sd.deal_id}/${sd.scenario_id}`] = sd.name ?? sd.scenario_id;
+    return out;
+  }, [scenarios]);
+
+  // ONE colour scale for every support map in the deck (p5-p95 of all
+  // curve wells' anduin oil EUR/ft) so zones read against each other.
+  const eurRange = useMemo(() => {
+    const vals = supportZones
+      .flatMap((z) => z.zone.cohort.map((w) => w.oil_eur_per_ft))
+      .filter((v): v is number => v !== null)
+      .sort((a, b) => a - b);
+    if (vals.length === 0) return { lo: 0, hi: 1 };
+    const q = (f: number) => vals[Math.round(f * (vals.length - 1))]!;
+    const lo = Math.floor(q(0.05));
+    const hi = Math.ceil(q(0.95));
+    return hi - lo < 2 ? { lo: lo - 1, hi: hi + 1 } : { lo, hi };
+  }, [supportZones]);
+
   // Comparison sections render only zones with sticks; index order
   // here defines the n{i}_figure capture names and the manifest order.
   const comparisonZones = useMemo(
@@ -252,6 +295,7 @@ export function DealDossierPage({ dealId }: Props) {
   const allReady =
     scenarios !== null &&
     comparisons !== null &&
+    (zoneSummary !== null || zoneSummaryError !== null) &&
     curveIds.every((_, i) => curvesReady.has(i));
 
   const onExport = async () => {
@@ -266,6 +310,14 @@ export function DealDossierPage({ dealId }: Props) {
           subtitle: scenarioSubtitle(sd),
         })),
         curves: curveIds.map((id) => ({ type_curve_id: id })),
+        overview: overview
+          ? {
+              title: "Curve assignment overview",
+              subtitle:
+                "every selected scenario — planned wells coloured by the type curve their zone assigns; gray = PDP context or uncaptured",
+            }
+          : null,
+        supports: supportZones.map(({ zone }) => supportTitles(zone)),
         comparisons: comparisonZones.map((z) => ({
           title: `${z.zone_name} — Type Curve vs Novi ML (n=${z.n_sticks}: ${z.n_pud} PUD / ${z.n_res} RES)`,
           subtitle: comparisonSubtitle(z),
@@ -298,6 +350,11 @@ export function DealDossierPage({ dealId }: Props) {
         await ensureMapSnapshot(panel);
         files[name] = await capturePanel(document, panel, 2);
       };
+      if (overview) await grab("overview_map");
+      for (let i = 0; i < supportZones.length; i++) {
+        await grab(`z${i}_map`);
+        await grab(`z${i}_zoom`);
+      }
       for (let i = 0; i < scenarios.length; i++) {
         await grab(`s${i}_map`);
         await grab(`s${i}_gunbarrel`);
@@ -382,6 +439,33 @@ export function DealDossierPage({ dealId }: Props) {
 
       <ZoneSummarySection summary={zoneSummary} error={zoneSummaryError} />
 
+      {supportZones.map(({ zone, color, aois }, i) => {
+        const t = supportTitles(zone);
+        return (
+          <section key={zone.zone_name} style={{ marginTop: 20 }}>
+            <h1 className="slide-title" style={{ borderLeft: `8px solid ${color}`, paddingLeft: 8 }}>
+              {t.title}
+            </h1>
+            <p className="muted" style={{ margin: "2px 0 6px", fontSize: 15 }}>{t.subtitle}</p>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <div className="slide-panel" data-dossier-panel={`z${i}_map`}>
+                <ZoneSupportMap
+                  zone={zone} color={color} aois={aois} scenarioNames={scenarioNames} mode="support" eurRange={eurRange}
+                  width={SCENARIO_PANEL_W} height={SCENARIO_PANEL_H} lazy
+                />
+              </div>
+              <div className="slide-panel" data-dossier-panel={`z${i}_zoom`}>
+                <ZoneSupportMap
+                  zone={zone} color={color} aois={aois} scenarioNames={scenarioNames} mode="sticks" eurRange={eurRange}
+                  width={SCENARIO_PANEL_W} height={SCENARIO_PANEL_H} lazy
+                />
+              </div>
+            </div>
+            <SupportLegend color={color} range={eurRange} />
+          </section>
+        );
+      })}
+
       {overview && (
         <section style={{ marginTop: 16 }}>
           <h1 className="slide-title">Curve assignment overview</h1>
@@ -411,7 +495,7 @@ export function DealDossierPage({ dealId }: Props) {
               <span className="muted">PDP / unassigned</span>
             </span>
           </div>
-          <div className="slide-panel">
+          <div className="slide-panel" data-dossier-panel="overview_map">
             <ScenarioSlideMap
               aoiGeojson={overview.aoi}
               wells={overview.wells}
@@ -420,6 +504,16 @@ export function DealDossierPage({ dealId }: Props) {
               lazy
               colorForWell={(w) => overview.colors.get(w) ?? UNASSIGNED_COLOR}
               offsetForWell={(w) => overview.offsets.get(w) ?? 0}
+              legend={{
+                rows: [
+                  ...cfg.zones.map((z, i) => ({
+                    color: zoneColor(i),
+                    label: z.zone_name ?? z.type_curve_id.slice(0, 8),
+                    kind: "line" as const,
+                  })),
+                  { color: UNASSIGNED_COLOR, label: "PDP / unassigned", kind: "line" as const },
+                ],
+              }}
             />
           </div>
         </section>
@@ -795,5 +889,52 @@ function ZoneSummarySection({
         {summary.note}
       </p>
     </section>
+  );
+}
+
+// Support slide title + subtitle (also the manifest strings). TC is
+// the risked P50 the deck delivers; the well colours are each well's
+// own anduin fit, unrisked — said explicitly so a risked TC sitting
+// below its wells does not read as a defect.
+function supportTitles(zone: DossierZone): { title: string; subtitle: string } {
+  const fitted = zone.cohort
+    .map((w) => w.oil_eur_per_ft)
+    .filter((v): v is number => v !== null)
+    .sort((a, b) => a - b);
+  const n = fitted.length;
+  const med = n === 0 ? null : n % 2 ? fitted[(n - 1) / 2]! : (fitted[n / 2 - 1]! + fitted[n / 2]!) / 2;
+  const o = zone.streams.oil;
+  const tc = o.eur_per_1000ft !== null ? (o.eur_per_1000ft / 1000).toFixed(1) : "—";
+  const risk = o.risk_mult !== 1 ? `, risked ×${o.risk_mult}` : "";
+  const scen = zone.n_scenarios === 1 ? "1 scenario" : `${zone.n_scenarios} scenarios`;
+  return {
+    title: `${zone.zone_name}: ${zone.n_sticks} ${zone.n_sticks === 1 ? "stick" : "sticks"} ← ${zone.cohort.length} curve wells`,
+    subtitle:
+      `type curve ${zone.curve_name} · TC oil ${tc} bbl/ft (P50${risk}) · curve wells median ${med !== null ? med.toFixed(1) : "—"} bbl/ft ` +
+      `(${n} fitted, unrisked) · ${scen} · colour = anduin per-well oil EUR/ft, raw 50-yr`,
+  };
+}
+
+// Preview-only legend under the live maps (the exported snapshots carry
+// their own burned-in legend).
+function SupportLegend({ color, range }: { color: string; range: { lo: number; hi: number } }) {
+  return (
+    <div className="muted" style={{ fontSize: 13, display: "flex", gap: 14, alignItems: "center", marginTop: 4 }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span style={{ width: 22, height: 4, background: color, display: "inline-block" }} /> planned stick
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span
+          style={{
+            width: 90, height: 8, display: "inline-block",
+            background: "linear-gradient(90deg,#440154,#3b528b,#21918c,#5ec962,#fde725)",
+          }}
+        />
+        curve well oil EUR {range.lo}–{range.hi} bbl/ft
+      </span>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+        <span style={{ width: 22, height: 4, background: NO_FIT_COLOR, display: "inline-block" }} /> no anduin fit
+      </span>
+    </div>
   );
 }

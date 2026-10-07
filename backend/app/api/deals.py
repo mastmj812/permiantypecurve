@@ -42,6 +42,7 @@ from app.api.type_curves import (
     _evaluate_fitted_rates,
     _fitted_eur_per_1000ft,
     _fitted_p50_params,
+    oil_eur_well_stats,
 )
 from app.core.logging import get_logger
 from app.db.models import Deal, Forecast, NormalizationBasis, TypeCurve
@@ -75,10 +76,12 @@ from app.exports.dossier_summary import (
     SUMMARY_HEADERS,
     SUMMARY_NOTE,
     SUMMARY_STREAMS,
+    CohortWell,
     ZoneStick,
     ZoneSummary,
     build_zone_summary,
     cohort_qc,
+    parse_linestring_wkt,
     summary_cells,
 )
 from app.exports.well_rows import (
@@ -1639,6 +1642,25 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
             log.warning("dossier_zones_novi_failed", deal=str(deal.id), error=str(exc))
             novi, novi_error = {}, f"Novi comparison unavailable: {exc}"
 
+    # Support-map cohort per curve (two zones may share one): the
+    # /well-stats EUR/ft (probit dots) + each well's wellstick.
+    cohorts: dict[uuid.UUID, list[CohortWell]] = {}
+    for tc in curves.values():
+        if tc.id in cohorts:
+            continue
+        geo = well_geo_rows(session, list(tc.included_api10s or []))
+        wkt_idx = len(WELL_GEO_HEADERS) - 1
+        cohorts[tc.id] = [
+            CohortWell(
+                api10=w.api10,
+                name=w.name,
+                lateral_ft=w.lateral_ft,
+                oil_eur_per_ft=w.oil_eur_per_ft,
+                coords=parse_linestring_wkt(geo.get(w.api10, EMPTY_GEO)[wkt_idx]),
+            )
+            for w in oil_eur_well_stats(session, tc)
+        ]
+
     out: list[ZoneSummary] = []
     for spec in cfg.zones:
         zone_name = spec.zone_name or ""
@@ -1670,6 +1692,7 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
                 novi_stale=comp.stale_vintage if comp else False,
                 qc=cohort_qc(tc, forecasts, di_hi),
                 novi_error=novi_error,
+                cohort=cohorts[tc.id],
             )
         )
     return out
@@ -1683,6 +1706,14 @@ class DossierStickOut(BaseModel):
     completed_lateral_ft: float | None
     target_tvd_ft: float | None
     legs_lonlat: list[list[float]]
+
+
+class DossierCohortWellOut(BaseModel):
+    api10: str
+    name: str | None
+    lateral_ft: float | None
+    oil_eur_per_ft: float | None  # bbl/ft, resolved per-well fit, unrisked
+    coords: list[list[float]]  # wellstick [lon, lat] vertices
 
 
 class DossierZoneOut(BaseModel):
@@ -1705,6 +1736,7 @@ class DossierZoneOut(BaseModel):
     flags: list[str]
     cells: list[str]  # pre-formatted summary row (same strings as the deck)
     sticks: list[DossierStickOut]
+    cohort: list[DossierCohortWellOut]
 
 
 class DossierZonesResponse(BaseModel):
@@ -1744,6 +1776,16 @@ def _zone_out(z: ZoneSummary) -> DossierZoneOut:
                 legs_lonlat=[list(q) for q in s.legs_lonlat],
             )
             for s in z.sticks
+        ],
+        cohort=[
+            DossierCohortWellOut(
+                api10=w.api10,
+                name=w.name,
+                lateral_ft=w.lateral_ft,
+                oil_eur_per_ft=w.oil_eur_per_ft,
+                coords=[list(c) for c in w.coords],
+            )
+            for w in z.cohort
         ],
     )
 
@@ -2021,7 +2063,9 @@ async def export_deal_dossier(
                  "curves": [{"type_curve_id", ...}, ...]}
       files:    s{i}_map, s{i}_gunbarrel per scenario;
                 c{i}_rate_{stream}, c{i}_cum_{stream} (oil/gas/water)
-                and c{i}_map per curve.
+                and c{i}_map per curve; overview_map when the manifest
+                carries "overview"; z{i}_map + z{i}_zoom per "supports"
+                entry (zone curve-support slides).
 
     The zone summary slide (first) is assembled server-side from the
     saved Blue Ox config (``_assemble_dossier_zones``) — no client input.
@@ -2077,6 +2121,25 @@ async def export_deal_dossier(
             )
         )
 
+    overview: ComparisonSlideInput | None = None
+    ov = manifest.get("overview")
+    if ov:
+        overview = ComparisonSlideInput(
+            title=str(ov.get("title") or "Curve assignment overview"),
+            subtitle=str(ov.get("subtitle") or ""),
+            figure_png=png("overview_map"),
+        )
+    supports: list[ScenarioSlideInput] = []
+    for i, sp in enumerate(manifest.get("supports", [])):
+        supports.append(
+            ScenarioSlideInput(
+                title=str(sp.get("title") or f"Zone {i + 1}"),
+                subtitle=str(sp.get("subtitle") or ""),
+                map_png=png(f"z{i}_map"),
+                gunbarrel_png=png(f"z{i}_zoom"),
+            )
+        )
+
     comparisons: list[ComparisonSlideInput] = []
     for i, cp in enumerate(manifest.get("comparisons", [])):
         comparisons.append(
@@ -2089,7 +2152,13 @@ async def export_deal_dossier(
 
     try:
         content = build_deal_dossier_pptx(
-            session, scenarios, curves, comparisons, summary=_assemble_dossier_zones(session, deal)
+            session,
+            scenarios,
+            curves,
+            comparisons,
+            summary=_assemble_dossier_zones(session, deal),
+            overview=overview,
+            supports=supports,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
