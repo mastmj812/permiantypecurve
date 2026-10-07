@@ -208,7 +208,7 @@ def test_parse_linestring_wkt() -> None:
     assert parse_linestring_wkt("POINT(1 2)") == ()
 
 
-def test_overview_and_support_slides_follow_the_summary() -> None:
+def test_split_and_support_slides_follow_the_summary() -> None:
     from pptx.shapes.picture import Picture
 
     from app.exports.dossier import ComparisonSlideInput, ScenarioSlideInput
@@ -219,9 +219,7 @@ def test_overview_and_support_slides_follow_the_summary() -> None:
         [ScenarioSlideInput(title="plan_a", subtitle="", map_png=_PNG, gunbarrel_png=_PNG)],
         [],
         summary=_summary(1),
-        overview=ComparisonSlideInput(
-            title="Curve assignment overview", subtitle="", figure_png=_PNG
-        ),
+        splits=[ComparisonSlideInput(title="WCB_2: 2 type curves", subtitle="", figure_png=_PNG)],
         supports=[
             ScenarioSlideInput(
                 title="WCB_2 — 2 sticks take wcb2, built from 18 wells",
@@ -237,7 +235,7 @@ def test_overview_and_support_slides_follow_the_summary() -> None:
     ]
     assert len(pres.slides) == 4
     assert "Zone summary" in titles[0]
-    assert "Curve assignment overview" in titles[1]
+    assert "WCB_2: 2 type curves" in titles[1]
     assert "2 sticks take wcb2" in titles[2]
     assert "plan_a" in titles[3]
     assert len([s for s in pres.slides[2].shapes if isinstance(s, Picture)]) == 2  # map | zoom
@@ -255,7 +253,7 @@ def test_long_title_shrinks_and_long_subtitle_wraps() -> None:
         [],
         [],
         summary=_summary(1),
-        overview=ComparisonSlideInput(title=title, subtitle="x" * 250, figure_png=_PNG),
+        splits=[ComparisonSlideInput(title=title, subtitle="x" * 250, figure_png=_PNG)],
     )
     slide = Presentation(io.BytesIO(content)).slides[1]
     boxes = [sh for sh in slide.shapes if sh.has_text_frame]

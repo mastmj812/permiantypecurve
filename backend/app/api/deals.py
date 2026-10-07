@@ -2185,8 +2185,8 @@ async def export_deal_dossier(
                  "curves": [{"type_curve_id", ...}, ...]}
       files:    s{i}_map, s{i}_gunbarrel per scenario;
                 c{i}_rate_{stream}, c{i}_cum_{stream} (oil/gas/water)
-                and c{i}_map per curve; overview_map when the manifest
-                carries "overview"; z{i}_map + z{i}_zoom per "supports"
+                and c{i}_map per curve; x{i}_map per "splits" entry
+                (type-curve split maps); z{i}_map + z{i}_zoom per "supports"
                 entry (zone curve-support slides).
 
     The zone summary slide (first) is assembled server-side from the
@@ -2243,14 +2243,14 @@ async def export_deal_dossier(
             )
         )
 
-    overview: ComparisonSlideInput | None = None
-    ov = manifest.get("overview")
-    if ov:
-        overview = ComparisonSlideInput(
-            title=str(ov.get("title") or "Curve assignment overview"),
-            subtitle=str(ov.get("subtitle") or ""),
-            figure_png=png("overview_map"),
+    splits = [
+        ComparisonSlideInput(
+            title=str(sp.get("title") or f"Type curve split {i + 1}"),
+            subtitle=str(sp.get("subtitle") or ""),
+            figure_png=png(f"x{i}_map"),
         )
+        for i, sp in enumerate(manifest.get("splits", []))
+    ]
     supports: list[ScenarioSlideInput] = []
     for i, sp in enumerate(manifest.get("supports", [])):
         supports.append(
@@ -2280,7 +2280,7 @@ async def export_deal_dossier(
             curves,
             comparisons,
             summary=zone_summaries,
-            overview=overview,
+            splits=splits,
             supports=supports,
             cohort_tables={
                 t.type_curve_id: CohortTableInput(

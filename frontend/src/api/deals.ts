@@ -225,9 +225,9 @@ export interface DossierManifest {
   // TC-vs-Novi comparison slides (one per zone with sticks); files
   // named n{i}_figure. Optional — older callers omit it.
   comparisons?: Array<{ title: string; subtitle: string }>;
-  // Curve-assignment overview (one full-width map, file overview_map)
-  // and per-zone curve support slides (files z{i}_map + z{i}_zoom).
-  overview?: { title: string; subtitle: string } | null;
+  // Type-curve split maps, one per formation taking > 1 curve (full-width,
+  // files x{i}_map), and per-zone curve support slides (z{i}_map + z{i}_zoom).
+  splits?: Array<{ title: string; subtitle: string }>;
   supports?: Array<{ title: string; subtitle: string }>;
 }
 
