@@ -272,6 +272,75 @@ export async function fetchNoviComparison(
   return body.zones;
 }
 
+// ---------------- dossier zone summary (deck's opening slide) ----------------
+
+// One planned stick routed to a zone (PDP context excluded); legs are
+// [heel_lon, heel_lat, toe_lon, toe_lat] per producing leg.
+export interface DossierStick {
+  well_name: string;
+  formation: string | null;
+  category: string; // PUD | UPSIDE (handoff category)
+  scenario_ref: string; // "<deal_id>/<scenario_id>"
+  completed_lateral_ft: number | null;
+  target_tvd_ft: number | null;
+  legs_lonlat: number[][];
+}
+
+export interface DossierStreamSummary {
+  eur_per_1000ft: number | null; // risked P50, raw 50-yr
+  qi_per_1000ft: number | null;
+  di_nominal: number | null; // per year
+  di_effective: number | null; // 1-yr secant, 0-1
+  b: number | null;
+  risk_mult: number;
+  novi_eur_per_1000ft: number | null;
+  tc_vs_novi: number | null; // TC / Novi - 1
+  gap_flag: boolean;
+}
+
+export interface DossierZone {
+  zone_name: string;
+  type_curve_id: string;
+  curve_name: string;
+  reserve_category: string;
+  benches: string[];
+  n_sticks: number;
+  n_pud: number;
+  n_upside: number;
+  n_scenarios: number;
+  planned_lateral_ft_median: number | null;
+  streams: Record<"oil" | "gas", DossierStreamSummary>;
+  qc: {
+    n_wells: number;
+    n_overridden: number;
+    at_bound: Record<string, number>;
+    missing: Record<string, number>;
+  };
+  novi_n_sticks: number;
+  novi_low_n: boolean;
+  novi_stale: boolean;
+  novi_error: string | null;
+  flags: string[];
+  // pre-formatted row, same strings as the deck's summary slide
+  cells: string[];
+  sticks: DossierStick[];
+}
+
+export interface DossierZonesResponse {
+  headers: string[];
+  note: string;
+  zones: DossierZone[];
+}
+
+export async function fetchDossierZones(dealId: string): Promise<DossierZonesResponse> {
+  const r = await apiFetch(`/api/deals/${dealId}/dossier-zones`);
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`dossier zone summary fetch failed: ${detail}`);
+  }
+  return (await r.json()) as DossierZonesResponse;
+}
+
 // POSTs the manifest + client-captured panel PNGs; file names must
 // match the backend's convention (s{i}_map / s{i}_gunbarrel and
 // c{i}_rate_{stream} / c{i}_cum_{stream} / c{i}_map).
