@@ -91,6 +91,20 @@ class CohortWell:
     lateral_ft: float | None
     oil_eur_per_ft: float | None
     coords: tuple[tuple[float, float], ...] = ()
+    # ---- cohort table (step 3) ----
+    operator: str | None = None
+    first_prod: str | None = None  # YYYY-MM
+    # oil fit as this curve resolves it: "override" (TC-scoped),
+    # "global" (forecasts row; edited=manual_override) or "none"
+    fit_source: str = "none"
+    fit_edited: bool = False
+    pinned: tuple[str, ...] = ()  # oil params at a bound, e.g. ("Di hi", "b lo")
+    # curated.dev_scenario passthrough (wells table): class at FIRST
+    # production + the other benches producing above/below by then
+    scenario_class: str | None = None
+    parents_below: tuple[str, ...] = ()
+    parents_above: tuple[str, ...] = ()
+    codev_benches: tuple[str, ...] = ()
 
 
 def parse_linestring_wkt(wkt: str | None) -> tuple[tuple[float, float], ...]:
@@ -107,6 +121,125 @@ def parse_linestring_wkt(wkt: str | None) -> tuple[tuple[float, float], ...]:
         if len(parts) >= 2:
             out.append((float(parts[0]), float(parts[1])))
     return tuple(out)
+
+
+_BOUND_SHORT = {
+    "qi at upper": "qi hi",
+    "Di at lower": "Di lo",
+    "Di at upper": "Di hi",
+    "b at lower": "b lo",
+    "b at upper": "b hi",
+}
+
+
+def pinned_params(note: str | None) -> tuple[str, ...]:
+    """``detect_at_bound`` note -> short tags ("Di hi", "b lo", ...)."""
+    if not note:
+        return ()
+    return tuple(short for key, short in _BOUND_SHORT.items() if key in note)
+
+
+def came_on(w: CohortWell) -> str:
+    """How the well came on, from its dev_scenario class (sql/50: vertical
+    parent = other bench online > 180 d earlier, <= 660 ft away, |dTVD| <=
+    1,000 ft). Mirrors the deal-intake cohort table's "Came on"."""
+    below = ", ".join(w.parents_below)
+    above = ", ".join(w.parents_above)
+    match w.scenario_class:
+        case "topfill":
+            return f"over {below}" if below else "over a parent"
+        case "underfill":
+            return f"under {above}" if above else "under a parent"
+        case "sandwich":
+            return f"between {above or '?'} / {below or '?'}"
+        case "codev_stack":
+            return (
+                f"co-developed with {', '.join(w.codev_benches)}"
+                if w.codev_benches
+                else "co-developed"
+            )
+        case "standalone":
+            return "alone"
+        case _:
+            return "—"
+
+
+def _haversine_mi(a: tuple[float, float], b: tuple[float, float]) -> float:
+    lon1, lat1, lon2, lat2 = map(math.radians, (*a, *b))
+    h = (
+        math.sin((lat2 - lat1) / 2) ** 2
+        + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    )
+    return 2 * 3958.8 * math.asin(math.sqrt(h))
+
+
+def _mid(coords: Sequence[Sequence[float]]) -> tuple[float, float] | None:
+    if not coords:
+        return None
+    n = len(coords)
+    if n % 2:
+        c = coords[(n - 1) // 2]
+        return (float(c[0]), float(c[1]))
+    a, b = coords[n // 2 - 1], coords[n // 2]
+    return ((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0)
+
+
+def nearest_stick_mi(w: CohortWell, sticks: Sequence[ZoneStick]) -> float | None:
+    """Well lateral midpoint -> nearest planned-leg midpoint, miles."""
+    m = _mid(w.coords)
+    legs = [((hx + tx) / 2.0, (hy + ty) / 2.0) for s in sticks for hx, hy, tx, ty in s.legs_lonlat]
+    if m is None or not legs:
+        return None
+    return min(_haversine_mi(m, leg) for leg in legs)
+
+
+COHORT_HEADERS: tuple[str, ...] = (
+    "Well",
+    "Operator",
+    "api10",
+    "First prod",
+    "Lateral ft",
+    "To nearest stick mi",
+    "Oil EUR bbl/ft",
+    "Oil fit",
+    "Oil fit pinned",
+    "Came on",
+)
+
+COHORT_NOTE = (
+    "Nearest first. Oil EUR/ft = anduin's per-well oil fit as this curve resolves it (TC override, else the "
+    "global forecast), raw 50-yr, UNRISKED — the colour on the support map. Pinned = oil fit parameter at its "
+    "bound (the Review badge rule; b at 0.9/1.2 is common by design, Di pinned is the one to chase). Came on = "
+    "dev_scenario at first production (parent = other bench online > 180 d earlier, <= 660 ft, |dTVD| <= "
+    "1,000 ft). Distance = lateral midpoint to the nearest planned stick midpoint."
+)
+
+
+def cohort_rows(wells: Sequence[CohortWell], sticks: Sequence[ZoneStick]) -> list[tuple[str, ...]]:
+    """The curve's wells as table rows (``COHORT_HEADERS``), nearest the
+    planned sticks first; wells with no geometry sort last."""
+    keyed = [(nearest_stick_mi(w, sticks), w) for w in wells]
+    keyed.sort(key=lambda kv: (kv[0] is None, kv[0] or 0.0, kv[1].api10))
+    out: list[tuple[str, ...]] = []
+    for d, w in keyed:
+        fit = {"override": "TC override", "global": "global", "none": "none"}[w.fit_source]
+        if w.fit_source == "global" and w.fit_edited:
+            fit = "global (edited)"
+        out.append(
+            (
+                w.name or "—",
+                w.operator or "—",
+                w.api10,
+                w.first_prod or "—",
+                _f(w.lateral_ft),
+                "—" if d is None else f"{d:.1f}",
+                _f(w.oil_eur_per_ft, ".1f"),
+                fit,
+                ", ".join(w.pinned) or "—",
+                came_on(w),
+            )
+        )
+    return out
 
 
 @dataclass(frozen=True)

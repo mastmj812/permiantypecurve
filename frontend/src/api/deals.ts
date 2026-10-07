@@ -342,10 +342,22 @@ export interface DossierZone {
   cohort: DossierCohortWell[];
 }
 
+// One curve's well table (deck: before its Oil/Gas/Water slides); cells
+// pre-formatted server-side, nearest the planned sticks first.
+export interface DossierCurveTable {
+  type_curve_id: string;
+  curve_name: string;
+  zones: string[];
+  rows: string[][];
+}
+
 export interface DossierZonesResponse {
   headers: string[];
   note: string;
   zones: DossierZone[];
+  cohort_headers: string[];
+  cohort_note: string;
+  curve_tables: DossierCurveTable[];
 }
 
 export async function fetchDossierZones(dealId: string): Promise<DossierZonesResponse> {
