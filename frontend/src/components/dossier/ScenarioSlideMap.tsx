@@ -185,27 +185,44 @@ export function ScenarioSlideMap({
         type: "geojson",
         data: { type: "FeatureCollection", features: legFeatures },
       });
+      // Two layers over one source: PDP producers solid + muted, proposed
+      // wells DASHED (every dossier map draws proposed wells dashed).
+      // line-dasharray isn't data-driven in maplibre 4, hence the split.
+      // ["zoom"] interpolate stays OUTERMOST (nesting silently breaks
+      // the layer).
+      const legWidth = [
+        "interpolate", ["linear"], ["zoom"],
+        8, 1.2,
+        11, 2.6,
+        14, 4.5,
+      ] as maplibregl.ExpressionSpecification;
       map.addLayer({
-        id: `${LEGS_SOURCE}-line`,
+        id: `${LEGS_SOURCE}-pdp`,
         type: "line",
         source: LEGS_SOURCE,
+        filter: ["==", ["get", "category"], "PDP"],
         layout: { "line-cap": "round", "line-join": "round" },
         paint: {
           "line-color": ["get", "color"],
           // Screen-px fan-out for coincident stacked-bench laterals
           // (0 everywhere except the curve-assignment overview).
           "line-offset": ["get", "offset"],
-          // ["zoom"] interpolate stays OUTERMOST (nesting silently
-          // breaks the layer); PDP producers read muted vs planned.
-          "line-width": [
-            "interpolate", ["linear"], ["zoom"],
-            8, 1.2,
-            11, 2.6,
-            14, 4.5,
-          ],
-          "line-opacity": [
-            "case", ["==", ["get", "category"], "PDP"], 0.45, 0.95,
-          ],
+          "line-width": legWidth,
+          "line-opacity": 0.45,
+        },
+      });
+      map.addLayer({
+        id: `${LEGS_SOURCE}-line`,
+        type: "line",
+        source: LEGS_SOURCE,
+        filter: ["!=", ["get", "category"], "PDP"],
+        layout: { "line-cap": "butt", "line-join": "round" },
+        paint: {
+          "line-color": ["get", "color"],
+          "line-offset": ["get", "offset"],
+          "line-width": legWidth,
+          "line-opacity": 0.95,
+          "line-dasharray": [2, 1.2],
         },
       });
 
@@ -225,7 +242,7 @@ export function ScenarioSlideMap({
         // Scenario geometry stays on top of the survey-grid overlays.
         for (const id of [
           `${AOI_SOURCE}-fill`, `${AOI_SOURCE}-line`,
-          `${TURNS_SOURCE}-line`, `${LEGS_SOURCE}-line`,
+          `${TURNS_SOURCE}-line`, `${LEGS_SOURCE}-pdp`, `${LEGS_SOURCE}-line`,
         ]) {
           if (map.getLayer(id)) map.moveLayer(id);
         }

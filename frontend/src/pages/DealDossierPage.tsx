@@ -538,9 +538,10 @@ export function DealDossierPage({ dealId }: Props) {
                   ...cfg.zones.map((z, i) => ({
                     color: zoneColor(i),
                     label: z.zone_name ?? z.type_curve_id.slice(0, 8),
-                    kind: "line" as const,
+                    kind: "dash" as const,
                   })),
-                  { color: UNASSIGNED_COLOR, label: "PDP / unassigned", kind: "line" as const },
+                  { color: UNASSIGNED_COLOR, label: "proposed, no zone captures it", kind: "dash" as const },
+                  { color: UNASSIGNED_COLOR, label: "PDP (existing producer)", kind: "line" as const },
                 ],
               }}
             />
