@@ -15,7 +15,10 @@ Sync flow:
 Each phase gets its own ``SyncJob`` row (entity =
 ``SyncEntity.WELL_HEADERS`` then ``SyncEntity.PRODUCTION``). The
 ``scope_key`` is ``"env_region=PERMIAN"`` since the sync no longer
-splits by county.
+splits by county. Phases are isolated: a failing phase is recorded on
+its job row and the remaining phases still run; ``sync_permian`` then
+raises ``SyncPhaseError`` (naming the failed phases and carrying the
+counts) so the nightly wrapper still exits non-zero.
 
 Back-compat: ``sync_county`` and ``sync_counties`` are kept as thin
 wrappers so the existing CLI (``app.seed.seed_county``) and HTTP
@@ -29,12 +32,13 @@ from __future__ import annotations
 
 import contextlib
 import uuid
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import UTC, date, datetime
 from itertools import islice
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
@@ -214,6 +218,165 @@ def _reconcile_production_deletions(
     return deleted
 
 
+# Wells per warehouse round-trip for the production / Novi-forecast
+# phases. Each chunk is fetched INSIDE its own short-lived warehouse
+# Session and fully materialized before the local upsert runs, so no
+# warehouse transaction is ever held open across the (long) local write
+# loop. Why: the laptop entering Modern Standby mid-run kills the Supabase
+# SSL socket; with one Session spanning a whole phase the dead socket only
+# surfaced at the END (the reconcile re-fetch or the close rollback) --
+# three consecutive nights (2026-10-05..07) failed that way after every
+# row had already landed. Chunked, a dead pooled connection is caught by
+# ``pool_pre_ping`` at the next chunk's checkout and replaced silently.
+# 2,000 wells ~ 130k production rows / ~600k Novi-forecast rows per
+# chunk -- small in memory, ~35 round-trips per phase.
+FETCH_WELLS_PER_CHUNK: int = 2000
+
+
+class SyncPhaseError(RuntimeError):
+    """One or more sync phases failed; the other phases still ran.
+
+    Carries ``failures`` (phase name -> error text) and the ``counts``
+    the completed phases produced, so the nightly log line keeps both.
+    """
+
+    def __init__(self, failures: dict[str, str], counts: dict[str, int]) -> None:
+        self.failures = dict(failures)
+        self.counts = dict(counts)
+        super().__init__(
+            f"sync_permian: failed phase(s) {sorted(self.failures)}; "
+            f"failures={self.failures}; counts={self.counts}"
+        )
+
+
+def _fetch_in_chunks[T](
+    engine: Engine,
+    fetch: Callable[[Session, list[str]], Iterable[T]],
+    api10s: Sequence[str],
+    chunk_wells: int = FETCH_WELLS_PER_CHUNK,
+) -> Iterator[tuple[list[str], list[T]]]:
+    """Yield ``(chunk_api10s, records)`` per ``chunk_wells`` api10s.
+
+    Each chunk's records are fully materialized inside a warehouse
+    ``Session`` that is CLOSED before the chunk is yielded -- the caller's
+    local write loop never overlaps an open warehouse transaction (see
+    ``FETCH_WELLS_PER_CHUNK``).
+    """
+    for chunk in _batched(api10s, chunk_wells):
+        with Session(engine) as wh:
+            records = list(fetch(wh, chunk))
+        yield chunk, records
+
+
+def _local_api10s() -> list[str]:
+    """Every api10 in the local ``wells`` table (read after the headers
+    phase committed so production / forecast cover every well loaded)."""
+    with SessionLocal() as session:
+        return [r[0] for r in session.execute(select(Well.api10)).all()]
+
+
+# ----------------------------------------------------------------------
+# Phases
+# ----------------------------------------------------------------------
+
+
+def _phase_headers(
+    wh_engine: Engine,
+    counts: dict[str, int],
+    first_completion_after: date | None,
+    horizontal_only: bool,
+) -> None:
+    with SessionLocal() as session, _job(session, SyncEntity.WELL_HEADERS, SCOPE_KEY) as job:
+        # Materialize the whole header set inside a short-lived warehouse
+        # Session (~70k DTOs; the WKT sticks dominate the footprint) so
+        # the warehouse connection is released before the local loop.
+        with Session(wh_engine) as wh:
+            headers = list(
+                fetch_well_headers(
+                    wh,
+                    first_completion_after=first_completion_after,
+                    horizontal_only=horizontal_only,
+                )
+            )
+        total = 0
+        # 200/batch keeps Postgres' bind-parameter count well below the
+        # 65 535 limit even with the ON CONFLICT SET clause expanding the
+        # column list. The ingest layer commits per batch, so progress
+        # is durable.
+        for header_batch in _batched(headers, 200):
+            total += upsert_well_headers(session, header_batch)
+            job.items_upserted = total
+            job.items_seen = total
+            session.commit()
+        counts["headers"] = total
+        _watermark_set(session, SyncEntity.WELL_HEADERS, SCOPE_KEY, datetime.now(UTC))
+
+
+def _phase_production(wh_engine: Engine, counts: dict[str, int]) -> None:
+    api10s = _local_api10s()
+    with SessionLocal() as session, _job(session, SyncEntity.PRODUCTION, SCOPE_KEY) as job:
+        total = 0
+        # Per-well fetched-row tally, fed to the deletion reconcile
+        # below. ~70k keys -- negligible memory.
+        fetched_counts: dict[str, int] = {}
+        for _chunk, records in _fetch_in_chunks(wh_engine, fetch_production_for_api10s, api10s):
+            # 1 000/batch x 9 columns ~ 9 000 bind params per statement --
+            # comfortable margin under the 65 535 ceiling.
+            for prod_batch in _batched(records, 1000):
+                for rec in prod_batch:
+                    fetched_counts[rec.api10] = fetched_counts.get(rec.api10, 0) + 1
+                total += upsert_production_records(session, prod_batch)
+                job.items_upserted = total
+                job.items_seen = total
+                session.commit()
+        counts["production"] = total
+        # The upsert never deletes; reap months the warehouse no longer
+        # publishes so retracted vendor data can't linger and poison
+        # fits. On a FRESH warehouse Session -- never one that served a
+        # fetch (that is the connection a mid-run standby kills).
+        with Session(wh_engine) as wh:
+            counts["production_deleted"] = _reconcile_production_deletions(
+                session, wh, fetched_counts
+            )
+        _watermark_set(session, SyncEntity.PRODUCTION, SCOPE_KEY, datetime.now(UTC))
+
+
+def _phase_novi_forecast(wh_engine: Engine, counts: dict[str, int]) -> None:
+    """Novi forecast (PDP). Parallel to production: same api10 universe,
+    separate job + watermark scope. Rides ``SyncEntity.PRODUCTION`` with
+    a ``kind=novi_forecast`` metadata tag (no dedicated enum value)."""
+    api10s = _local_api10s()
+    with (
+        SessionLocal() as session,
+        _job(
+            session,
+            SyncEntity.PRODUCTION,
+            NOVI_FORECAST_SCOPE_KEY,
+            metadata={"kind": "novi_forecast"},
+        ) as job,
+    ):
+        total = 0
+        for chunk, records in _fetch_in_chunks(wh_engine, fetch_novi_forecast_for_api10s, api10s):
+            # Vintage rule: wipe this chunk's wells before inserting so
+            # the table holds exactly ONE Novi vintage per well -- upsert
+            # alone leaves the previous vintage's early months behind
+            # when the new snapshot starts later, and the overlay then
+            # renders a stitched two-vintage series with a cum
+            # discontinuity. Per chunk (not the whole universe up front)
+            # so a crash leaves at most one chunk's wells with no Novi
+            # rows until the next run -- visibly absent beats subtly
+            # wrong, and a re-run repairs it.
+            delete_novi_forecast_for_api10s(session, chunk)
+            for fc_batch in _batched(records, 1000):
+                total += upsert_novi_forecast_records(session, fc_batch)
+                job.items_upserted = total
+                job.items_seen = total
+                session.commit()
+            session.commit()  # a chunk with zero forecast rows still commits its delete
+        counts["novi_forecast"] = total
+        _watermark_set(session, SyncEntity.PRODUCTION, NOVI_FORECAST_SCOPE_KEY, datetime.now(UTC))
+
+
 # ----------------------------------------------------------------------
 # Main entry: sync_permian
 # ----------------------------------------------------------------------
@@ -227,118 +390,47 @@ def sync_permian(
 ) -> dict[str, int]:
     """Sync the entire Permian from engineering_db into the local app DB.
 
-    Returns a count dict ``{"headers": N, "production": M}`` for the
-    caller to surface.
+    Returns a count dict ``{"headers": N, "production": M,
+    "production_deleted": D, "novi_forecast": F}`` for the caller to
+    surface.
 
-    Pulling all-Permian production (~5M rows) takes minutes. If the
-    caller wants only the well headers refreshed (e.g. nightly map
-    refresh without per-month delta), pass ``pull_production=False``.
+    Phases run in order (headers, production, Novi forecast) and are
+    isolated: a phase that raises is marked FAILED on its own job row and
+    the later phases still run. If any phase failed, ``SyncPhaseError``
+    is raised at the end with the per-phase errors and the counts, so
+    the nightly wrapper still logs FAIL / exits non-zero.
+
+    Pulling all-Permian production (~4.4M rows) takes minutes; the Novi
+    forecast (~20M rows) takes an hour. If the caller wants only the well
+    headers refreshed, pass ``pull_production=False``.
     """
     counts = {"headers": 0, "production": 0, "production_deleted": 0, "novi_forecast": 0}
 
     wh_engine = _warehouse_engine()
 
-    # ---- 1. Well headers ----
-    with SessionLocal() as session, _job(session, SyncEntity.WELL_HEADERS, SCOPE_KEY) as job:
-        with Session(wh_engine) as wh:
-            header_iter = fetch_well_headers(
-                wh,
-                first_completion_after=first_completion_after,
-                horizontal_only=horizontal_only,
-            )
-            total = 0
-            # 200/batch keeps Postgres' bind-parameter count well
-            # below the 65 535 limit even with the ON CONFLICT SET
-            # clause expanding the column list. The ingest layer
-            # commits per batch, so progress is durable.
-            for header_batch in _batched(header_iter, 200):
-                total += upsert_well_headers(session, header_batch)
-                job.items_upserted = total
-                job.items_seen = total
-                session.commit()
-            counts["headers"] = total
-        _watermark_set(
-            session,
-            SyncEntity.WELL_HEADERS,
-            SCOPE_KEY,
-            datetime.now(UTC),
-        )
-
-    # ---- 2. Production ----
+    phases: list[tuple[str, Callable[[], None]]] = [
+        (
+            "headers",
+            lambda: _phase_headers(wh_engine, counts, first_completion_after, horizontal_only),
+        ),
+    ]
     if pull_production:
-        with SessionLocal() as session:
-            # Read the api10 list AFTER headers committed so we cover
-            # every well just loaded.
-            api10s = [r[0] for r in session.execute(select(Well.api10)).all()]
-            with _job(session, SyncEntity.PRODUCTION, SCOPE_KEY) as job:
-                with Session(wh_engine) as wh:
-                    prod_iter = fetch_production_for_api10s(wh, api10s)
-                    total = 0
-                    # Per-well fetched-row tally, fed to the deletion
-                    # reconcile below. ~67k keys — negligible memory.
-                    fetched_counts: dict[str, int] = {}
-                    # 1 000/batch × 9 columns ≈ 9 000 bind params per
-                    # statement — comfortable margin under the 65 535
-                    # ceiling.
-                    for prod_batch in _batched(prod_iter, 1000):
-                        for rec in prod_batch:
-                            fetched_counts[rec.api10] = fetched_counts.get(rec.api10, 0) + 1
-                        total += upsert_production_records(session, prod_batch)
-                        job.items_upserted = total
-                        job.items_seen = total
-                        session.commit()
-                    counts["production"] = total
-                    # The upsert never deletes; reap months the
-                    # warehouse no longer publishes so retracted vendor
-                    # data can't linger and poison fits.
-                    counts["production_deleted"] = _reconcile_production_deletions(
-                        session, wh, fetched_counts
-                    )
-                _watermark_set(
-                    session,
-                    SyncEntity.PRODUCTION,
-                    SCOPE_KEY,
-                    datetime.now(UTC),
-                )
+        phases.append(("production", lambda: _phase_production(wh_engine, counts)))
+        phases.append(("novi_forecast", lambda: _phase_novi_forecast(wh_engine, counts)))
 
-            # ---- 3. Novi forecast (PDP) ----
-            # Parallel to production: same api10 batch, separate job +
-            # watermark scope. Rides SyncEntity.PRODUCTION with a
-            # kind=novi_forecast metadata tag (no dedicated enum value).
-            with _job(
-                session,
-                SyncEntity.PRODUCTION,
-                NOVI_FORECAST_SCOPE_KEY,
-                metadata={"kind": "novi_forecast"},
-            ) as job:
-                with Session(wh_engine) as wh:
-                    # Vintage rule: wipe the refresh scope first so the
-                    # table holds exactly ONE Novi vintage per well —
-                    # upsert alone leaves the previous vintage's early
-                    # months behind when the new snapshot starts later,
-                    # and the overlay then renders a stitched
-                    # two-vintage series with a cum discontinuity.
-                    # Tradeoff: a crash between this delete and the
-                    # inserts leaves those wells with no Novi rows
-                    # until the next successful sync — visibly absent
-                    # beats subtly wrong, and a re-run repairs it.
-                    delete_novi_forecast_for_api10s(session, api10s)
-                    fc_iter = fetch_novi_forecast_for_api10s(wh, api10s)
-                    total = 0
-                    for fc_batch in _batched(fc_iter, 1000):
-                        total += upsert_novi_forecast_records(session, fc_batch)
-                        job.items_upserted = total
-                        job.items_seen = total
-                        session.commit()
-                    counts["novi_forecast"] = total
-                _watermark_set(
-                    session,
-                    SyncEntity.PRODUCTION,
-                    NOVI_FORECAST_SCOPE_KEY,
-                    datetime.now(UTC),
-                )
+    failures: dict[str, str] = {}
+    for name, run in phases:
+        try:
+            run()
+        except Exception as e:
+            # ``_job`` already logged the traceback and marked the job
+            # row FAILED; here we only isolate and carry on.
+            failures[name] = f"{type(e).__name__}: {e}"[:500]
+            log.error("sync_phase_failed", phase=name, error=failures[name])
 
-    log.info("sync_permian_done", **counts)
+    log.info("sync_permian_done", failed_phases=sorted(failures), **counts)
+    if failures:
+        raise SyncPhaseError(failures, counts)
     return counts
 
 
