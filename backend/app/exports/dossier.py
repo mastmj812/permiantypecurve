@@ -8,9 +8,10 @@ coloured by anduin oil EUR/ft | zoom on the sticks), then one slide per
 narvi scenario (plan-view map left, gunbarrel
 right, well-count subtitle), then the deal's type curves rendered
 exactly like the existing per-curve slide export (param table + rate /
-cum charts + cohort map, one slide per stream). The wells-table slide
-and probit are deliberately omitted — this deck is for talking through
-a deal while work is ongoing.
+cum charts + the zone support map, one slide per stream), each curve
+led by its own cohort table + buildup funnel. The slide export's
+wells-table slide and probit are deliberately omitted — this deck is for
+talking through a deal while work is ongoing.
 
 All raster panels arrive from the client (the dossier preview page
 captures its SVG charts and MapLibre canvases), mirroring the
