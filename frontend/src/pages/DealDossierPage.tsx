@@ -4,7 +4,7 @@
 // curve, the cohort behind it, TC vs Novi — the deck's first slide,
 // built server-side), then one section per pinned narvi scenario
 // (live plan-view map + gunbarrel) followed by one section per zone
-// type curve (param table + rate/cum charts + cohort map — the same
+// type curve (param table + rate/cum charts + the zone support map — the same
 // panels as the slide export). The Export button captures every panel
 // to PNG client-side and POSTs them to /api/deals/{id}/dossier.pptx.
 //
@@ -272,6 +272,32 @@ export function DealDossierPage({ dealId }: Props) {
     for (const sd of scenarios ?? []) out[`${sd.deal_id}/${sd.scenario_id}`] = sd.name ?? sd.scenario_id;
     return out;
   }, [scenarios]);
+
+  // The curve section's map IS the support map (one map per curve, not
+  // two versions): zones sharing a curve pool their proposed wells; the
+  // colour is the first such zone's.
+  const curveSupport = useMemo(() => {
+    const out = new Map<string, { zone: DossierZone; color: string; aois: string[] }>();
+    if (!zoneSummary) return out;
+    const aoiByRef = new Map<string, string>();
+    for (const sd of scenarios ?? []) {
+      if (sd.aoi_geojson) aoiByRef.set(`${sd.deal_id}/${sd.scenario_id}`, sd.aoi_geojson);
+    }
+    zoneSummary.zones.forEach((z, i) => {
+      const prev = out.get(z.type_curve_id);
+      const zone = prev
+        ? { ...prev.zone, sticks: [...prev.zone.sticks, ...z.sticks], n_sticks: prev.zone.n_sticks + z.n_sticks }
+        : z;
+      out.set(z.type_curve_id, {
+        zone,
+        color: prev?.color ?? zoneColor(i),
+        aois: [...new Set(zone.sticks.map((s) => s.scenario_ref))]
+          .map((r) => aoiByRef.get(r))
+          .filter((a): a is string => !!a),
+      });
+    });
+    return out;
+  }, [zoneSummary, scenarios]);
 
   // ONE colour scale for every support map in the deck (p5-p95 of all
   // curve wells' anduin oil EUR/ft) so zones read against each other.
@@ -557,6 +583,9 @@ export function DealDossierPage({ dealId }: Props) {
           idx={i}
           table={zoneSummary?.curve_tables.find((t) => t.type_curve_id === id) ?? null}
           tableHeaders={zoneSummary?.cohort_headers ?? []}
+          support={curveSupport.get(id) ?? null}
+          eurRange={eurRange}
+          scenarioNames={scenarioNames}
           tableNote={zoneSummary?.cohort_note ?? ""}
           dealVisibility={dealVisibility}
           onReady={() =>
@@ -640,6 +669,12 @@ interface CurveSectionProps {
   table: DossierCurveTable | null;
   tableHeaders: string[];
   tableNote: string;
+  // The support map for this curve (same map as the zone support slide);
+  // null only when the zone summary failed — the cohort-only map then
+  // stands in so the export still has a panel.
+  support: { zone: DossierZone; color: string; aois: string[] } | null;
+  eurRange: { lo: number; hi: number };
+  scenarioNames: Record<string, string>;
 }
 
 interface CurveData {
@@ -659,6 +694,9 @@ function DossierCurveSection({
   table,
   tableHeaders,
   tableNote,
+  support,
+  eurRange,
+  scenarioNames,
 }: CurveSectionProps) {
   const [data, setData] = useState<CurveData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -733,14 +771,28 @@ function DossierCurveSection({
       <SlideParamTable current={data.curve} previous={null} />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
         <div className="slide-panel slide-panel-map" data-dossier-panel={`c${idx}_map`}>
-          <SlideMap
-            api10s={api10s}
-            wellDetails={data.wellDetails}
-            dealVisibility={dealVisibility}
-            width={629}
-            height={418}
-            lazy
-          />
+          {support ? (
+            <ZoneSupportMap
+              zone={support.zone}
+              color={support.color}
+              aois={support.aois}
+              scenarioNames={scenarioNames}
+              mode="support"
+              eurRange={eurRange}
+              width={629}
+              height={418}
+              lazy
+            />
+          ) : (
+            <SlideMap
+              api10s={api10s}
+              wellDetails={data.wellDetails}
+              dealVisibility={dealVisibility}
+              width={629}
+              height={418}
+              lazy
+            />
+          )}
         </div>
       </div>
       {STREAMS.map((stream) => (
@@ -942,7 +994,7 @@ function SupportLegend({ color, range }: { color: string; range: { lo: number; h
   return (
     <div className="muted" style={{ fontSize: 13, display: "flex", gap: 14, alignItems: "center", marginTop: 4 }}>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-        <span style={{ width: 22, height: 4, background: color, display: "inline-block" }} /> planned stick
+        <span style={{ width: 22, height: 0, borderTop: `4px dashed ${color}`, display: "inline-block" }} /> proposed well
       </span>
       <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
         <span

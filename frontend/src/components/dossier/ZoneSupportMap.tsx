@@ -2,11 +2,11 @@
 // curve, and which wells build it. Ported from the deal-intake dossier's
 // curve map (engineering_db dealintake/render/maps.py):
 //
-//   mode "support": the zone's sticks (zone colour, white casing), a thin
-//     link from each scenario's sticks to every cohort well, and the
-//     cohort wells drawn as their laterals coloured by anduin oil EUR/ft
-//     (resolved per-well fit, raw 50-yr, unrisked; grey = no fit), value
-//     printed at the midpoint.
+//   mode "support": the zone's proposed sticks DASHED in the zone colour,
+//     and the cohort wells drawn as their laterals coloured by anduin oil
+//     EUR/ft (resolved per-well fit, raw 50-yr, unrisked; grey = no fit),
+//     value printed at the midpoint. The ONE dossier map for a curve: the
+//     support slide and the curve's Oil/Gas/Water slides both use it.
 //   mode "sticks": zoom on the zone's sticks — one always-on label per
 //     scenario (name · n sticks · lateral range) and a per-stick label
 //     (short name · lateral ft) laid along each stick, shown wherever
@@ -104,7 +104,6 @@ export function ZoneSupportMap({
       // on screen; kept upright).
       const stickFeatures: Feature[] = [];
       const stickLabelFeatures: Feature[] = [];
-      const centroidByScenario = new Map<string, { x: number; y: number; n: number }>();
       const groups = new Map<string, { top: [number, number]; n: number; lls: number[] }>();
       for (const s of zone.sticks) {
         const scen = scenarioNames[s.scenario_ref];
@@ -133,11 +132,6 @@ export function ZoneSupportMap({
           for (const [x, y] of [[hx, hy], [tx, ty]] as Array<[number, number]>) {
             if (y > g.top[1]) g.top = [x, y];
           }
-          const acc = centroidByScenario.get(s.scenario_ref) ?? { x: 0, y: 0, n: 0 };
-          acc.x += (hx + tx) / 2;
-          acc.y += (hy + ty) / 2;
-          acc.n += 1;
-          centroidByScenario.set(s.scenario_ref, acc);
         }
         groups.set(s.scenario_ref, g);
       }
@@ -159,10 +153,9 @@ export function ZoneSupportMap({
         };
       });
 
-      // Cohort wells: lateral + midpoint (value label + link anchor).
+      // Cohort wells: lateral + midpoint (value label).
       const wellFeatures: Feature[] = [];
       const midFeatures: Feature[] = [];
-      const linkFeatures: Feature[] = [];
       const showValues = mode === "support" && zone.cohort.length <= MAX_VALUE_LABELS;
       for (const w of zone.cohort) {
         const props: Record<string, unknown> = {};
@@ -186,15 +179,6 @@ export function ZoneSupportMap({
               : "",
           },
         });
-        if (mode === "support") {
-          for (const c of centroidByScenario.values()) {
-            linkFeatures.push({
-              type: "Feature",
-              geometry: { type: "LineString", coordinates: [[c.x / c.n, c.y / c.n], mid] },
-              properties: {},
-            });
-          }
-        }
       }
 
       const aoiFeatures: Feature[] = [];
@@ -208,7 +192,6 @@ export function ZoneSupportMap({
 
       const fc = (features: Feature[]) => ({ type: "FeatureCollection" as const, features });
       map.addSource(`${src}-aoi`, { type: "geojson", data: fc(aoiFeatures) });
-      map.addSource(`${src}-links`, { type: "geojson", data: fc(linkFeatures) });
       map.addSource(`${src}-wells`, { type: "geojson", data: fc(wellFeatures) });
       map.addSource(`${src}-mids`, { type: "geojson", data: fc(midFeatures) });
       map.addSource(`${src}-sticks`, { type: "geojson", data: fc(stickFeatures) });
@@ -227,10 +210,6 @@ export function ZoneSupportMap({
       add({
         id: `${src}-aoi-line`, type: "line", source: `${src}-aoi`,
         paint: { "line-color": color, "line-width": 1.6, "line-opacity": 0.8 },
-      });
-      add({
-        id: `${src}-links`, type: "line", source: `${src}-links`,
-        paint: { "line-color": color, "line-width": 0.7, "line-opacity": 0.35 },
       });
       add({
         id: `${src}-wells-casing`, type: "line", source: `${src}-wells`,
@@ -255,15 +234,11 @@ export function ZoneSupportMap({
           "circle-stroke-width": 0.6,
         },
       });
-      add({
-        id: `${src}-sticks-casing`, type: "line", source: `${src}-sticks`,
-        layout: { "line-cap": "round" },
-        paint: { "line-color": "#ffffff", "line-width": 6 },
-      });
+      // Proposed wells: dashed, so they never read as producers.
       add({
         id: `${src}-sticks`, type: "line", source: `${src}-sticks`,
-        layout: { "line-cap": "round" },
-        paint: { "line-color": color, "line-width": 3.6 },
+        layout: { "line-cap": "butt" },
+        paint: { "line-color": color, "line-width": 3.4, "line-dasharray": [2, 1.2] },
       });
       if (mode === "support") {
         add({
@@ -330,8 +305,7 @@ export function ZoneSupportMap({
         mode === "support"
           ? {
               rows: [
-                { color, label: `planned stick taking ${zone.curve_name}`, kind: "line" as const },
-                { color, label: "link: scenario sticks → curve well", kind: "thin" as const },
+                { color, label: `proposed well taking ${zone.curve_name}`, kind: "dash" as const },
                 { color: NO_FIT_COLOR, label: "curve well, no anduin fit", kind: "line" as const },
               ],
               colorBar: {
@@ -342,7 +316,7 @@ export function ZoneSupportMap({
             }
           : {
               rows: [
-                { color, label: `${zone.n_sticks} sticks taking ${zone.curve_name}`, kind: "line" as const },
+                { color, label: `${zone.n_sticks} proposed wells taking ${zone.curve_name}`, kind: "dash" as const },
                 { color: VIRIDIS[4]!, label: "curve wells in view (oil EUR/ft colour)", kind: "line" as const },
               ],
             };
