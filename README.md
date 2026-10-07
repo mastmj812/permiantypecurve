@@ -118,7 +118,7 @@ curl localhost:8000/api/sync/status
 1. `well_headers` — bulk-fetch from `engineering_db.curated.wells_enriched` filtered to `is_horizontal = TRUE` and not a permit (any vintage — the 2010 completion floor was removed 2026-10-07; entire Permian; no county filter); upserted into local `wells` keyed by **api10** (Novi 10-char wellbore identifier).
 2. `production` — fetch from `curated.production` for every api10 just loaded; upserted into `production_monthly` keyed by `(api10, prod_date)`. Calendar-day rates come pre-computed from Novi upstream — no app-side rate math.
 
-Sync state lands in `sync_jobs` + `sync_watermarks(entity, scope_key)`; both keyed on a single `scope_key = "env_region=PERMIAN"` since the sync no longer splits by county.
+Phases are isolated: a failing phase is marked on its own `sync_jobs` row and the later phases still run; `sync_permian` then raises `SyncPhaseError` so the nightly wrapper logs FAIL. Warehouse reads are chunked (2,000 wells per short-lived session) so no warehouse transaction spans the local write loop. Sync state lands in `sync_jobs` + `sync_watermarks(entity, scope_key)`; both keyed on a single `scope_key = "env_region=PERMIAN"` since the sync no longer splits by county.
 
 `sync_county` / `sync_counties` remain as deprecated back-compat wrappers (the API endpoint + the `seed_county` CLI both still work); they accept-and-ignore the `basin` / `counties` args and route to `sync_permian`. Existing scripts keep working without modification.
 
