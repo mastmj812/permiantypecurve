@@ -231,3 +231,26 @@ def buildup_csv(tc: TypeCurve) -> str:
             ]
         )
     return buf.getvalue()
+
+
+def funnel_tables(tc: TypeCurve) -> tuple[bool, list[list[str]], list[tuple[str, str]]]:
+    """The waterfall + header criteria as display strings, for the deal
+    dossier's funnel slide — the same rows the xlsx buildup sheet writes.
+    Returns (degraded, waterfall rows [stage, description, culled,
+    remaining], criteria lines). Degraded = provenance not captured (old
+    save): the caller says so instead of fabricating a funnel."""
+    b = compute_buildup(tc)
+    if b.degraded:
+        return True, [], []
+
+    def cell(v: Any) -> str:
+        if v is None:
+            return "—"
+        if isinstance(v, int | float):
+            return f"{v:,.0f}"
+        return str(v)
+
+    rows = [[cell(c) for c in r] for r in _waterfall_rows(b)]
+    skip = {"curve_name", "curve_id", "created_at"}
+    criteria = [(str(k), cell(v)) for k, v in _header_block(tc, b) if k not in skip]
+    return False, rows, criteria

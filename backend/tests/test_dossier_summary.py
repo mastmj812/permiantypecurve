@@ -369,3 +369,153 @@ def test_cohort_table_precedes_stream_slides_and_paginates() -> None:
     assert "holdTheLine_wca_v1 Oil" in titles[2]
     t = next(s for s in pres.slides[0].shapes if isinstance(s, GraphicFrame) and s.has_table).table
     assert len(t.rows) == 10 + 1  # 19 wells -> balanced 10 + 9
+
+
+def _zone_with(sticks: list[Any], laterals: list[float], subbasin: str = "Delaware") -> Any:
+    from app.exports.dossier_summary import CohortWell
+
+    cohort = [
+        CohortWell(api10=str(i), name=None, lateral_ft=ll, oil_eur_per_ft=60.0, subbasin=subbasin)
+        for i, ll in enumerate(laterals)
+    ]
+    return build_zone_summary(
+        zone_name="WCB_2",
+        reserve_category="PUD",
+        benches=["WCB_2"],
+        tc=_tc(),
+        sticks=sticks,
+        novi_volumes=None,
+        novi_n_sticks=0,
+        novi_low_n=False,
+        novi_stale=False,
+        qc=CohortQC(n_wells=len(laterals), n_overridden=0),
+        cohort=cohort,
+    )
+
+
+def test_lateral_tolerance_basin_and_long_lateral() -> None:
+    from app.exports.dossier_summary import lateral_tolerance
+
+    assert lateral_tolerance("Delaware", 10_000.0) == 0.25
+    assert lateral_tolerance("Midland", 10_000.0) == 0.40
+    assert lateral_tolerance("Delaware", 15_000.0) == 0.40  # long-lateral widening
+    assert lateral_tolerance(None, None) == 0.25
+
+
+def test_lateral_rows_scale_and_flag() -> None:
+    from app.exports.dossier_summary import lateral_cells, lateral_rows
+
+    z = _zone_with(
+        [
+            _stick("PUD", 10_000.0, "d/a"),
+            _stick("PUD", 10_200.0, "d/a"),
+            _stick("PUD", 5_000.0, "d/b"),
+            _stick("PUD", 12_000.0, "d/c"),
+        ],
+        [9_000.0, 9_500.0, 10_000.0, 10_400.0, 13_000.0],
+    )
+    rows = {r.scenario: r for r in lateral_rows(z)}
+    a, b, c = rows["a"], rows["b"], rows["c"]
+    assert a.planned_lateral_ft == 10_100.0 and a.oil_eur_per_well == pytest.approx(60_000.0 * 10.1)
+    assert a.n_within_band == 4 and not a.extrapolated and not a.thin
+    assert (
+        b.extrapolated and lateral_cells(b)[-1] == "EXTRAPOLATED"
+    )  # 5,000 below the 9,000 minimum
+    assert not c.thin and c.n_within_band == 5  # 12,000 +/-25% = 9,000-15,000 holds all five
+    # thin: inside the cohort's range but < 3 wells within the band
+    z2 = _zone_with([_stick("PUD", 12_000.0, "d/t")], [6_000.0, 6_200.0, 6_400.0, 13_000.0])
+    (t_row,) = lateral_rows(z2)
+    assert t_row.thin and not t_row.extrapolated and t_row.n_within_band == 1
+    assert lateral_cells(t_row)[-1] == "thin at this length"
+
+
+def test_lateral_and_funnel_slides_in_deck_order() -> None:
+    from app.exports.dossier import CohortTableInput, FunnelInput
+    from tests.test_deal_export import _curve
+    from tests.test_dossier_export import _curve_input, _StubSession
+
+    tc = _curve("holdTheLine_wca_v1")
+    row = ["W1", "op", "1", "2024-01", "10,000", "1.0", "60.0", "global", "—", "alone"]
+    funnel = FunnelInput(
+        degraded=False,
+        rows=[
+            ["universe", "Formation wells inside AOI", "—", "29"],
+            ["final_cohort", "Final type-curve cohort", "—", "17"],
+        ],
+        criteria=[("formations", "WCA_1")],
+    )
+    content = build_deal_dossier_pptx(
+        _StubSession([tc]),  # type: ignore[arg-type]
+        [],
+        [_curve_input(tc)],
+        summary=_summary(1),
+        cohort_tables={tc.id: CohortTableInput(curve_name=tc.name, rows=[row], funnel=funnel)},
+        lateral=[
+            (
+                ["Z0", "dsu_1", "2", "5,000", "1", "1", "0 (±25%)", "6,000-9,000", "EXTRAPOLATED"],
+                True,
+                False,
+            )
+        ],
+    )
+    pres = Presentation(io.BytesIO(content))
+    titles = [
+        " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame) for sl in pres.slides
+    ]
+    assert "Zone summary" in titles[0]
+    assert "Lateral scaling" in titles[1]
+    assert "curve wells (1)" in titles[2]
+    assert "how the cohort was built" in titles[3]
+    assert "holdTheLine_wca_v1 Oil" in titles[4]
+    tables = [s for s in pres.slides[3].shapes if isinstance(s, GraphicFrame) and s.has_table]
+    assert len(tables) == 2  # waterfall | criteria
+    lat = next(
+        s for s in pres.slides[1].shapes if isinstance(s, GraphicFrame) and s.has_table
+    ).table
+    assert lat.cell(1, 8).text == "EXTRAPOLATED"
+
+
+def test_degraded_funnel_says_so() -> None:
+    from app.exports.dossier import CohortTableInput, FunnelInput
+    from tests.test_deal_export import _curve
+    from tests.test_dossier_export import _curve_input, _StubSession
+
+    tc = _curve("old_curve")
+    content = build_deal_dossier_pptx(
+        _StubSession([tc]),  # type: ignore[arg-type]
+        [],
+        [_curve_input(tc)],
+        cohort_tables={
+            tc.id: CohortTableInput(curve_name=tc.name, rows=[], funnel=FunnelInput(True, [], []))
+        },
+    )
+    pres = Presentation(io.BytesIO(content))
+    funnel_slide = pres.slides[1]
+    text = " ".join(sh.text_frame.text for sh in funnel_slide.shapes if sh.has_text_frame)
+    assert "Provenance not captured" in text
+    assert not [s for s in funnel_slide.shapes if isinstance(s, GraphicFrame) and s.has_table]
+
+
+def test_deck_cohort_table_caps_at_the_nearest() -> None:
+    from app.exports.dossier import COHORT_DECK_MAX_ROWS, CohortTableInput
+    from tests.test_deal_export import _curve
+    from tests.test_dossier_export import _curve_input, _StubSession
+
+    tc = _curve("vault_wca")
+    rows = [
+        [f"W{i}", "op", str(i), "2024-01", "10,000", "1.0", "60.0", "global", "—", "alone"]
+        for i in range(201)
+    ]
+    content = build_deal_dossier_pptx(
+        _StubSession([tc]),  # type: ignore[arg-type]
+        [],
+        [_curve_input(tc)],
+        cohort_tables={tc.id: CohortTableInput(curve_name=tc.name, rows=rows)},
+    )
+    pres = Presentation(io.BytesIO(content))
+    titles = [
+        " ".join(sh.text_frame.text for sh in sl.shapes if sh.has_text_frame) for sl in pres.slides
+    ]
+    assert len(pres.slides) == 3 + 3  # 48 nearest -> 3 table slides, then oil/gas/water
+    assert f"nearest {COHORT_DECK_MAX_ROWS} of 201" in titles[0]
+    assert "analog sheet list every well" in titles[0]

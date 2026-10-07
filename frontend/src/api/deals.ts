@@ -344,11 +344,25 @@ export interface DossierZone {
 
 // One curve's well table (deck: before its Oil/Gas/Water slides); cells
 // pre-formatted server-side, nearest the planned sticks first.
+// Buildup funnel as saved (degraded = provenance not captured).
+export interface DossierFunnel {
+  degraded: boolean;
+  rows: string[][]; // stage, description, culled, remaining
+  criteria: string[][]; // [label, value]
+}
+
 export interface DossierCurveTable {
   type_curve_id: string;
   curve_name: string;
   zones: string[];
   rows: string[][];
+  funnel: DossierFunnel | null;
+}
+
+export interface DossierLateralRow {
+  cells: string[];
+  extrapolated: boolean;
+  thin: boolean;
 }
 
 export interface DossierZonesResponse {
@@ -358,6 +372,9 @@ export interface DossierZonesResponse {
   cohort_headers: string[];
   cohort_note: string;
   curve_tables: DossierCurveTable[];
+  lateral_headers: string[];
+  lateral_note: string;
+  lateral_rows: DossierLateralRow[];
 }
 
 export async function fetchDossierZones(dealId: string): Promise<DossierZonesResponse> {

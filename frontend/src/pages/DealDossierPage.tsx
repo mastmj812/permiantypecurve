@@ -18,6 +18,7 @@ import {
   type DealRow,
   type DossierManifest,
   type DossierCurveTable,
+  type DossierFunnel,
   type DossierZone,
   type DossierZonesResponse,
   type NoviComparisonZone,
@@ -439,6 +440,7 @@ export function DealDossierPage({ dealId }: Props) {
       {scenarios === null && <p className="muted">loading narvi scenarios…</p>}
 
       <ZoneSummarySection summary={zoneSummary} error={zoneSummaryError} />
+      {zoneSummary && zoneSummary.lateral_rows.length > 0 && <LateralSection summary={zoneSummary} />}
 
       {supportZones.map(({ zone, color, aois }, i) => {
         const t = supportTitles(zone);
@@ -727,6 +729,7 @@ function DossierCurveSection({
     <section style={{ marginTop: 28 }}>
       <h1 className="slide-title">{data.curve.name}</h1>
       {table && <CohortTable table={table} headers={tableHeaders} note={tableNote} />}
+      {table?.funnel && <FunnelTables funnel={table.funnel} />}
       <SlideParamTable current={data.curve} previous={null} />
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginTop: 8 }}>
         <div className="slide-panel slide-panel-map" data-dossier-panel={`c${idx}_map`}>
@@ -1004,6 +1007,78 @@ function CohortTable({
         </tbody>
       </table>
       <p className="muted" style={{ fontSize: 12, maxWidth: 1160 }}>{note}</p>
+    </details>
+  );
+}
+
+const TD = { border: "1px solid #e5e7eb", padding: "2px 6px", verticalAlign: "top" as const };
+const TH = { ...TD, background: "#f3f4f6", textAlign: "left" as const };
+
+// Deck slide 2: per-zone x scenario EUR per well at the planned lateral.
+function LateralSection({ summary }: { summary: DossierZonesResponse }) {
+  const readCol = summary.lateral_headers.indexOf("Read");
+  return (
+    <section style={{ marginTop: 16 }}>
+      <h1 className="slide-title">Lateral scaling</h1>
+      <table style={{ borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr>{summary.lateral_headers.map((h) => <th key={h} style={TH}>{h}</th>)}</tr>
+        </thead>
+        <tbody>
+          {summary.lateral_rows.map((r) => (
+            <tr key={`${r.cells[0]}/${r.cells[1]}`}>
+              {r.cells.map((c, j) => {
+                const flagged = j === readCol && (r.extrapolated || r.thin);
+                return (
+                  <td key={j} style={{ ...TD, color: flagged ? "#dc2626" : undefined, fontWeight: flagged ? 700 : undefined }}>
+                    {c}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="muted" style={{ fontSize: 13, maxWidth: 1160 }}>{summary.lateral_note}</p>
+    </section>
+  );
+}
+
+// The curve's buildup funnel (deck: the slide after its well table).
+function FunnelTables({ funnel }: { funnel: DossierFunnel }) {
+  if (funnel.degraded) {
+    return (
+      <p className="muted" style={{ fontSize: 13 }}>
+        Provenance not captured for this curve (saved before buildup capture) — no funnel; re-save the
+        curve from the Type Curve tab to record it.
+      </p>
+    );
+  }
+  return (
+    <details style={{ margin: "4px 0 10px" }}>
+      <summary style={{ cursor: "pointer", fontSize: 15 }}>How the cohort was built</summary>
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 4 }}>
+        <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr>{["Stage", "What it removes", "Culled", "Remaining"].map((h) => <th key={h} style={TH}>{h}</th>)}</tr>
+          </thead>
+          <tbody>
+            {funnel.rows.map((r) => (
+              <tr key={r[0]}>{r.map((c, j) => <td key={j} style={TD}>{c}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+        <table style={{ borderCollapse: "collapse", fontSize: 12 }}>
+          <thead>
+            <tr><th style={TH}>Criterion</th><th style={TH}>Value</th></tr>
+          </thead>
+          <tbody>
+            {funnel.criteria.map(([k, v], i) => (
+              <tr key={i}><td style={TD}>{k}</td><td style={TD}>{v}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </details>
   );
 }
