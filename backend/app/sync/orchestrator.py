@@ -43,11 +43,15 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.models import (
+    Forecast,
+    PdpForecast,
     ProductionMonthly,
     SyncEntity,
     SyncJob,
     SyncJobStatus,
     SyncWatermark,
+    TypeCurve,
+    VdrDailyProduction,
     Well,
 )
 from app.db.session import SessionLocal
@@ -218,6 +222,102 @@ def _reconcile_production_deletions(
     return deleted
 
 
+# ----------------------------------------------------------------------
+# Well-header deletion reconcile
+# ----------------------------------------------------------------------
+
+# Refuse to reconcile when the universe appears to have shrunk by more
+# than this fraction of the local table. Reclassifications (a wellbore
+# flipping to non-horizontal, a well dropped by Novi) are a few dozen a
+# month; anything larger is a warehouse incident (truncated matview,
+# bad refresh) and must be looked at, not mirrored.
+WELL_RECONCILE_MAX_FRACTION: float = 0.05
+
+
+def _well_reconcile_targets(
+    local: Iterable[str],
+    fetched: Iterable[str],
+    protected: Iterable[str],
+) -> tuple[list[str], list[str]]:
+    """Split the wells that left the sync universe into ``(delete,
+    retain)``.
+
+    ``local - fetched`` is every well the warehouse no longer returns
+    (reclassified non-horizontal, became a permit, dropped from
+    ``wells_enriched``). Those carrying user-authored or deal-scoped rows
+    (``protected``) are RETAINED -- the ``wells`` FKs cascade, and a
+    forecast or a type-curve membership is not vendor data we can
+    regenerate. Both lists sorted for deterministic logs."""
+    stale = set(local) - set(fetched)
+    prot = set(protected)
+    return sorted(stale - prot), sorted(stale & prot)
+
+
+def _local_well_api10s(session: Session) -> list[str]:
+    return [a for (a,) in session.execute(select(Well.api10))]
+
+
+def _protected_api10s(session: Session) -> set[str]:
+    """api10s referenced by rows the sync must never cascade away:
+    forecasts (user fits / overrides), PDP forecasts and seller daily
+    production (deal-scoped), and type-curve membership arrays."""
+    out: set[str] = set()
+    for col in (Forecast.api10, PdpForecast.api10, VdrDailyProduction.api10):
+        out.update(a for (a,) in session.execute(select(col).distinct()))
+    out.update(
+        a
+        for (a,) in session.execute(select(func.unnest(TypeCurve.included_api10s)).distinct())
+        if a is not None
+    )
+    return out
+
+
+def _delete_wells(session: Session, api10s: list[str]) -> int:
+    res = session.execute(
+        delete(Well).where(Well.api10.in_(api10s)).execution_options(synchronize_session=False)
+    )
+    return int(res.rowcount or 0)  # type: ignore[attr-defined]
+
+
+def _reconcile_well_deletions(session: Session, fetched_api10s: Iterable[str]) -> tuple[int, int]:
+    """Delete local wells the warehouse universe no longer contains.
+
+    The header upsert never deletes, so a wellbore Novi reclassified as
+    non-horizontal (or dropped) lingers on the map with a stale header
+    forever (60 such rows on 2026-10-08). ``wells`` is a vendor mirror
+    like ``production_monthly``; its FKs cascade the vendor-mirror
+    children (production, Novi forecast). Wells with user-authored or
+    deal-scoped rows are retained and logged, never deleted.
+
+    Returns ``(deleted, retained)``. Does not commit -- the caller's
+    watermark commit covers it, same as the production reconcile.
+    """
+    fetched = set(fetched_api10s)
+    if not fetched:
+        log.warning("well_reconcile_skipped", reason="no headers fetched")
+        return 0, 0
+    local = _local_well_api10s(session)
+    targets, retained = _well_reconcile_targets(local, fetched, _protected_api10s(session))
+    if retained:
+        log.warning("well_reconcile_retained", count=len(retained), api10s=retained[:50])
+    if not targets:
+        return 0, len(retained)
+    if len(targets) > WELL_RECONCILE_MAX_FRACTION * max(len(local), 1):
+        log.error(
+            "well_reconcile_skipped",
+            reason="universe shrank beyond the safety cap",
+            targets=len(targets),
+            local=len(local),
+            max_fraction=WELL_RECONCILE_MAX_FRACTION,
+        )
+        return 0, len(retained)
+    deleted = 0
+    for chunk in _batched(targets, 1000):
+        deleted += _delete_wells(session, chunk)
+    log.info("well_reconcile_deleted", count=deleted, api10s=targets[:50])
+    return deleted, len(retained)
+
+
 # Wells per warehouse round-trip for the production / Novi-forecast
 # phases. Each chunk is fetched INSIDE its own short-lived warehouse
 # Session and fully materialized before the local upsert runs, so no
@@ -309,6 +409,12 @@ def _phase_headers(
             job.items_seen = total
             session.commit()
         counts["headers"] = total
+        # Mirror of the production deletion reconcile: wells the universe
+        # no longer returns are dropped (cascading their vendor-mirror
+        # rows) unless user/deal rows reference them.
+        counts["wells_deleted"], counts["wells_retained"] = _reconcile_well_deletions(
+            session, (h.api10 for h in headers)
+        )
         _watermark_set(session, SyncEntity.WELL_HEADERS, SCOPE_KEY, datetime.now(UTC))
 
 
@@ -390,9 +496,9 @@ def sync_permian(
 ) -> dict[str, int]:
     """Sync the entire Permian from engineering_db into the local app DB.
 
-    Returns a count dict ``{"headers": N, "production": M,
-    "production_deleted": D, "novi_forecast": F}`` for the caller to
-    surface.
+    Returns a count dict ``{"headers": N, "wells_deleted": X,
+    "wells_retained": R, "production": M, "production_deleted": D,
+    "novi_forecast": F}`` for the caller to surface.
 
     Phases run in order (headers, production, Novi forecast) and are
     isolated: a phase that raises is marked FAILED on its own job row and
@@ -404,7 +510,14 @@ def sync_permian(
     forecast (~20M rows) takes an hour. If the caller wants only the well
     headers refreshed, pass ``pull_production=False``.
     """
-    counts = {"headers": 0, "production": 0, "production_deleted": 0, "novi_forecast": 0}
+    counts = {
+        "headers": 0,
+        "wells_deleted": 0,
+        "wells_retained": 0,
+        "production": 0,
+        "production_deleted": 0,
+        "novi_forecast": 0,
+    }
 
     wh_engine = _warehouse_engine()
 
