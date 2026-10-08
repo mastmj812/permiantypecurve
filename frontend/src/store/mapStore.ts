@@ -31,6 +31,11 @@ export interface MapState {
   // ---- top-level nav ----
   currentPage: PageId;
   setCurrentPage: (p: PageId) => void;
+  // ---- one-shot camera request ----
+  // [west, south, east, north]; MapView fits to it whenever the nonce
+  // changes (e.g. "Show on map" for a saved type curve).
+  fitRequest: { bounds: [number, number, number, number]; nonce: number } | null;
+  requestFit: (bounds: [number, number, number, number]) => void;
   // ---- PDP review tab (seller data-room daily forecasts) ----
   // Selection persists across tab switches like the rest of the nav state.
   pdpDealId: string | null;
@@ -278,6 +283,9 @@ function markPdpHelpSeen(): void {
 export const useMapStore = create<MapState>((set) => ({
   currentPage: "map",
   setCurrentPage: (currentPage) => set({ currentPage }),
+  fitRequest: null,
+  requestFit: (bounds) =>
+    set((s) => ({ fitRequest: { bounds, nonce: (s.fitRequest?.nonce ?? 0) + 1 } })),
   pdpDealId: null,
   // A different deal invalidates the well/stream selection.
   setPdpDealId: (pdpDealId) => set({ pdpDealId, pdpSelection: null }),

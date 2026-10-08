@@ -38,6 +38,7 @@ import { TypeCurveChart } from "../type_curves/TypeCurveChart";
 import { TypeCurveLegend } from "../type_curves/TypeCurveLegend";
 import { TypeCurveProbit } from "../type_curves/TypeCurveProbit";
 import { RiskingBadge } from "../type_curves/RiskingBadge";
+import { showCurveOnMap } from "../map/showCurveOnMap";
 import {
   normalizeMultipliers,
   riskStreamSeries,
@@ -915,6 +916,16 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
             {selectedSaved ? selectedSaved.name : "New type curve"}
           </strong>
           <RiskingBadge muls={selectedSaved?.risk_multipliers} />
+          {selectedSaved && (
+            <button
+              type="button"
+              className="tb-btn"
+              title="Load this curve's wells onto the Map tab as the active cohort and staged selection — then Inspect opens the gunbarrel"
+              onClick={() => void showCurveOnMap(selectedSaved)}
+            >
+              Show on map
+            </button>
+          )}
           <span className="muted">
             {agg ? `${agg.n_wells} wells · ${agg.n_months} months` : "—"}
           </span>
