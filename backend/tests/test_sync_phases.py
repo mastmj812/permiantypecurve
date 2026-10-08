@@ -123,6 +123,8 @@ def test_all_phases_succeed_returns_counts(monkeypatch: pytest.MonkeyPatch) -> N
     assert calls == ["headers", "production", "novi_forecast"]
     assert counts == {
         "headers": 11,
+        "wells_deleted": 0,
+        "wells_retained": 0,
         "production": 22,
         "production_deleted": 2,
         "novi_forecast": 33,
