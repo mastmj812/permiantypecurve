@@ -220,13 +220,21 @@ class NoviComparisonZone:
 class DsuMetaRow:
     """One row of the ``dsu_meta`` sheet: the gunbarrel projection frame
     of one DSU/scenario. offset = signed projection of the leg midpoint
-    onto the axis 90° clockwise of azimuth_deg (folded to [0°, 180°))
-    through the origin (parcel centroid), in feet."""
+    onto the unit vector at :attr:`plus_offset_bearing_deg` (sign rule
+    v2, ledger §13 — derived from azimuth_deg, axial [0°, 180°)) through
+    the origin (parcel centroid), in feet."""
 
     dsu_id: str
     azimuth_deg: float | None
     origin_lon: float | None
     origin_lat: float | None
+
+    @property
+    def plus_offset_bearing_deg(self) -> float | None:
+        """Compass bearing of the +offset direction (ledger §13)."""
+        if self.azimuth_deg is None:
+            return None
+        return round(plus_offset_bearing_deg(self.azimuth_deg), 1)
 
 
 @dataclass(frozen=True)
@@ -646,6 +654,26 @@ HEEL_TOE_MISMATCH_FRAC = 0.40
 # azimuths fold to [0°, 180°).
 AZIMUTH_SPREAD_MIN_DEG = 0.1
 
+# Gunbarrel sign rule v2 (Michael, 2026-10-08; workspace rule 16; ledger
+# §13): +offset points into the NE half — W -> E for N-S-ish units, S -> N
+# for E-W-ish ones. Copy of narvi ``placement.plus_offset_bearing_deg``
+# (the persisted offsets are projected there); erebor ``_canonical_axis``
+# and engineering_db ``dealintake/geo.py`` carry the same rule — change
+# every copy or none. The golden table in test_blueox_export pins it.
+GUNBARREL_SEAM_DEG = 45.0
+
+
+def plus_offset_bearing_deg(azimuth_deg: float) -> float:
+    """Compass bearing (deg, [0, 360)) of the gunbarrel +offset direction:
+    with a = the folded azimuth (side decided on a rounded to 0.1°, the
+    precision narvi persists), a + 90 when a <= 45, else a - 90."""
+    a = azimuth_deg % 180.0
+    if round(a, 1) >= 180.0:  # 179.96 rounds onto the 0° side of the fold
+        a -= 180.0
+    b = a + 90.0 if round(a, 1) <= GUNBARREL_SEAM_DEG else a - 90.0
+    return b % 360.0
+
+
 # §6 invariant: every offset reproduces from dsu_meta azimuth + origin.
 # Persisted offsets are rounded to 0.1 ft and lon/lats to ~1e-6 deg;
 # 1 ft covers that rounding while catching any real frame drift.
@@ -718,16 +746,17 @@ def _projected_offset_ft(
 ) -> float:
     """Reproduce narvi's §6 signed cross-section offset from WGS84 leg
     endpoints: transform to the work CRS, take the leg midpoint THERE
-    (narvi projects work-CRS midpoints), project onto the axis 90°
-    clockwise of the folded azimuth through the origin. Mirrors narvi
-    ``placement.cross_axis`` / ``placement.gunbarrel_offset_ft``."""
+    (narvi projects work-CRS midpoints), project onto the +offset axis
+    (:func:`plus_offset_bearing_deg`, sign rule v2) through the origin.
+    Mirrors narvi ``placement.cross_axis`` /
+    ``placement.gunbarrel_offset_ft``."""
     tf = _to_work_crs()
     hx, hy = tf.transform(heel_lon, heel_lat)
     tx, ty = tf.transform(toe_lon, toe_lat)
     ox, oy = tf.transform(origin_lon, origin_lat)
     mx, my = (float(hx) + float(tx)) / 2.0, (float(hy) + float(ty)) / 2.0
-    a = math.radians(azimuth_deg % 180.0)
-    px, py = math.cos(a), -math.sin(a)
+    b = math.radians(plus_offset_bearing_deg(azimuth_deg))
+    px, py = math.sin(b), math.cos(b)
     return ((mx - float(ox)) * px + (my - float(oy)) * py) * FT_PER_M
 
 
@@ -931,7 +960,7 @@ def _check_coordinate_order(data: BlueOxExportData) -> list[SweepFinding]:
 def _check_offset_reproducibility(data: BlueOxExportData) -> list[SweepFinding]:
     """§6 guard: every gunbarrel_offset_ft (and _b_ft) must reproduce
     from dsu_meta.azimuth_deg + origin — the signed projection of the
-    leg midpoint onto the axis 90° clockwise of the folded azimuth —
+    leg midpoint onto the sign-rule-v2 +offset axis (ledger §13) —
     to within ~1 ft. This holds for ALL rows including adopted wells
     whose own bearing differs from the frame (§10: one axis per unit).
     Offsets that CAN'T be verified (incomplete frame, legacy rows with
@@ -1240,8 +1269,11 @@ def _write_novi_comparison_meta(ws: Any, data: BlueOxExportData) -> None:
 
 
 def _write_dsu_meta(ws: Any, data: BlueOxExportData) -> None:
-    ws.append(["dsu_id", "azimuth_deg", "origin_lon", "origin_lat"])
-    _bold_row(ws, 1, 4)
+    # plus_offset_bearing_deg (ledger §13): the +offset direction, stated
+    # so the receiver projects without re-deriving the sign rule. Its
+    # presence marks a v2-sign drop.
+    ws.append(["dsu_id", "azimuth_deg", "origin_lon", "origin_lat", "plus_offset_bearing_deg"])
+    _bold_row(ws, 1, 5)
     for frame in data.dsu_meta:
         ws.append(
             [
@@ -1249,10 +1281,11 @@ def _write_dsu_meta(ws: Any, data: BlueOxExportData) -> None:
                 frame.azimuth_deg,
                 frame.origin_lon,
                 frame.origin_lat,
+                frame.plus_offset_bearing_deg,
             ]
         )
     ws.column_dimensions["A"].width = 34
-    for letter in ("B", "C", "D"):
+    for letter in ("B", "C", "D", "E"):
         ws.column_dimensions[letter].width = 14
 
 
