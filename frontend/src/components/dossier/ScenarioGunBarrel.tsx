@@ -1,8 +1,8 @@
 // Dossier gunbarrel — cross-section of one narvi scenario. X = narvi's
 // per-leg gunbarrel_x_ft (perpendicular offset along the section axis),
 // Y = target TVD (ft, increasing downward). The x-axis is oriented by
-// the scenario's frame azimuth: ~N-S DSUs read W → E, ~E-W DSUs read
-// N → S (see displayFrame). Symbology mirrors narvi's GunBarrel panel:
+// narvi's sign rule v2: ~N-S DSUs read W → E, ~E-W DSUs read S → N
+// (see displayFrame). Symbology mirrors narvi's GunBarrel panel:
 // PDP = solid circle, PUD = hollow circle, UPSIDE = hollow star;
 // color = formation_blueox. U-turn legs at the same TVD are joined by
 // a light link. Pure SVG (same approach as the other chart components
@@ -10,7 +10,7 @@
 
 import { useMemo } from "react";
 
-import type { NarviWellGeo } from "../../api/narvi";
+import { plusOffsetBearingDeg, type NarviWellGeo } from "../../api/narvi";
 import { colorForFormation } from "../../map/formations";
 
 interface Props {
@@ -48,30 +48,24 @@ function niceTicks(min: number, max: number, target = 5): number[] {
 }
 
 interface DisplayFrame {
-  flip: boolean; // negate narvi's offsets for display
   left: string | null; // compass letter at the low-x end (null = unknown frame)
   right: string | null;
 }
 
-// narvi's +offset points 90° clockwise of the folded frame azimuth —
-// compass EAST for a due-N-S lateral, SOUTH for a due-E-W one, but
-// WEST-ish once the folded azimuth passes 135°. For display the axis
-// always reads left→right as W → E when the DSU is ~N-S oriented
-// (cross-section runs E-W) and N → S when it is ~E-W oriented, so the
-// offsets' sign is flipped whenever narvi's +offset points against the
-// reading direction. Display-only — persisted gunbarrel_x_ft values
-// (and the dsu_meta frame Blue Ox receives) are untouched.
+// narvi's persisted offsets follow the suite-wide gunbarrel sign rule v2
+// (narvi placement.cross_axis; ledger §13): +offset points into the NE
+// half, so a ~N-S DSU already reads W → E and a ~E-W DSU S → N. The
+// chart plots the stored values as-is; only the end labels depend on
+// the frame azimuth.
 function displayFrame(azimuthDeg: number | null): DisplayFrame {
   if (azimuthDeg == null || !Number.isFinite(azimuthDeg)) {
-    return { flip: false, left: null, right: null };
+    return { left: null, right: null };
   }
-  const a = (((azimuthDeg % 180) + 180) % 180) * (Math.PI / 180);
-  const east = Math.cos(a); // compass components of narvi's +offset axis
-  const south = Math.sin(a);
-  if (Math.abs(east) >= Math.abs(south)) {
-    return { flip: east < 0, left: "W", right: "E" };
+  const b = (plusOffsetBearingDeg(azimuthDeg) * Math.PI) / 180;
+  if (Math.abs(Math.sin(b)) >= Math.abs(Math.cos(b))) {
+    return { left: "W", right: "E" };
   }
-  return { flip: south < 0, left: "N", right: "S" };
+  return { left: "S", right: "N" };
 }
 
 function starPath(cx: number, cy: number, r: number): string {
@@ -88,7 +82,6 @@ function starPath(cx: number, cy: number, r: number): string {
 export function ScenarioGunBarrel({ wells, azimuthDeg, width, height }: Props) {
   const frame = displayFrame(azimuthDeg);
   const { points, links, formations, skipped } = useMemo(() => {
-    const sgn = frame.flip ? -1 : 1;
     const pts: Point[] = [];
     const lks: Array<{ x1: number; x2: number; tvd: number }> = [];
     let skippedWells = 0;
@@ -100,7 +93,7 @@ export function ScenarioGunBarrel({ wells, azimuthDeg, width, height }: Props) {
       const color = colorForFormation(w.formation);
       for (const x of w.gunbarrel_xs) {
         pts.push({
-          x: sgn * x,
+          x,
           tvd: w.target_tvd_ft,
           color,
           category: w.category,
@@ -108,13 +101,13 @@ export function ScenarioGunBarrel({ wells, azimuthDeg, width, height }: Props) {
         });
       }
       if (w.gunbarrel_xs.length >= 2) {
-        const xs = w.gunbarrel_xs.map((x) => sgn * x).sort((a, b) => a - b);
+        const xs = [...w.gunbarrel_xs].sort((a, b) => a - b);
         lks.push({ x1: xs[0]!, x2: xs[xs.length - 1]!, tvd: w.target_tvd_ft });
       }
     }
     const fms = [...new Set(pts.map((p) => p.formation ?? "(none)"))];
     return { points: pts, links: lks, formations: fms, skipped: skippedWells };
-  }, [wells, frame.flip]);
+  }, [wells]);
 
   if (points.length === 0) {
     return (

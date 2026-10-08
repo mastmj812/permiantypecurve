@@ -287,9 +287,9 @@ class NarviScenarioDetail:
     name: str | None
     well_type: str
     # Gunbarrel frame azimuth of record (scenario header, axial,
-    # [0, 180)) — every persisted gunbarrel_x_ft projects onto the axis
-    # 90° clockwise of it. Lets the dossier orient/label the
-    # cross-section axis (W→E vs N→S). None on legacy saves.
+    # [0, 180)) — every persisted gunbarrel_x_ft projects onto its
+    # sign-rule-v2 +offset axis (W→E for N-S units, S→N for E-W). Lets
+    # the dossier label the cross-section axis. None on legacy saves.
     azimuth_deg: float | None
     aoi_geojson: str | None  # parcel Polygon/MultiPolygon, WGS84
     wells: tuple[NarviScenarioWellGeo, ...]
@@ -481,9 +481,9 @@ def fetch_narvi_deal_sticks(
 class NarviDsuFrame:
     """The gunbarrel projection frame of one DSU/scenario — everything
     needed to reproduce narvi's cross-section offsets externally:
-    offset = signed projection of a leg midpoint onto the axis 90°
-    clockwise of azimuth_deg (folded to [0°, 180°)) through the origin
-    (the parcel centroid), in feet. Feeds the workbook's dsu_meta sheet
+    offset = signed projection of a leg midpoint onto the +offset axis
+    (sign rule v2: exports.blueox.plus_offset_bearing_deg of azimuth_deg,
+    axial [0°, 180°)) through the origin (the parcel centroid), in feet. Feeds the workbook's dsu_meta sheet
     (2026-07-27 amendment)."""
 
     dsu_id: str  # "<narvi deal_id>/<scenario_id>"

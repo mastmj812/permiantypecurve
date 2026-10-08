@@ -75,3 +75,15 @@ export async function fetchNarviDealSticks(dealIds: string[]): Promise<NarviDeal
   }
   return (await r.json()) as NarviDealSticks;
 }
+
+// Compass bearing of the gunbarrel +offset direction for a frame azimuth —
+// mirror of narvi placement.plus_offset_bearing_deg / backend
+// exports.blueox.plus_offset_bearing_deg (sign rule v2, ledger §13): with
+// a = the folded azimuth (side decided on a rounded to 0.1°), a + 90 when
+// a <= 45, else a - 90. N-S-ish DSUs read W → E, E-W-ish DSUs read S → N.
+export function plusOffsetBearingDeg(azimuthDeg: number): number {
+  let a = ((azimuthDeg % 180) + 180) % 180;
+  if (Math.round(a * 10) / 10 >= 180) a -= 180;
+  const b = Math.round(a * 10) / 10 <= 45 ? a + 90 : a - 90;
+  return ((b % 360) + 360) % 360;
+}

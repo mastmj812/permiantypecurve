@@ -34,6 +34,7 @@ from app.exports.blueox import (
     blueox_filename,
     build_blueox_workbook,
     monthly_volumes_from_rates,
+    plus_offset_bearing_deg,
     presend_sweep,
 )
 
@@ -1231,8 +1232,8 @@ def _leg_lonlat(
     to_work = Transformer.from_crs(4326, WORK_EPSG, always_xy=True)
     to_wgs = Transformer.from_crs(WORK_EPSG, 4326, always_xy=True)
     ox, oy = to_work.transform(*_ORIGIN_LONLAT)
-    a = math.radians(_FRAME_AZ % 180.0)
-    px, py = math.cos(a), -math.sin(a)  # cross axis, 90° cw of folded azimuth
+    pb = math.radians(plus_offset_bearing_deg(_FRAME_AZ))
+    px, py = math.sin(pb), math.cos(pb)  # +offset axis, sign rule v2 (ledger §13)
     mx, my = ox + px * offset_ft / FT_PER_M, oy + py * offset_ft / FT_PER_M
     b = math.radians(bearing_deg % 180.0)
     ux, uy = math.sin(b), math.cos(b)  # along-lateral unit vector
@@ -1339,8 +1340,15 @@ def test_inventory_geometry_columns_and_dsu_meta() -> None:
     names = wb.sheetnames
     assert names.index("dsu_meta") == names.index("inventory") + 1
     frames = list(wb["dsu_meta"].iter_rows(values_only=True))
-    assert frames[0] == ("dsu_id", "azimuth_deg", "origin_lon", "origin_lat")
-    assert frames[1] == ("1_4_9/plan_a", 105.3, -103.795, 31.9205)
+    assert frames[0] == (
+        "dsu_id",
+        "azimuth_deg",
+        "origin_lon",
+        "origin_lat",
+        "plus_offset_bearing_deg",
+    )
+    # 105.3° plan: + = 105.3 - 90 = 15.3° (NNE) — E-W-ish unit reads S → N
+    assert frames[1] == ("1_4_9/plan_a", 105.3, -103.795, 31.9205, 15.3)
 
 
 def test_inventory_without_geometry_is_byte_stable_shape() -> None:
@@ -1757,8 +1765,8 @@ def test_sweep_lat_lon_swap_blocks_build() -> None:
 
 def test_sweep_offset_invariant_blocks_build() -> None:
     """Section 6: an offset that does not reproduce from
-    dsu_meta.azimuth_deg + origin (signed projection onto the axis 90
-    deg clockwise of the folded azimuth) within ~1 ft is refused."""
+    dsu_meta.azimuth_deg + origin (signed projection onto the sign-rule-v2
+    +offset axis) within ~1 ft is refused."""
     row = _geo_inv("PLANNED 1")  # geometry says -660.0
     drifted = InventoryRow(**{**row.__dict__, "gunbarrel_offset_ft": -585.0})
     data = _sweep_data(inv=[drifted, *_sweep_inv()[1:]])
@@ -1832,3 +1840,29 @@ def test_sweep_magnitude_ceiling_warns_only() -> None:
     assert [f.check for f in warns] == ["vector_sanity"]
     assert "normalization" in warns[0].detail
     build_blueox_workbook(data)  # warns never block
+
+
+# THE golden table (lateral azimuth -> compass bearing of +offset). Byte-identical
+# copies pin the same rule in narvi (tests/test_gunbarrel_convention.py), erebor
+# (_canonical_axis) and engineering_db (dealintake/geo.py) — change every copy or none.
+GOLDEN_PLUS_BEARING = [
+    (0.0, 90.0), (0.3, 90.3), (40.2, 130.2), (45.0, 135.0), (45.04, 135.04),
+    (45.06, 315.06), (45.1, 315.1), (55.3, 325.3), (71.3, 341.3), (89.0, 359.0),
+    (90.0, 0.0), (128.8, 38.8), (161.3, 71.3), (179.5, 89.5), (179.96, 89.96),
+    (180.0, 90.0), (200.0, 110.0), (-18.7, 71.3),
+]
+
+
+def test_plus_offset_bearing_golden_table() -> None:
+    """Gunbarrel sign rule v2 (ledger §13): + points into the NE half —
+    W -> E for N-S-ish units, S -> N for E-W-ish, SE at the 45° seam."""
+    for az, want in GOLDEN_PLUS_BEARING:
+        got = plus_offset_bearing_deg(az)
+        assert abs((got - want + 180.0) % 360.0 - 180.0) < 1e-6, (az, got, want)
+
+
+def test_dsu_meta_plus_bearing_property() -> None:
+    frame = DsuMetaRow(dsu_id="d/s", azimuth_deg=179.5, origin_lon=None, origin_lat=None)
+    assert frame.plus_offset_bearing_deg == 89.5  # ~0-deg-true plan: + = East
+    blank = DsuMetaRow(dsu_id="d/s", azimuth_deg=None, origin_lon=None, origin_lat=None)
+    assert blank.plus_offset_bearing_deg is None

@@ -131,14 +131,14 @@ function computeFrame(usable: WellDetailLite[]): Frame | null {
   const lateralX = mx / lateralLen;
   const lateralY = my / lateralLen;
   // Perpendicular vector (90° rotation). Canonicalize by the DOMINANT
-  // compass component — the suite-wide gunbarrel reading: a ~N-S cohort
-  // (cross-section runs E-W) reads W → E (+X east), a ~E-W cohort
-  // (cross-section runs N-S) reads N → S (+X south). Same rule as the
+  // compass component — the suite-wide gunbarrel reading (sign rule v2):
+  // a ~N-S cohort (cross-section runs E-W) reads W → E (+X east), a ~E-W
+  // cohort (cross-section runs N-S) reads S → N (+X north). Same rule as the
   // dossier gunbarrel and narvi's panel; the flip toggle in the
   // component mirrors it when a given pad reads better the other way.
   let perpX = -lateralY;
   let perpY = lateralX;
-  if (Math.abs(perpX) >= Math.abs(perpY) ? perpX < 0 : perpY > 0) {
+  if (Math.abs(perpX) >= Math.abs(perpY) ? perpX < 0 : perpY < 0) {
     perpX = -perpX;
     perpY = -perpY;
   }
