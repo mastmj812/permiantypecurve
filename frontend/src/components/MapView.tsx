@@ -414,6 +414,22 @@ export function MapView() {
     }
   }, [selectedApi10s, styleLoaded]);
 
+  // -------------- one-shot fit (Show on map) --------------
+  const fitRequest = useMapStore((s) => s.fitRequest);
+  useEffect(() => {
+    if (!styleLoaded || !fitRequest) return;
+    const map = mapRef.current;
+    if (!map) return;
+    const [w, s, e, n] = fitRequest.bounds;
+    // a single well (or a degenerate box) still gets a sensible view
+    const pad = 0.01;
+    map.fitBounds(
+      [[w - (e - w < pad ? pad : 0), s - (n - s < pad ? pad : 0)],
+       [e + (e - w < pad ? pad : 0), n + (n - s < pad ? pad : 0)]],
+      { padding: 60, duration: 0, maxZoom: 13 },
+    );
+  }, [fitRequest, styleLoaded]);
+
   // -------------- active cohort → halo layer filters --------------
   // Drives the sky-blue halo by swapping each cohort halo layer's
   // filter to match only api10s in the active cohort. Filter-based
