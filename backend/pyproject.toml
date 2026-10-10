@@ -107,6 +107,6 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "packages/boxfit/tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"

@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Distribution name is NOT "boxfit": an unrelated "boxfit" exists on PyPI. Never list
+# this package by bare name — install it editable (anduin) or by git URL (engineering_db).
+name = "blueox-boxfit"
+version = "0.1.0"
+description = "Shared Arps decline-fitting engine (per-stream peak, nominal Di bounds, ramp+Arps, 50-yr EUR, GOR ratio mode, type-curve aggregation) for anduin and the BOX batch."
+requires-python = ">=3.12"
+# Unpinned on purpose: each consumer pins (anduin backend/constraints.txt).
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    "structlog",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+boxfit = ["py.typed", "data/*.json"]

@@ -31,6 +31,8 @@ jobs:
       # CI must test the same scipy/numpy the fits use, or a green CI
       # says nothing about the numbers the tool produces.
       - run: pip install -e ".[dev]" -c constraints.txt
+      # Shared fitting engine; deps already pinned by the line above.
+      - run: pip install --no-deps -e packages/boxfit
       - run: pytest -q
 
   frontend:
