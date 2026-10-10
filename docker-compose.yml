@@ -53,6 +53,8 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./backend/tests:/app/tests
+      # Shared fitting engine (editable install) — live source like app/.
+      - ./backend/packages:/app/packages
       # Bind-mount Alembic + scripts so new migrations and entrypoint
       # tweaks land without an image rebuild. The entrypoint runs
       # `alembic upgrade head` on every container start, so adding a new

@@ -39,13 +39,13 @@ from collections.abc import Iterable
 from datetime import date
 from typing import Any
 
-import numpy as np
+from boxfit.tc.align import forecast_rates as _forecast_rates
+from boxfit.tc.align import peak_ramp_shift, ramp_anchor
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Forecast, ProductionMonthly, Stream, TypeCurve, Well
 from app.forecasting.peak_detection import onset_index_from_rates
-from app.forecasting.ramp_arps import evaluate_well_rate
 from app.forecasting.ratio import derive_ratio_rates_masked
 from app.forecasting.types import (
     DEFAULT_DOWNTIME_FLOOR_BOPD,
@@ -350,9 +350,7 @@ def _resolve_params(
     if src_params is not None and src_params.get("mode") == "ratio":
         alpha = src_params.get("alpha")
         beta = src_params.get("beta")
-        if alpha is None or beta is None or not all(
-            math.isfinite(float(v)) for v in (alpha, beta)
-        ):
+        if alpha is None or beta is None or not all(math.isfinite(float(v)) for v in (alpha, beta)):
             return None
         return {"mode": "ratio", "alpha": float(alpha), "beta": float(beta)}
     if override:
@@ -391,53 +389,6 @@ def _resolve_params(
     return out
 
 
-def _forecast_rates(
-    params: dict[str, Any] | None,
-    n_months: int,
-    *,
-    include_ramp: bool,
-    shift_months: int = 0,
-) -> list[float | None]:
-    """N-month rate trajectory from t=0 forward.
-
-    ``include_ramp`` controls whether the ramp prefix is evaluated:
-    True under first_prod_month / peak_ramp alignment, False under
-    peak_month (t=0 is peak, no ramp segment to draw). When ramp params
-    are missing from `params`, evaluate_well_rate falls back to pure
-    Arps regardless.
-
-    ``shift_months`` slides the well along the panel's month axis —
-    the peak_ramp mechanism. Positive: the well starts that many
-    months late (front-padded with nulls — there's no production
-    signal before its onset). Negative: the well's earliest ramp
-    months fall before the panel and are dropped. The caller passes
-    ``M - peak_index_months`` so every well's peak lands on the common
-    month M.
-    """
-    if params is None or n_months <= 0:
-        return [None] * max(n_months, 0)
-    if params.get("mode") == "ratio":
-        # Ratio rows are evaluated by the caller against the well's own
-        # oil trajectory (see load_wells_with_forecast) — reaching this
-        # generic Arps evaluator with one is a programming error; null
-        # the stream rather than crash the whole aggregation.
-        return [None] * n_months
-    lead = max(0, shift_months)
-    t_years = (np.arange(n_months - lead, dtype=float) - min(shift_months, 0)) / 12.0
-    qo = params.get("qo") if include_ramp else None
-    peak_index_months = params.get("peak_index_months") if include_ramp else None
-    rates = evaluate_well_rate(
-        qo=qo,
-        peak_index_months=peak_index_months,
-        qi=params["qi"],
-        Di=params["Di"],
-        b=params["b"],
-        Df=params["Df"],
-        t_years=t_years,
-    )
-    return [None] * lead + [float(x) for x in rates]
-
-
 def cohort_ramp_anchors(
     session: Session,
     tc: TypeCurve,
@@ -466,7 +417,7 @@ def cohort_ramp_anchors(
             params = _resolve_params(tc, api10, stream, by_key.get((api10, stream)))
             if params is not None:
                 ramps.append(int(params.get("peak_index_months") or 0))
-        anchors[stream.value] = int(round(float(np.median(ramps)))) if ramps else 0
+        anchors[stream.value] = ramp_anchor(ramps)
     return anchors
 
 
@@ -515,10 +466,9 @@ def load_wells_with_forecast(
     anchors = ramp_anchors or {}
 
     def _shift(params: dict[str, Any] | None, stream: str) -> int:
-        if alignment != "peak_ramp" or params is None:
+        if alignment != "peak_ramp":
             return 0
-        m_w = int(params.get("peak_index_months") or 0)
-        return int(anchors.get(stream, 0)) - m_w
+        return peak_ramp_shift(params, stream, anchors)
 
     out: list[WellSeries] = []
     for api10 in api10_list:

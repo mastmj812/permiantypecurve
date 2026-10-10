@@ -27,6 +27,14 @@ RUN mkdir -p app && printf '__version__ = "0.0.0"\n' > app/__init__.py
 # ...then run the test suite (the real-well baselines are the tripwire).
 RUN pip install --upgrade pip && pip install -e ".[dev]" -c constraints.txt
 
+# Shared fitting engine (packages/boxfit, distribution `blueox-boxfit`).
+# Installed after the deps layer so engine edits don't re-download it;
+# --no-deps because its deps (numpy/pandas/scipy/structlog) are already
+# pinned above. docker-compose bind-mounts ./backend/packages so the
+# editable install sees live source.
+COPY packages ./packages
+RUN pip install --no-deps -e packages/boxfit
+
 COPY app ./app
 COPY tests ./tests
 COPY alembic ./alembic

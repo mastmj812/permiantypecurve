@@ -1,0 +1,169 @@
+{
+ "_note": "Captured from anduin app.forecasting.orchestrator.forecast_well(persist=False) on main 96470eb BEFORE the boxfit extraction (default ForecastConfig, raw fixture frame). boxfit.well.fit_well_streams must reproduce these exactly.",
+ "wells": {
+  "real_well_1|DELAWARE|WCA_1": {
+   "gas": {
+    "eur": 2446984.958921037,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 3.2568201595190516,
+     "b": 1.1999999999999997,
+     "peak_index_months": 1,
+     "qi": 3500.709677419355,
+     "qo": 1288.1935483870968
+    },
+    "peak_index_months": 1
+   },
+   "oil": {
+    "eur": 413976.9438513078,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 2.866312260459505,
+     "b": 1.1999999999999882,
+     "peak_index_months": 1,
+     "qi": 542.0612903237887,
+     "qo": 268.2258064516129
+    },
+    "peak_index_months": 1
+   },
+   "water": {
+    "eur": 3392327.8131925105,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 3.589198738966319,
+     "b": 1.1999999999999997,
+     "peak_index_months": 1,
+     "qi": 5176.190322580645,
+     "qo": 2191.8064516129034
+    },
+    "peak_index_months": 1
+   }
+  },
+  "real_well_1|MIDLAND|LSBY": {
+   "gas": {
+    "eur": 2605115.8153274464,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 3.2568201595190516,
+     "b": 1.1999999999999997,
+     "peak_index_months": 1,
+     "qi": 3500.709677419355,
+     "qo": 1288.1935483870968
+    },
+    "peak_index_months": 1
+   },
+   "oil": {
+    "eur": 441229.00916380505,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 2.866312260459505,
+     "b": 1.1999999999999882,
+     "peak_index_months": 1,
+     "qi": 542.0612903237887,
+     "qo": 268.2258064516129
+    },
+    "peak_index_months": 1
+   },
+   "water": {
+    "eur": 3607864.083087061,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 3.589198738966319,
+     "b": 1.1999999999999997,
+     "peak_index_months": 1,
+     "qi": 5176.190322580645,
+     "qo": 2191.8064516129034
+    },
+    "peak_index_months": 1
+   }
+  },
+  "real_well_3|DELAWARE|WCA_1": {
+   "gas": {
+    "eur": 525576.0087722598,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 3.3961621195366307,
+     "b": 1.0109123041887496,
+     "peak_index_months": 1,
+     "qi": 979.2607401455447,
+     "qo": 536.3928571428571
+    },
+    "peak_index_months": 1
+   },
+   "oil": {
+    "eur": 130106.87469138193,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 3.9999999999999996,
+     "b": 0.9000000000000001,
+     "peak_index_months": 1,
+     "qi": 324.2032258064517,
+     "qo": 182.96428571428572
+    },
+    "peak_index_months": 1
+   },
+   "water": {
+    "eur": 1095375.8171753087,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.08,
+     "Di": 10.317429163062757,
+     "b": 0.9884447569600071,
+     "peak_index_months": 1,
+     "qi": 4938.500186908303,
+     "qo": 1875.2142857142858
+    },
+    "peak_index_months": 1
+   }
+  },
+  "real_well_3|MIDLAND|LSBY": {
+   "gas": {
+    "eur": 547925.5382519822,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 3.3961621195366307,
+     "b": 1.0109123041887496,
+     "peak_index_months": 1,
+     "qi": 979.2607401455447,
+     "qo": 536.3928571428571
+    },
+    "peak_index_months": 1
+   },
+   "oil": {
+    "eur": 133806.21006706016,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 3.9999999999999996,
+     "b": 0.9000000000000001,
+     "peak_index_months": 1,
+     "qi": 324.2032258064517,
+     "qo": 182.96428571428572
+    },
+    "peak_index_months": 1
+   },
+   "water": {
+    "eur": 1128580.395921763,
+    "model_type": "modified_hyperbolic",
+    "params": {
+     "Df": 0.06,
+     "Di": 10.317429163062757,
+     "b": 0.9884447569600071,
+     "peak_index_months": 1,
+     "qi": 4938.500186908303,
+     "qo": 1875.2142857142858
+    },
+    "peak_index_months": 1
+   }
+  }
+ }
+}
