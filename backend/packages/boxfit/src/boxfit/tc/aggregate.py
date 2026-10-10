@@ -13,7 +13,7 @@ structured so per-proppant-lb or per-well can drop in via a different
 Alignment is peak-month: each well's t=0 is its own peak, and EVERY
 stream aligns on its own detected peak (gas commonly peaks after oil;
 water before) — same per-stream rule as forecasting (see
-orchestrator.detect_stream_peaks). Because streams are sliced from
+boxfit.well.detect_stream_peaks). Because streams are sliced from
 different months the per-stream arrays may differ in length; the panel
 is sized to the longest stream and shorter streams are NaN-padded in
 the tail. The loader (loader.load_well_series) prepares the slices.
@@ -232,7 +232,7 @@ def aggregate(
             p90=[],
             mean=[],
             well_count=[],
-            implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
+            implied_eur_per_1000ft=dict.fromkeys((*PERCENTILE_KEYS, "mean"), 0.0),
         )
         return TypeCurveAggregate(
             n_months=0,
@@ -261,7 +261,7 @@ def aggregate(
             p90=[],
             mean=[],
             well_count=[],
-            implied_eur_per_1000ft=dict.fromkeys(PERCENTILE_KEYS + ("mean",), 0.0),
+            implied_eur_per_1000ft=dict.fromkeys((*PERCENTILE_KEYS, "mean"), 0.0),
         )
         return TypeCurveAggregate(
             n_months=0,

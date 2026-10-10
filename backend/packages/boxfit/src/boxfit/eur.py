@@ -18,7 +18,7 @@ import numpy as np
 from scipy.integrate import quad
 from scipy.optimize import brentq
 
-from app.forecasting.models import (
+from boxfit.models import (
     arps_exponential,
     arps_harmonic,
     arps_hyperbolic,
@@ -26,7 +26,7 @@ from app.forecasting.models import (
     modified_hyperbolic,
     switchover_time,
 )
-from app.forecasting.types import (
+from boxfit.types import (
     DEFAULT_FORECAST_HORIZON_YEARS,
 )
 

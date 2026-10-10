@@ -13,8 +13,8 @@ from __future__ import annotations
 import numpy as np
 from numpy.typing import NDArray
 
-from app.forecasting.eur import DAYS_PER_YEAR
-from app.forecasting.models import switchover_time
+from boxfit.eur import DAYS_PER_YEAR
+from boxfit.models import switchover_time
 
 _B_EXP_THRESHOLD: float = 1e-6
 # |z| below which phi(z) = -expm1(-z)/z is evaluated by its series. Only

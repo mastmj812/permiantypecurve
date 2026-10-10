@@ -33,21 +33,21 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from structlog import get_logger
 
-from app.core.logging import get_logger
-from app.forecasting.eur import DAYS_PER_YEAR
-from app.forecasting.fit import fit_rate_cum
-from app.forecasting.peak_detection import PeakResult, detect_oil_peak
+from boxfit.eur import DAYS_PER_YEAR
+from boxfit.fit import fit_rate_cum
+from boxfit.peak_detection import PeakResult, detect_oil_peak
 
-# Ramp math now lives in app.forecasting.ramp_arps so per-well
+# Ramp math lives in boxfit.ramp_arps so per-well
 # forecasting and TC P50 fitting share one implementation. Re-exporting
 # the names here keeps the existing import path stable for any callers.
-from app.forecasting.ramp_arps import (  # noqa: F401 — re-exports
+from boxfit.ramp_arps import (  # noqa: F401 — re-exports
     build_ramp_arps_rate,
     compute_ramp_eur,
     evaluate_fit,
 )
-from app.forecasting.types import ForecastConfig
+from boxfit.types import ForecastConfig
 
 log = get_logger("type_curves.fit_p50")
 

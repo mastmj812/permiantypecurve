@@ -48,8 +48,8 @@ from typing import Any
 
 import numpy as np
 
-from app.forecasting.eur import DAYS_PER_YEAR
-from app.forecasting.ramp_arps import build_ramp_arps_rate
+from boxfit.eur import DAYS_PER_YEAR
+from boxfit.ramp_arps import build_ramp_arps_rate
 
 _DAYS_PER_MONTH = DAYS_PER_YEAR / 12.0
 
@@ -178,10 +178,14 @@ def fit_ratio_vs_cum_oil(
     Returns None when no valid (oil > 0, stream > 0) post-peak month
     exists at all — there is no ratio to carry forward.
     """
-    oil = np.asarray([float(v) if v is not None and math.isfinite(float(v)) else 0.0
-                      for v in oil_volumes], dtype=float)
-    stm = np.asarray([float(v) if v is not None and math.isfinite(float(v)) else 0.0
-                      for v in stream_volumes], dtype=float)
+    oil = np.asarray(
+        [float(v) if v is not None and math.isfinite(float(v)) else 0.0 for v in oil_volumes],
+        dtype=float,
+    )
+    stm = np.asarray(
+        [float(v) if v is not None and math.isfinite(float(v)) else 0.0 for v in stream_volumes],
+        dtype=float,
+    )
     n = min(len(oil), len(stm))
     if n == 0 or start_index >= n:
         return None
@@ -209,9 +213,7 @@ def fit_ratio_vs_cum_oil(
     alpha, beta = _lstsq_line(x, y)
     beta_unclipped = beta
     beta_clipped = False
-    beta_cap = (
-        RATIO_MAX_ABS_LN_DRIFT / float(np_max_forecast) if np_max_forecast > 0 else 0.0
-    )
+    beta_cap = RATIO_MAX_ABS_LN_DRIFT / float(np_max_forecast) if np_max_forecast > 0 else 0.0
     if beta_cap > 0 and abs(beta) > beta_cap:
         # Clip to the band, then re-fit alpha with the slope pinned
         # (least squares in alpha alone: mean residual).

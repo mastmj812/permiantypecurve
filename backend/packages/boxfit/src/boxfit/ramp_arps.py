@@ -40,8 +40,8 @@ from typing import Any
 import numpy as np
 from numpy.typing import NDArray
 
-from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
-from app.forecasting.models import modified_hyperbolic
+from boxfit.eur import DAYS_PER_YEAR, compute_eur
+from boxfit.models import modified_hyperbolic
 
 _DAYS_PER_MONTH = DAYS_PER_YEAR / 12.0
 
@@ -405,7 +405,7 @@ def _eval_modified_hyperbolic_rate(
     Df: float,
 ) -> NDArray[np.float64]:
     """Closed-form modified-hyperbolic rate at each time. Calls the
-    canonical evaluator in ``app.forecasting.models`` so we don't carry
+    canonical evaluator in ``boxfit.models`` so we don't carry
     a second implementation. The previous central-difference-of-cum
     approach (lifted from the old TC fit_p50) became visible as a
     sharp kink at the ramp/Arps seam because the np.maximum clamp on

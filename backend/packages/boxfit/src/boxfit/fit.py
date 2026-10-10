@@ -27,23 +27,23 @@ import numpy as np
 import pandas as pd
 from numpy.typing import NDArray
 from scipy.optimize import curve_fit
+from structlog import get_logger
 
-from app.core.logging import get_logger
-from app.forecasting.cumulative import (
+from boxfit.cumulative import (
     cum_exponential,
     cum_harmonic,
     cum_hyperbolic,
     cum_modified_hyperbolic,
 )
-from app.forecasting.eur import DAYS_PER_YEAR, compute_eur
-from app.forecasting.models import (
+from boxfit.eur import DAYS_PER_YEAR, compute_eur
+from boxfit.models import (
     arps_exponential,
     arps_harmonic,
     arps_hyperbolic,
     modified_hyperbolic,
 )
-from app.forecasting.peak_detection import PeakResult
-from app.forecasting.types import ForecastConfig, ForecastResult
+from boxfit.peak_detection import PeakResult
+from boxfit.types import ForecastConfig, ForecastResult
 
 log = get_logger("forecasting.fit")
 
@@ -51,7 +51,7 @@ log = get_logger("forecasting.fit")
 # All Di values here are *nominal* per-year (Arps original convention) —
 # the value that appears directly in q(t) = qi / (1 + b*Di*t)^(1/b).
 # Effective annual decline (the percent rate-drop in year 1) is shown
-# alongside in the UI via app.forecasting.metrics.effective_decline_first_year.
+# alongside in the UI via boxfit.metrics.effective_decline_first_year.
 #
 # Why these specific bounds:
 #   * Di_lo = 0.5  — squeezed from 0.3 once we saw the rate-time fallback
@@ -353,7 +353,7 @@ def _qi_bounds(
     ~7% of oil wells, so partial first months rarely set the anchor.
 
     All three streams anchor on their OWN detected peak
-    (orchestrator.detect_stream_peaks), so ``peak_rate`` is always in
+    (boxfit.well.detect_stream_peaks), so ``peak_rate`` is always in
     the stream's own units and anchoring applies uniformly.
     """
     lo, hi = config.qi_anchor_lo_frac, config.qi_anchor_hi_frac
@@ -513,7 +513,7 @@ def _fit_with_b_prior(
     Reported R²/RMSE are against the data only, never the pseudo-point.
     """
     # Local import keeps b_prior.py -> fit.py one-directional at import time.
-    from app.forecasting.b_prior import prior_weight
+    from boxfit.b_prior import prior_weight
 
     popt, predicted = _fit_core(df, target_col=target_col, func=func, bounds=bounds, p0=p0)
     b_index = _B_INDEX.get(model_type)

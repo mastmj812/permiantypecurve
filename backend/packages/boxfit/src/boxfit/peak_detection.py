@@ -14,7 +14,7 @@ Rule (from the brief):
     GOR climbs — 39% of forecasted wells in this dataset, p90 +4
     months. Anchoring a stream on the oil peak reads the wrong qi and
     starts the fit slice on the wrong limb. See
-    app.forecasting.orchestrator.detect_stream_peaks for the wiring.
+    boxfit.well.detect_stream_peaks for the wiring.
 
     ``detect_peak`` is stream-agnostic — pass the stream's rate column.
     ``detect_oil_peak`` is the oil-defaulted wrapper kept for callers

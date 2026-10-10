@@ -127,8 +127,8 @@ def fit_pooled_b(
     peak anchor, and the STREAM's own Di cap (water 12.0/yr, oil/gas 4.0/yr)
     — and return its b. None when the curve is too short."""
     # Local imports: fit.py must stay importable without this module.
-    from app.forecasting.eur import DAYS_PER_YEAR
-    from app.forecasting.fit import (
+    from boxfit.eur import DAYS_PER_YEAR
+    from boxfit.fit import (
         B_HI,
         B_LO,
         BOUND_TOLERANCE_PCT,
@@ -136,8 +136,8 @@ def fit_pooled_b(
         STREAM_VOLUME_COLUMN,
         fit_rate_cum,
     )
-    from app.forecasting.peak_detection import PeakResult
-    from app.forecasting.types import ForecastConfig
+    from boxfit.peak_detection import PeakResult
+    from boxfit.types import ForecastConfig
 
     if len(curve) < MIN_FIT_MONTHS:
         return None

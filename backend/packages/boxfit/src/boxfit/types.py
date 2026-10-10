@@ -93,7 +93,7 @@ class ForecastConfig:
     # braveheart_wca showed corr(qi_capture, di_gap)=+0.71 on oil, which
     # this drops to ~+0.12 (qi<0.80: 30%->0%, shallow-Di: 18%->1%).
     # Applies to ALL streams since every stream anchors on its OWN
-    # detected peak (orchestrator.detect_stream_peaks) — gas was exempt
+    # detected peak (boxfit.well.detect_stream_peaks) — gas was exempt
     # while it inherited the oil peak (wrong rate scale). Set either to
     # None to disable.
     qi_anchor_lo_frac: float | None = 0.90
@@ -126,7 +126,7 @@ class ForecastConfig:
     # months of fit data and tapering linearly to 0 at >= zero_weight
     # months, beyond which the fit is exactly the unregularized one.
     # ``b_prior`` is per (sub-basin, formation_blueox, stream) — the
-    # orchestrator fills it from app.forecasting.b_prior on the DEFAULT
+    # orchestrator fills it from boxfit.b_prior on the DEFAULT
     # fit path only; explicit rate_time / rate_cum_strict opt out. None =
     # no regularization (direct fitter calls, TC P50 fits, tests).
     b_prior: float | None = None
@@ -167,7 +167,7 @@ class ForecastResult:
     insufficient_history: bool = False
     notes: str = ""
     # Fraction of post-peak months excluded as downtime (0.0 to 1.0).
-    # See app.forecasting.fit::_flag_downtime for the heuristic.
+    # See boxfit.fit::_flag_downtime for the heuristic.
     downtime_ratio: float = 0.0
     # Linear-ramp prefix carried alongside the Arps fit. qo is the
     # stream's first-prod-month rate; peak_index_months is the count

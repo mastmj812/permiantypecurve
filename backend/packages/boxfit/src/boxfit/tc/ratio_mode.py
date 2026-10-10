@@ -19,8 +19,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.forecasting.eur import DAYS_PER_YEAR
-from app.forecasting.ratio import (
+from boxfit.eur import DAYS_PER_YEAR
+from boxfit.ratio import (
     fit_ratio_vs_cum_oil,
     implied_effective_decline_yr1,
     ratio_forecast_from_oil_params,
@@ -73,12 +73,8 @@ def build_ratio_fitted(
     post-peak months) — the caller surfaces that as a 422, never a
     silent Arps fallback.
     """
-    oil_vols = [
-        (float(v) * _DAYS_PER_MONTH) if v is not None else 0.0 for v in mean_oil
-    ]
-    stream_vols = [
-        (float(v) * _DAYS_PER_MONTH) if v is not None else 0.0 for v in mean_stream
-    ]
+    oil_vols = [(float(v) * _DAYS_PER_MONTH) if v is not None else 0.0 for v in mean_oil]
+    stream_vols = [(float(v) * _DAYS_PER_MONTH) if v is not None else 0.0 for v in mean_stream]
     np_max = float(oil_fitted.get("eur_per_unit") or 0.0)
     fit = fit_ratio_vs_cum_oil(
         oil_vols,
@@ -115,9 +111,7 @@ def build_ratio_fitted(
         # The oil fit the ratio rides on, snapshotted for the audit
         # trail (the live forecast always re-derives from the CURRENT
         # oil fitted block at evaluation surfaces that recompute).
-        "oil_ref": {
-            k: oil_fitted.get(k) for k in ("qi", "Di", "b", "Df", "qo", "peak_index")
-        },
+        "oil_ref": {k: oil_fitted.get(k) for k in ("qi", "Di", "b", "Df", "qo", "peak_index")},
         "smoothed_rate": series.rates,
         "manual_override": False,
     }
