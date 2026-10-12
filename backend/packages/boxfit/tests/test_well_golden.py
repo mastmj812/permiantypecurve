@@ -20,7 +20,11 @@ from boxfit.well import fit_well_streams
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLDENS = json.loads((FIXTURES / "well_goldens.json").read_text(encoding="utf-8"))["wells"]
-REL = 1e-9
+# 1e-6 relative, not 1e-9: the fits are scipy optimizer outputs, and their last digits move with
+# the CPU / BLAS summation order of whichever CI runner picks the job up (anduin #94: real_well_3 gas
+# Di 3.39616223 vs 3.39616212 = 3e-8 on one runner, exact on the re-run, same code and versions).
+# 1e-6 still catches any real behaviour change — those move params at 1e-3 and up.
+REL = 1e-6
 _VOLUME_RATE = {
     "oil_bbl": "rate_calday_bopd",
     "gas_mcf": "rate_calday_mcfd",
