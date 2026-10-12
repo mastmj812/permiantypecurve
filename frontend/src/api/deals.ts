@@ -455,3 +455,41 @@ export async function downloadBlueOxExport(
   URL.revokeObjectURL(url);
   return filename;
 }
+
+// "Notify Blue Ox" — #eng-updates drop notice for the deal's LATEST
+// logged export (backend: GET/POST /api/deals/{id}/blueox-notify).
+export interface BlueOxNotifyDraft {
+  configured: boolean;
+  export_id: string | null;
+  filename: string | null;
+  exported_at: string | null;
+  supersedes: string | null;
+  codename: string | null;
+  body: string | null;
+  blocked: string | null;
+}
+
+export async function getBlueOxNotifyDraft(dealId: string): Promise<BlueOxNotifyDraft> {
+  const r = await apiFetch(`/api/deals/${dealId}/blueox-notify`);
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`notify draft failed: ${detail}`);
+  }
+  return (await r.json()) as BlueOxNotifyDraft;
+}
+
+export async function postBlueOxNotify(
+  dealId: string,
+  args: { export_id: string; codename: string; body: string; filed_in_deal_folder: boolean },
+): Promise<{ text: string; notified_at: string }> {
+  const r = await apiFetch(`/api/deals/${dealId}/blueox-notify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) {
+    const detail = (await safeDetail(r)) ?? `${r.status}`;
+    throw new Error(`notify failed: ${detail}`);
+  }
+  return (await r.json()) as { text: string; notified_at: string };
+}

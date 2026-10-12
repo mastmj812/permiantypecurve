@@ -33,6 +33,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from app.api.auth import get_current_user
 from app.api.type_curves import (
     _DAYS_PER_MONTH,
     _FITTED_PARAM_KEYS,
@@ -44,8 +45,10 @@ from app.api.type_curves import (
     _fitted_p50_params,
     oil_eur_well_stats,
 )
+from app.config import settings
 from app.core.logging import get_logger
-from app.db.models import Deal, Forecast, NormalizationBasis, TypeCurve, Well
+from app.core.slack import SlackPostError, post_webhook
+from app.db.models import BlueOxExport, Deal, Forecast, NormalizationBasis, TypeCurve, User, Well
 from app.db.models.forecasts import Stream
 from app.db.models.production_monthly import ProductionMonthly
 from app.db.session import get_session
@@ -64,6 +67,12 @@ from app.exports.blueox import (
     build_blueox_workbook,
     monthly_volumes_from_rates,
     ratio_mode_streams,
+)
+from app.exports.blueox_notify import (
+    block_reason,
+    compose_message,
+    draft_body,
+    summarize_export,
 )
 from app.exports.buildup import funnel_tables, write_buildup_sheet
 from app.exports.dossier import (
@@ -2327,6 +2336,8 @@ def export_deal_blueox(
     session: Session = Depends(get_session),
 ) -> Response:
     deal = _load_or_404(session, deal_id)
+    from_saved_config = req is None
+    stale: list[dict[str, Any]] = []
     if req is None:
         # Run from the saved config — the normal path. Staleness gate:
         # a narvi scenario re-saved after the config was pinned means
@@ -2354,6 +2365,20 @@ def export_deal_blueox(
     except BlueOxContractError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     filename = blueox_filename(req.codename, export_date)
+    # Export log: feeds the "Notify Blue Ox" draft (supersedes + zone /
+    # count diff) without re-reading a workbook that lives on OneDrive.
+    # Ad-hoc payload exports aren't the governing config — not logged.
+    if from_saved_config:
+        session.add(
+            BlueOxExport(
+                deal_id=deal.id,
+                filename=filename,
+                export_date=export_date,
+                allow_stale=bool(stale),
+                summary=summarize_export(data),
+            )
+        )
+        session.commit()
     log.info(
         "deal_blueox_exported",
         id=str(deal_id),
@@ -2370,3 +2395,134 @@ def export_deal_blueox(
             "Content-Disposition": f'attachment; filename="{filename}"',
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# "Notify Blue Ox" — post the drop notice to #eng-updates (Steven's only
+# notification; there is no email). Always targets the deal's LATEST
+# logged export: the engineer files that workbook in the Deal Folder,
+# then posts. The draft is editable; the post is an explicit click.
+# ---------------------------------------------------------------------------
+
+
+class BlueOxNotifyDraft(BaseModel):
+    configured: bool  # SLACK_ENG_UPDATES_WEBHOOK_URL set on the backend
+    export_id: uuid.UUID | None
+    filename: str | None
+    exported_at: datetime | None
+    supersedes: str | None  # filename of the last NOTIFIED drop, if any
+    codename: str | None  # last posted Blue Ox codename on this deal
+    body: str | None  # message after the codename
+    blocked: str | None  # why posting is refused (None = OK)
+
+
+class BlueOxNotifyRequest(BaseModel):
+    export_id: uuid.UUID
+    codename: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=3000)
+    filed_in_deal_folder: bool
+
+
+class BlueOxNotifyResponse(BaseModel):
+    text: str
+    notified_at: datetime
+
+
+def _latest_exports(session: Session, deal_id: uuid.UUID) -> list[BlueOxExport]:
+    return list(
+        session.scalars(
+            select(BlueOxExport)
+            .where(BlueOxExport.deal_id == deal_id)
+            .order_by(BlueOxExport.created_at.desc())
+        )
+    )
+
+
+@router.get("/{deal_id}/blueox-notify", response_model=BlueOxNotifyDraft)
+def get_blueox_notify_draft(
+    deal_id: uuid.UUID,
+    session: Session = Depends(get_session),
+) -> BlueOxNotifyDraft:
+    _load_or_404(session, deal_id)
+    configured = bool(settings.slack_eng_updates_webhook_url)
+    exports = _latest_exports(session, deal_id)
+    if not exports:
+        return BlueOxNotifyDraft(
+            configured=configured,
+            export_id=None,
+            filename=None,
+            exported_at=None,
+            supersedes=None,
+            codename=None,
+            body=None,
+            blocked="no drop exported from anduin yet — export one first",
+        )
+    latest = exports[0]
+    previous = next(
+        (e for e in exports[1:] if e.notified_at is not None and e.filename != latest.filename),
+        None,
+    )
+    codename = next((e.notified_codename for e in exports if e.notified_codename), None)
+    return BlueOxNotifyDraft(
+        configured=configured,
+        export_id=latest.id,
+        filename=latest.filename,
+        exported_at=latest.created_at,
+        supersedes=previous.filename if previous else None,
+        codename=codename,
+        body=draft_body(
+            latest.filename,
+            latest.summary,
+            (previous.filename, previous.summary) if previous else None,
+        ),
+        blocked=block_reason(allow_stale=latest.allow_stale, notified_at=latest.notified_at),
+    )
+
+
+@router.post("/{deal_id}/blueox-notify", response_model=BlueOxNotifyResponse)
+def post_blueox_notify(
+    deal_id: uuid.UUID,
+    req: BlueOxNotifyRequest,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+) -> BlueOxNotifyResponse:
+    _load_or_404(session, deal_id)
+    webhook = settings.slack_eng_updates_webhook_url
+    if not webhook:
+        raise HTTPException(
+            status_code=503,
+            detail="SLACK_ENG_UPDATES_WEBHOOK_URL is not set on the backend",
+        )
+    if not req.filed_in_deal_folder:
+        raise HTTPException(
+            status_code=400,
+            detail="file the workbook in the Deal Folder before notifying — "
+            "the post is Steven's signal that it is there",
+        )
+    exports = _latest_exports(session, deal_id)
+    if not exports or exports[0].id != req.export_id:
+        raise HTTPException(
+            status_code=409,
+            detail="a newer export exists for this deal — reload the draft and notify that one",
+        )
+    row = exports[0]
+    reason = block_reason(allow_stale=row.allow_stale, notified_at=row.notified_at)
+    if reason:
+        raise HTTPException(status_code=409, detail=reason)
+    text = compose_message(req.codename, req.body)
+    try:
+        post_webhook(webhook, text)
+    except SlackPostError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    row.notified_at = datetime.now(UTC)
+    row.notified_codename = req.codename.strip()
+    row.notified_text = text
+    row.notified_by = user.email
+    session.commit()
+    log.info(
+        "deal_blueox_notified",
+        id=str(deal_id),
+        filename=row.filename,
+        codename=row.notified_codename,
+    )
+    return BlueOxNotifyResponse(text=text, notified_at=row.notified_at)

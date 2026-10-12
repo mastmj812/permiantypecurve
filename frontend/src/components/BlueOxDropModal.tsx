@@ -25,6 +25,7 @@ import {
 } from "../api/deals";
 import { type TypeCurveSummary, listTypeCurves } from "../api/typeCurves";
 import { codeRank } from "../map/formations";
+import { BlueOxNotifyPanel } from "./BlueOxNotifyPanel";
 
 const ALL_LEVELS: BlueOxLevel[] = ["P10", "P25", "P75", "P90"];
 
@@ -102,6 +103,9 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
   const [notice, setNotice] = useState<string | null>(null);
   // Zone index whose scenario-scope picker is expanded (null = none).
   const [scopeOpen, setScopeOpen] = useState<number | null>(null);
+  // "Notify Blue Ox" panel: open flag + reload key bumped per export.
+  const [notifyOpen, setNotifyOpen] = useState(false);
+  const [notifyKey, setNotifyKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
@@ -193,7 +197,8 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
     setError(null);
     try {
       const filename = await downloadBlueOxExport(deal.id, { allowStale });
-      setNotice(`exported ${filename}`);
+      setNotice(`exported ${filename} — file it in the Deal Folder, then Notify Blue Ox`);
+      setNotifyKey((k) => k + 1);
     } catch (e) {
       if (e instanceof BlueOxStaleError) {
         const go = window.confirm(
@@ -644,6 +649,12 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
               exclude_benches: e.target.value.split(",").map((b) => b.trim()).filter(Boolean),
             })} />
         </div>
+        {notifyOpen && (
+          <section style={{ padding: "10px 16px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
+            <h4 style={{ margin: "0 0 6px" }}>Notify Blue Ox (#eng-updates)</h4>
+            <BlueOxNotifyPanel dealId={deal.id} refreshKey={notifyKey} />
+          </section>
+        )}
         <footer style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
           <button type="button" className="tb-btn" disabled={busy !== null}
             onClick={() => void onSave()}>
@@ -660,6 +671,11 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
               : "open the dossier preview (scenario maps + gunbarrels + type curves); export the .pptx from there"}
             onClick={() => window.open(`#/deals/${deal.id}/dossier`, "_blank")}>
             Dossier preview
+          </button>
+          <button type="button" className="tb-btn" disabled={busy !== null}
+            title="post the latest export's drop notice to Blue Ox #eng-updates (after filing it in the Deal Folder)"
+            onClick={() => setNotifyOpen((o) => !o)}>
+            {notifyOpen ? "Hide notify" : "Notify Blue Ox…"}
           </button>
           {dirty && <span className="muted">unsaved changes</span>}
         </footer>
