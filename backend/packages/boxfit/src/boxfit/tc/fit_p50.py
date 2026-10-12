@@ -110,6 +110,10 @@ def fit_p50_series(
     absolute downtime floor, qi / b bounds) is stream-independent here,
     so oil and gas fits are unchanged by passing their own name.
 
+    The downtime filter is OFF here (``ForecastConfig.filter_downtime``):
+    the series is a smooth cohort statistic, so every post-peak month is
+    fitted and the curve reproduces the cohort's own 50-yr cum (<= ~0.2 %).
+
     Returns `None` if the series is too short or all-zero. Otherwise:
 
         {
@@ -162,6 +166,9 @@ def fit_p50_series(
         # analytic forecasts (rates[i] = q(t = i months)); its peak value
         # is an instantaneous rate, not a month average.
         qi_anchor_hi_basis="instantaneous",
+        # A cohort-mean series has no downtime: fit every post-peak month (the per-well floors, read
+        # in per-1,000-ft units, used to drop the tail — oil fits saw ~8 of 50 years).
+        filter_downtime=False,
     )
     if stream == "water":
         cfg = replace(cfg, di_nominal_hi=cfg.water_di_nominal_hi_per_year)

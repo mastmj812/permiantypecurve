@@ -124,6 +124,12 @@ class ForecastConfig:
     # every stream through the oil-shaped frame but must still bound each
     # stream by its OWN Di cap (rule 1: water 12/yr).
     di_nominal_hi: float | None = None
+    # Run the downtime filter (fit._flag_downtime: < 30 % of the 7-month rolling max, floored at 1.0
+    # rate unit, plus the per-stream absolute floor) on the post-peak slice. True for per-well fits,
+    # where low months are real downtime. The type-curve fitter turns it OFF: a cohort-mean series per
+    # 1,000 ft has no downtime, and the per-WELL floors read in per-kft units cut the fit window (oil
+    # TC fits used ~8 of 50 years).
+    filter_downtime: bool = True
     # Short-history b regularization. With few post-peak months b is barely
     # determined — at 24 months and 10% noise its spread is as wide as the
     # whole [0.9, 1.2] window, so a free b just lands on a bound. When
