@@ -630,7 +630,7 @@ def fit_rate_cum(
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
     floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
-    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, downtime_floor=floor)
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, filter_downtime=cfg.filter_downtime, downtime_floor=floor)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _cum_callable(model_type, cfg.df_terminal_per_year)
@@ -702,7 +702,7 @@ def fit_rate_time(
     rate_col = STREAM_RATE_COLUMN[stream]
     vol_col = STREAM_VOLUME_COLUMN[stream]
     floor = getattr(cfg, STREAM_DOWNTIME_FLOOR_FIELD[stream])
-    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, downtime_floor=floor)
+    df, downtime_ratio = _post_peak_slice(monthly_df, peak, rate_col, vol_col, filter_downtime=cfg.filter_downtime, downtime_floor=floor)
     insufficient = len(df) < cfg.min_post_peak_months
 
     func = _rate_callable(model_type, cfg.df_terminal_per_year)
