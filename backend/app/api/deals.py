@@ -501,7 +501,7 @@ def _write_forecast_sheet(ws: Any, tc: TypeCurve, series: dict[str, Any]) -> Non
     cums_by_stream: dict[str, dict[str, float]] = {}
     for s_name in ("oil", "gas", "water"):
         s = streams.get(s_name)
-        rates_by_stream[s_name] = _evaluate_fitted_rates(s or {})
+        rates_by_stream[s_name] = _evaluate_fitted_rates(s or {}, s_name)
         cums_by_stream[s_name] = dict.fromkeys(_PERCENTILE_KEYS_WITH_MEAN, 0.0)
 
     # Trapezoid rule: month K's volume = (rate at start + rate at end)
@@ -962,7 +962,7 @@ def _collect_blueox_zone(
     series = apply_risking(tc.series or {}, tc.risk_multipliers)
     streams = series.get("streams", {})
     fits_by_stream = {
-        s: _fitted_params_by_pct(streams.get(s) or {}) for s in ("oil", "gas", "water")
+        s: _fitted_params_by_pct(streams.get(s) or {}, s) for s in ("oil", "gas", "water")
     }
 
     def _rates(fit: dict[str, Any]) -> list[float]:

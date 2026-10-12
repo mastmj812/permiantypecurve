@@ -28,6 +28,7 @@ the manual-tweak UI, so auto-fit and manual paths can't drift.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -99,8 +100,15 @@ def fit_p50_series(
     *,
     df_terminal_per_year: float = 0.08,
     horizon_years: float = 50.0,
+    stream: str = "oil",
 ) -> dict[str, Any] | None:
     """Fit ramp+Arps modified-hyperbolic to the P50 series.
+
+    ``stream`` selects ONLY the nominal-Di upper bound (rule 1: oil/gas
+    4.0/yr, water its own 12/yr cap) — water type curves used to be
+    capped at the oil bound. Everything else (the oil-shaped frame, the
+    absolute downtime floor, qi / b bounds) is stream-independent here,
+    so oil and gas fits are unchanged by passing their own name.
 
     Returns `None` if the series is too short or all-zero. Otherwise:
 
@@ -155,6 +163,10 @@ def fit_p50_series(
         # is an instantaneous rate, not a month average.
         qi_anchor_hi_basis="instantaneous",
     )
+    if stream == "water":
+        cfg = replace(cfg, di_nominal_hi=cfg.water_di_nominal_hi_per_year)
+    elif stream not in ("oil", "gas"):
+        raise ValueError(f"stream must be oil / gas / water, got {stream!r}")
 
     try:
         result = fit_rate_cum(

@@ -118,6 +118,12 @@ class ForecastConfig:
     # "nearly insensitive to b" — that was the frozen-b defect in
     # cumulative.cum_hyperbolic, since fixed; b now responds to the data.)
     b_nominal_lo: float | None = None
+    # Override the nominal-Di UPPER bound for every stream (default: oil/gas
+    # fit.DI_NOMINAL_HI_PER_YEAR = 4.0, water ``water_di_nominal_hi_per_year``).
+    # None = per-stream default. Used by the type-curve fitter, which runs
+    # every stream through the oil-shaped frame but must still bound each
+    # stream by its OWN Di cap (rule 1: water 12/yr).
+    di_nominal_hi: float | None = None
     # Short-history b regularization. With few post-peak months b is barely
     # determined — at 24 months and 10% noise its spread is as wide as the
     # whole [0.9, 1.2] window, so a free b just lands on a bound. When

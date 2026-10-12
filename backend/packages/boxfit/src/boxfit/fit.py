@@ -321,7 +321,10 @@ def _bounds_and_p0(
 
 def _stream_di_hi(stream: str, config: ForecastConfig) -> float:
     """Nominal-Di upper bound for the stream. Water uses its own (higher)
-    cap from config; oil and gas use the oil-tuned module default."""
+    cap from config; oil and gas use the oil-tuned module default. An
+    explicit ``config.di_nominal_hi`` overrides both (type-curve fits)."""
+    if config.di_nominal_hi is not None:
+        return config.di_nominal_hi
     if stream == "water":
         return config.water_di_nominal_hi_per_year
     return DI_NOMINAL_HI_PER_YEAR
