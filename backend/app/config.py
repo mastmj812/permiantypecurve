@@ -41,5 +41,12 @@ class Settings(BaseSettings):
     # but the app still boots so the legacy Enverus path keeps working.
     warehouse_database_url: str | None = Field(default=None, alias="WAREHOUSE_DATABASE_URL")
 
+    # Slack incoming webhook for Blue Ox's #eng-updates channel (the
+    # "Notify Blue Ox" button in the drop modal). None/empty = button
+    # disabled with a "not configured" hint. The URL is the secret.
+    slack_eng_updates_webhook_url: str | None = Field(
+        default=None, alias="SLACK_ENG_UPDATES_WEBHOOK_URL"
+    )
+
 
 settings = Settings()

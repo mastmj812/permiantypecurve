@@ -43,6 +43,8 @@ services:
       # Defaults to empty so the app boots; warehouse_client calls raise a
       # clear error when WAREHOUSE_DATABASE_URL is unset.
       WAREHOUSE_DATABASE_URL: ${WAREHOUSE_DATABASE_URL:-}
+      # Blue Ox #eng-updates incoming webhook ("Notify Blue Ox" button).
+      SLACK_ENG_UPDATES_WEBHOOK_URL: ${SLACK_ENG_UPDATES_WEBHOOK_URL:-}
     # Make `host.docker.internal` resolvable on Linux (Windows/Mac Docker
     # Desktop adds this automatically). engineering_db runs on the host, so
     # the backend reaches it via this hostname.
