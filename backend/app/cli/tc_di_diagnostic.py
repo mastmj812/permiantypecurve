@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
 
         for stream in _STREAMS:
             med = _median_well_stats(tc, api10s, globals_by, stream)
-            fitted = fit_p50_series(agg.streams[stream.value].p50)
+            fitted = fit_p50_series(agg.streams[stream.value].p50, stream=stream.value)
 
             if med is None or fitted is None:
                 reason = "no per-well fits" if med is None else "P50 fit failed"

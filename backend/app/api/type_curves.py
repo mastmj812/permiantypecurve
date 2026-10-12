@@ -694,12 +694,12 @@ def _compute(
 
     fitted_streams = {}
     for stream_name, stream in agg.streams.items():
-        fitted = fit_p50_series(stream.p50, df_terminal_per_year=cohort_df)
+        fitted = fit_p50_series(stream.p50, df_terminal_per_year=cohort_df, stream=stream_name)
         fitted_eur: dict[str, float | None] = {}
         fitted_per_pct: dict[str, dict[str, Any] | None] = {}
         for key in ("p10", "p25", "p50", "p75", "p90", "mean"):
             series = getattr(stream, key)
-            r = fit_p50_series(series, df_terminal_per_year=cohort_df)
+            r = fit_p50_series(series, df_terminal_per_year=cohort_df, stream=stream_name)
             fitted_eur[key] = r["eur_per_unit"] if r is not None else None
             if r is not None:
                 fitted_per_pct[key] = {k: v for k, v in r.items() if k != "smoothed_rate"}
@@ -1390,6 +1390,7 @@ def _fitted_eur_per_1000ft(
 
 def _fitted_params_by_pct(
     stream_data: dict[str, Any],
+    stream: str = "oil",
 ) -> dict[str, dict[str, Any] | None]:
     """Resolve the fit params behind each percentile band.
 
@@ -1417,7 +1418,7 @@ def _fitted_params_by_pct(
             # raw monthly series now. Stateless fallback.
             series = stream_data.get(key)
             if series:
-                r = fit_p50_series(series)
+                r = fit_p50_series(series, stream=stream)
                 fit = (
                     {k: v for k, v in r.items() if k != "smoothed_rate"} if r is not None else None
                 )
@@ -1427,6 +1428,7 @@ def _fitted_params_by_pct(
 
 def _evaluate_fitted_rates(
     stream_data: dict[str, Any],
+    stream: str = "oil",
 ) -> dict[str, list[float] | None]:
     """Per-percentile fitted rate arrays out to ``_FORECAST_N_MONTHS``.
 
@@ -1438,7 +1440,7 @@ def _evaluate_fitted_rates(
     from app.type_curves.fit_p50 import evaluate_fit
 
     rates_by_pct: dict[str, list[float] | None] = {}
-    for key, fit in _fitted_params_by_pct(stream_data).items():
+    for key, fit in _fitted_params_by_pct(stream_data, stream).items():
         if fit is None:
             rates_by_pct[key] = None
             continue
