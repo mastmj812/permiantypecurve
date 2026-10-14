@@ -20,7 +20,7 @@ import json
 import math
 import re
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime
@@ -111,6 +111,7 @@ from app.exports.well_rows import (
     per_well_rows,
     well_geo_rows,
 )
+from app.exports.zone_name import default_zone_name, zone_name_error
 from app.forecasting.fit import _stream_di_hi, detect_at_bound
 from app.forecasting.types import ForecastConfig
 from app.type_curves.aggregate import PERCENTILE_KEYS
@@ -651,8 +652,11 @@ class ScenarioRef(BaseModel):
 
 class BlueOxZoneSpec(BaseModel):
     type_curve_id: uuid.UUID
-    # Adopted verbatim by Blue Ox as the zone identifier (contract
-    # Principle 2 — stable across re-drops). Defaults to the curve name.
+    # Adopted verbatim by Blue Ox as the zone identifier AND the tab
+    # name (contract Principle 2 — stable across re-drops). Grammar:
+    # formation_blueox tag + optional _SUFFIX (exports/zone_name.py),
+    # enforced at config save and export. None = derived from benches
+    # (never the curve name — curves carry deal prefixes / _v2 tags).
     zone_name: str | None = Field(default=None, min_length=1, max_length=26)
     # PUD = proven undeveloped (scheduled and valued); UPSIDE = non-
     # proven, carried unscheduled. Same vocabulary as the per-well
@@ -732,6 +736,46 @@ _BLUEOX_BASIS: dict[NormalizationBasis, str] = {
 }
 _BLUEOX_QI_UNITS: dict[str, str] = {"oil": "bbl/d", "gas": "Mcf/d"}
 _BLUEOX_SOURCE_SYSTEM = "anduin type-curve DB (synced from oilgas warehouse)"
+
+
+def _resolve_zone_names(
+    session: Session, zones: list[BlueOxZoneSpec], *, fallback_to_curve: bool
+) -> None:
+    """Fill unset zone names from each zone's benches
+    (:func:`default_zone_name`). A bench claimed by more than one zone
+    needs a suffix, lifted from the curve name when it carries one.
+
+    ``fallback_to_curve`` keeps read-only display paths (dossier,
+    comparison) rendering a config whose name can't be derived; the
+    save and export paths pass False so the gap surfaces as an error.
+    """
+    bench_counts = Counter(b for z in zones for b in set(z.benches))
+    for spec in zones:
+        if spec.zone_name is not None:
+            continue
+        tc = session.get(TypeCurve, spec.type_curve_id)
+        if tc is None:
+            continue
+        shared = any(bench_counts[b] > 1 for b in spec.benches)
+        name = default_zone_name(tc.name, spec.benches, shared)
+        if name is None and fallback_to_curve:
+            name = tc.name[:26].strip()
+        spec.zone_name = name
+
+
+def _zone_name_errors(zones: list[BlueOxZoneSpec]) -> list[str]:
+    """Grammar violations across the drop's zones (unset names included)."""
+    errors: list[str] = []
+    for spec in zones:
+        if spec.zone_name is None:
+            errors.append(
+                f"zone for curve {spec.type_curve_id}: no zone name and none "
+                "derivable — map its benches, or type the formation tag + "
+                "suffix (e.g. WCB_2_NW) for a bench shared by several zones"
+            )
+        elif zerr := zone_name_error(spec.zone_name, spec.benches):
+            errors.append(zerr)
+    return errors
 
 
 def _handoff_category(w: NarviInventoryWell) -> str:
@@ -1252,13 +1296,11 @@ def _collect_blueox_data(
     ]
 
     # Zone names must be resolved before the narvi distribution (the
-    # bench map keys on them), so default them from the curve names
-    # up front.
-    for spec in req.zones:
-        if spec.zone_name is None:
-            tc = session.get(TypeCurve, spec.type_curve_id)
-            if tc is not None:
-                spec.zone_name = tc.name[:26].strip()
+    # bench map keys on them), so derive them from the benches up front
+    # — and re-check the grammar: a config saved before the guard (or a
+    # direct payload) must not ship a bad tab name.
+    _resolve_zone_names(session, req.zones, fallback_to_curve=False)
+    errors.extend(_zone_name_errors(req.zones))
 
     narvi_by_zone, inventory_exclusions, unzoned_pdp = _fetch_narvi_by_zone(req, errors)
 
@@ -1532,13 +1574,9 @@ def get_novi_comparison(
     if not cfg.narvi_selections:
         return NoviComparisonResponse(zones=[])
 
-    # Zone names default from curve names (same rule as the export
-    # assembly — the bench map keys on them).
-    for spec in cfg.zones:
-        if spec.zone_name is None:
-            tc = session.get(TypeCurve, spec.type_curve_id)
-            if tc is not None:
-                spec.zone_name = tc.name[:26].strip()
+    # Zone names derive from benches (same rule as the export assembly
+    # — the bench map keys on them).
+    _resolve_zone_names(session, cfg.zones, fallback_to_curve=True)
 
     errors: list[str] = []
     narvi_by_zone, _exclusions, _unzoned = _fetch_narvi_by_zone(cfg, errors)
@@ -1613,6 +1651,7 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
     if not deal.blueox_config:
         raise HTTPException(status_code=422, detail="this deal has no saved Blue Ox config")
     cfg = BlueOxExportRequest.model_validate(deal.blueox_config)
+    _resolve_zone_names(session, cfg.zones, fallback_to_curve=True)
     curves: dict[str, TypeCurve] = {}
     for spec in cfg.zones:
         tc = session.get(TypeCurve, spec.type_curve_id)
@@ -1620,9 +1659,7 @@ def _assemble_dossier_zones(session: Session, deal: Deal) -> list[ZoneSummary]:
             raise HTTPException(
                 status_code=422, detail=f"type curve {spec.type_curve_id} not found"
             )
-        if spec.zone_name is None:
-            spec.zone_name = tc.name[:26].strip()
-        curves[spec.zone_name] = tc
+        curves[spec.zone_name or tc.name[:26].strip()] = tc
 
     narvi_by_zone: dict[str, list[NarviInventoryWell]] = {}
     if cfg.narvi_selections:
@@ -1978,6 +2015,12 @@ def put_blueox_config(
                     "selections: " + ", ".join(f"{d}/{s}" for d, s in sorted(unknown))
                 ),
             )
+    # Zone names are the workbook tab names Blue Ox keys on — refuse a
+    # bad one at save (Snare 2026-10-13 shipped a `W CB_2` tab).
+    # Derived defaults are persisted so the modal shows what ships.
+    _resolve_zone_names(session, req.zones, fallback_to_curve=False)
+    if zerrs := _zone_name_errors(req.zones):
+        raise HTTPException(status_code=422, detail="; ".join(zerrs))
     pairs = [(s.deal_id, s.scenario_id) for s in req.narvi_selections]
     if pairs:
         try:

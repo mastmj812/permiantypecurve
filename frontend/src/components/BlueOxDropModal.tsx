@@ -24,6 +24,7 @@ import {
   putBlueOxConfig,
 } from "../api/deals";
 import { type TypeCurveSummary, listTypeCurves } from "../api/typeCurves";
+import { defaultZoneName, zoneNameError } from "../api/zoneName";
 import { codeRank } from "../map/formations";
 import { BlueOxNotifyPanel } from "./BlueOxNotifyPanel";
 
@@ -361,6 +362,29 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
     edit({ zones: [...cfg.zones].sort((za, zb) => zoneRank(za) - zoneRank(zb)) });
   };
 
+  // Zone name = workbook tab name = Blue Ox's zone key: formation tag +
+  // optional _SUFFIX (api/zoneName.ts). An empty field ships the
+  // bench-derived suggestion (the server derives the same one on save);
+  // the curve name is never the default — it carries the deal prefix.
+  const benchCounts = new Map<string, number>();
+  for (const z of cfg.zones) {
+    for (const b of new Set(z.benches)) benchCounts.set(b, (benchCounts.get(b) ?? 0) + 1);
+  }
+  const zoneNames = cfg.zones.map((z) => {
+    const shared = z.benches.some((b) => (benchCounts.get(b) ?? 0) > 1);
+    const suggestion = defaultZoneName(
+      curveById.get(z.type_curve_id)?.name ?? "", z.benches, shared,
+    );
+    const effective = z.zone_name ?? suggestion;
+    const problem = effective === null
+      ? (shared
+        ? "bench shared with another zone — type the tag + suffix (e.g. WCB_2_NW)"
+        : "map the zone's benches, or type its formation tag")
+      : zoneNameError(effective, z.benches);
+    return { suggestion, problem };
+  });
+  const zoneNameProblems = zoneNames.filter((n) => n.problem !== null).length;
+
   const setZoneBenches = (i: number, benches: string[]) =>
     edit(
       deriveZoneCategories({
@@ -458,10 +482,8 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                       <select value={z.type_curve_id}
                         onChange={(e) => {
                           const c = curveById.get(e.target.value);
-                          setZone(i, {
-                            type_curve_id: e.target.value,
-                            zone_name: z.zone_name ?? (c ? c.name.slice(0, 26) : null),
-                          });
+                          if (!c) return;
+                          setZone(i, { type_curve_id: c.id });
                         }}>
                         {curves.map((c) => (
                           <option key={c.id} value={c.id}>{c.name}</option>
@@ -476,8 +498,15 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                     </td>
                     <td style={{ paddingRight: 8 }}>
                       <input value={z.zone_name ?? ""} size={20} maxLength={26}
-                        placeholder={curve?.name.slice(0, 26) ?? ""}
+                        placeholder={zoneNames[i]?.suggestion ?? "e.g. WCB_2_NW"}
+                        title="workbook tab name Blue Ox keys on: formation_blueox tag + optional _SUFFIX (WCB_2, WCB_2_NW) — never the curve name; empty = the greyed suggestion"
+                        style={zoneNames[i]?.problem ? { borderColor: "#dc2626" } : undefined}
                         onChange={(e) => setZone(i, { zone_name: e.target.value || null })} />
+                      {zoneNames[i]?.problem && (
+                        <div style={{ color: "#dc2626", fontSize: 12, maxWidth: 260 }}>
+                          {zoneNames[i]?.problem}
+                        </div>
+                      )}
                     </td>
                     <td style={{ paddingRight: 8 }}>
                       <select value={z.reserve_category}
@@ -590,7 +619,7 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
               edit({
                 zones: [...cfg.zones, {
                   type_curve_id: first.id,
-                  zone_name: first.name.slice(0, 26),
+                  zone_name: null,
                   reserve_category: "PUD",
                   benches: [],
                 }],
@@ -656,7 +685,8 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           </section>
         )}
         <footer style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
-          <button type="button" className="tb-btn" disabled={busy !== null}
+          <button type="button" className="tb-btn" disabled={busy !== null || zoneNameProblems > 0}
+            title={zoneNameProblems > 0 ? "fix the zone names marked in red first" : undefined}
             onClick={() => void onSave()}>
             {busy === "save" ? "saving…" : "Save config"}
           </button>
