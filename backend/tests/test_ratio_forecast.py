@@ -16,6 +16,7 @@ from __future__ import annotations
 import math
 import uuid
 from datetime import date
+from typing import ClassVar
 
 import pytest
 
@@ -473,15 +474,53 @@ class _StubSession:
         return _StubTC()
 
 
-def test_dossier_export_refuses_ratio_mode_curve():
+class _StubTCGas:
+    name = "wcb_gas"
+    series: ClassVar[dict] = {"streams": {**_series_with_ratio_water()["streams"],
+                          "gas": {"fitted": {"mode": "ratio", "alpha": 8.0, "beta": 0.0}}}}
+
+
+class _StubSessionGas:
+    def get(self, model, key):
+        return _StubTCGas()
+
+
+def test_dossier_export_refuses_ratio_mode_gas():
     from app.exports.dossier import CurveSlideInput, build_deal_dossier_pptx
 
     with pytest.raises(ValueError, match="ratio-mode"):
+        build_deal_dossier_pptx(
+            _StubSessionGas(),  # type: ignore[arg-type]
+            scenarios=[],
+            curves=[CurveSlideInput(type_curve_id=uuid.uuid4())],
+        )
+
+
+def test_dossier_export_accepts_ratio_mode_water():
+    """Ledger §14: ratio water passes the guard (this stub then fails later, on its missing panels)."""
+    from app.exports.dossier import CurveSlideInput, build_deal_dossier_pptx
+
+    with pytest.raises(ValueError) as exc:
         build_deal_dossier_pptx(
             _StubSession(),  # type: ignore[arg-type]
             scenarios=[],
             curves=[CurveSlideInput(type_curve_id=uuid.uuid4())],
         )
+    assert "ratio-mode" not in str(exc.value)
+
+
+def test_refused_ratio_streams_and_water_basis():
+    from app.exports.blueox import refused_ratio_streams, water_basis_text
+
+    water_only = _series_with_ratio_water()
+    assert refused_ratio_streams(water_only) == []
+    assert refused_ratio_streams(_StubTCGas.series) == ["gas"]
+    assert water_basis_text({"streams": {"water": {"fitted": {"qi": 1.0}}}}, {}) is None  # Arps water: nothing declared
+    t = water_basis_text(water_only, {})
+    assert "TC cohort" in t and "not stated" in t
+    sep = {"streams": {"water": {"fitted": {"mode": "ratio", "ratio_cohort": {"n_wells": 16, "n_requested": 16}}}}}
+    t = water_basis_text(sep, {"dealintake": {"water": {"tier": "validated", "source": "measured", "radius_mi": 7.5}}})
+    assert "16 measured wells, 7.5 mi" in t and "VALIDATED" in t
 
 
 def test_refusal_note_names_the_remedy():

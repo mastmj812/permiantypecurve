@@ -269,6 +269,9 @@ class ZoneData:
     # (Principle 4: everything declared, nothing implied) so a
     # west/east same-bench split is auditable downstream.
     scenario_scope: tuple[str, ...] = ()
+    # Ratio-mode water (ledger §14): how the P50 water was built, declared in the
+    # manifest as zone_water_basis[<zone>]. None = Arps water (legacy, nothing declared).
+    water_basis: str | None = None
 
 
 @dataclass(frozen=True)
@@ -347,11 +350,14 @@ def monthly_volumes_from_rates(
 
 # ============================ validation ============================
 
-# Ratio-mode refusal (hard, by design): the drop contract's curve_params
-# sheet declares Arps params (qi/b/di/dmin) per stream — a ratio-mode
-# stream (fitted ratio of cumulative oil; see app.forecasting.ratio) has
-# none, and emitting placeholder Arps rows would misdeclare the curve.
-# Do NOT relax this or touch the contract/ledger to accommodate it.
+# Ratio-mode refusal (hard, by design) for GAS: the drop contract's
+# curve_params sheet declares Arps params (qi/b/di/dmin) per oil / gas
+# stream — a ratio-mode gas stream has none, and emitting placeholder
+# Arps rows would misdeclare the curve.
+# WATER is the one exception (ledger §14, Michael 2026-10-19, BOX D107 /
+# Option A): water never had curve_params rows (P50 volumes only), so a
+# ratio-mode water stream ships its P50 volumes from the ratio block and
+# declares itself in the manifest (zone_water_basis[<zone>]).
 RATIO_REFUSAL_NOTE = (
     "ratio-mode streams are not yet in the drop contract — refit the "
     "stream as Arps or await a contract amendment"
@@ -368,6 +374,34 @@ def ratio_mode_streams(series: Mapping[str, Any] | None) -> list[str]:
         for s in ("oil", "gas", "water")
         if ((streams.get(s) or {}).get("fitted") or {}).get("mode") == "ratio"
     ]
+
+
+# Ratio-mode streams the drop / dossier accept (ledger §14): water only.
+RATIO_STREAMS_ACCEPTED: tuple[str, ...] = ("water",)
+
+
+def refused_ratio_streams(series: Mapping[str, Any] | None) -> list[str]:
+    """Ratio-mode streams the drop contract cannot carry (gas; oil is never ratio)."""
+    return [s for s in ratio_mode_streams(series) if s not in RATIO_STREAMS_ACCEPTED]
+
+
+def water_basis_text(series: Mapping[str, Any] | None, filter_spec: Mapping[str, Any] | None) -> str | None:
+    """The manifest's zone_water_basis value for a ratio-mode water stream (None = Arps water, nothing declared).
+    Method + the cohort it was fitted on + the tier deal-intake stamped (filter_spec.dealintake.water)."""
+    if "water" not in ratio_mode_streams(series):
+        return None
+    fitted = (((series or {}).get("streams") or {}).get("water") or {}).get("fitted") or {}
+    rc = fitted.get("ratio_cohort") or {}
+    rec = (((filter_spec or {}).get("dealintake") or {}).get("water")) or {}
+    parts = ["ratio_vs_cum_oil: P50 water = WOR(cum oil) x this zone's P50 oil"]
+    if rc:
+        src = rec.get("source") or "separate cohort"
+        reach = f", {rec['radius_mi']:g} mi" if rec.get("radius_mi") is not None else ""
+        parts.append(f"WOR fitted on {rc.get('n_wells')} {src} wells{reach}")
+    else:
+        parts.append("WOR fitted on the TC cohort")
+    parts.append(f"water tier {str(rec['tier']).upper()}" if rec.get("tier") else "water tier not stated")
+    return "; ".join(parts)
 
 
 def _validate_zone_name(name: str) -> str | None:
@@ -1414,6 +1448,11 @@ def _write_manifest(ws: Any, data: BlueOxExportData) -> None:
                     "; ".join(z.scenario_scope),
                 )
             )
+    # Ratio-mode water zones declare how their water was built (ledger §14,
+    # optional key — absent on Arps-water zones so legacy drops are byte-identical).
+    for z in data.zones:
+        if z.water_basis:
+            block_a.append((f"zone_water_basis[{z.zone_name}]", z.water_basis))
     block_a.append(
         (
             "inventory_category_basis",

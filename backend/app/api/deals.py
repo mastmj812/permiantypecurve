@@ -66,7 +66,8 @@ from app.exports.blueox import (
     blueox_filename,
     build_blueox_workbook,
     monthly_volumes_from_rates,
-    ratio_mode_streams,
+    refused_ratio_streams,
+    water_basis_text,
 )
 from app.exports.blueox_notify import (
     block_reason,
@@ -997,10 +998,10 @@ def _collect_blueox_zone(
         )
         return None
 
-    # HARD refusal (by design): the contract's curve_params declares
-    # Arps params per stream; a ratio-mode stream has none. No contract
-    # / ledger change here — refuse the zone with a clear remedy.
-    ratio_streams = ratio_mode_streams(tc.series)
+    # HARD refusal for ratio-mode GAS (the contract's curve_params declares
+    # Arps params per oil / gas stream). Ratio-mode WATER is accepted (ledger
+    # §14): its P50 volumes come from the ratio block below.
+    ratio_streams = refused_ratio_streams(tc.series)
     if ratio_streams:
         errors.append(
             f"{zone_name}: stream(s) {', '.join(ratio_streams)} are ratio-mode — "
@@ -1077,11 +1078,20 @@ def _collect_blueox_zone(
         # Water rides on the base level only (contract: no percentile
         # water columns); included when a water fit exists.
         if lv == "P50":
-            wfit = fits_by_stream["water"].get("p50")
-            if wfit is not None:
+            wblock = (streams.get("water") or {}).get("fitted") or {}
+            if wblock.get("mode") == "ratio":
+                # Ratio-mode water (ledger §14): the PUBLISHED ratio curve (WOR x
+                # the curve's P50 oil, risked like any stream). Never the
+                # fitted_per_percentile slot — that keeps the Arps diagnostic.
                 by_stream["water"] = monthly_volumes_from_rates(
-                    _rates(wfit), curve_months, _DAYS_PER_MONTH
+                    [float(r) for r in wblock["smoothed_rate"]], curve_months, _DAYS_PER_MONTH
                 )
+            else:
+                wfit = fits_by_stream["water"].get("p50")
+                if wfit is not None:
+                    by_stream["water"] = monthly_volumes_from_rates(
+                        _rates(wfit), curve_months, _DAYS_PER_MONTH
+                    )
         volumes[lv] = by_stream
 
     analog_rows = per_well_rows(session, list(tc.included_api10s or []))
@@ -1137,6 +1147,7 @@ def _collect_blueox_zone(
         scenario_scope=tuple(
             f"{ref.deal_id}/{ref.scenario_id}" for ref in (spec.scenario_scope or [])
         ),
+        water_basis=water_basis_text(series, tc.filter_spec),
     )
 
 
