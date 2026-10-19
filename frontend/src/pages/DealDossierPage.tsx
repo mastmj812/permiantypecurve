@@ -728,6 +728,8 @@ function DossierCurveSection({
               api10s={api10s}
               wellDetails={data.wellDetails}
               dealVisibility={dealVisibility}
+              showBlocks={false}
+              showSections={false}
               width={629}
               height={418}
               lazy

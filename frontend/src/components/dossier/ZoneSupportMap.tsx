@@ -24,8 +24,6 @@ import type { DossierZone } from "../../api/deals";
 import {
   authedTransformRequest,
   buildStyle,
-  loadBlocks,
-  loadSections,
   registerPmtilesProtocol,
 } from "../slide/mapShared";
 import { useNearViewport } from "../slide/useNearViewport";
@@ -198,10 +196,8 @@ export function ZoneSupportMap({
       map.addSource(`${src}-stick-pts`, { type: "geojson", data: fc(stickLabelFeatures) });
       map.addSource(`${src}-groups`, { type: "geojson", data: fc(groupLabelFeatures) });
 
-      const layerIds: string[] = [];
       const add = (layer: maplibregl.LayerSpecification) => {
         map.addLayer(layer);
-        layerIds.push(layer.id);
       };
       add({
         id: `${src}-aoi-fill`, type: "fill", source: `${src}-aoi`,
@@ -321,18 +317,16 @@ export function ZoneSupportMap({
               ],
             };
 
-      void Promise.allSettled([loadBlocks(map), loadSections(map)]).then(() => {
-        for (const id of layerIds) if (map.getLayer(id)) map.moveLayer(id);
-        const refresh = () => {
-          try {
-            setSnapshot(composeSnapshot(map.getCanvas(), width, legend));
-          } catch (e) {
-            console.error("zone support map snapshot failed", e);
-          }
-        };
-        map.on("idle", refresh);
-        map.triggerRepaint();
-      });
+      // No blocks/sections overlay on dossier maps (see mapShared).
+      const refresh = () => {
+        try {
+          setSnapshot(composeSnapshot(map.getCanvas(), width, legend));
+        } catch (e) {
+          console.error("zone support map snapshot failed", e);
+        }
+      };
+      map.on("idle", refresh);
+      map.triggerRepaint();
     };
 
     map.on("load", setup);
