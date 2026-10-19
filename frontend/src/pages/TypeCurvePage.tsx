@@ -978,7 +978,9 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
                 className={`tb-btn ${streamModes[stream] === "ratio" ? "tb-active" : ""}`}
                 disabled={computing}
                 onClick={() => onStreamModeChange(stream, "ratio")}
-                title="Publish this stream as a fitted ratio of cumulative oil x the TC oil stream (fit on the cohort mean series). Not exportable to the Blue Ox drop until the contract carries ratio params."
+                title={stream === "water"
+                  ? "Publish water as a fitted ratio of cumulative oil x the TC oil stream (fit on the cohort mean series, or a separate ratio cohort). Exportable to the Blue Ox drop: P50 water volumes + a zone_water_basis manifest line (ledger §14)."
+                  : "Publish this stream as a fitted ratio of cumulative oil x the TC oil stream (fit on the cohort mean series). Not exportable to the Blue Ox drop: the contract carries Arps params for gas."}
               >
                 ratio vs cum oil
               </button>

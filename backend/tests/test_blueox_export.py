@@ -1866,3 +1866,14 @@ def test_dsu_meta_plus_bearing_property() -> None:
     assert frame.plus_offset_bearing_deg == 89.5  # ~0-deg-true plan: + = East
     blank = DsuMetaRow(dsu_id="d/s", azimuth_deg=None, origin_lon=None, origin_lat=None)
     assert blank.plus_offset_bearing_deg is None
+
+
+def test_manifest_declares_ratio_water_zones_only() -> None:
+    """Ledger §14: a zone whose water is ratio-mode declares zone_water_basis; an Arps-water
+    zone adds nothing (legacy drops byte-identical)."""
+    zone = _zone("WOLFCAMP A", ("4200000001",))
+    ratio_zone = type(zone)(**{**zone.__dict__, "zone_name": "WCA_1", "water_basis": "ratio_vs_cum_oil: test"})
+    wb = load_workbook(io.BytesIO(build_blueox_workbook(_data(zones=[zone, ratio_zone]))))
+    kv = {r[0]: r[1] for r in wb["manifest"].iter_rows(values_only=True) if r and r[0] is not None and r[1] is not None}
+    assert kv["zone_water_basis[WCA_1]"] == "ratio_vs_cum_oil: test"
+    assert "zone_water_basis[WOLFCAMP A]" not in kv
