@@ -17,8 +17,6 @@ import type { DossierCohortWell, DossierStick } from "../../api/deals";
 import {
   authedTransformRequest,
   buildStyle,
-  loadBlocks,
-  loadSections,
   registerPmtilesProtocol,
 } from "../slide/mapShared";
 import { useNearViewport } from "../slide/useNearViewport";
@@ -103,10 +101,8 @@ export function CurveSplitMap({ groups, aois, width, height, lazy = false }: Pro
       map.addSource("split-aoi", { type: "geojson", data: fc(aoiFeatures) });
       map.addSource("split-wells", { type: "geojson", data: fc(wells) });
       map.addSource("split-sticks", { type: "geojson", data: fc(sticks) });
-      const layerIds: string[] = [];
       const add = (layer: maplibregl.LayerSpecification) => {
         map.addLayer(layer);
-        layerIds.push(layer.id);
       };
       add({
         id: "split-aoi-line", type: "line", source: "split-aoi",
@@ -138,18 +134,16 @@ export function CurveSplitMap({ groups, aois, width, height, lazy = false }: Pro
           { color: g.color, label: `${g.label}: ${g.cohort.length} curve wells`, kind: "line" as const },
         ]),
       };
-      void Promise.allSettled([loadBlocks(map), loadSections(map)]).then(() => {
-        for (const id of layerIds) if (map.getLayer(id)) map.moveLayer(id);
-        const refresh = () => {
-          try {
-            setSnapshot(composeSnapshot(map.getCanvas(), width, legend));
-          } catch (e) {
-            console.error("curve split map snapshot failed", e);
-          }
-        };
-        map.on("idle", refresh);
-        map.triggerRepaint();
-      });
+      // No blocks/sections overlay on dossier maps (see mapShared).
+      const refresh = () => {
+        try {
+          setSnapshot(composeSnapshot(map.getCanvas(), width, legend));
+        } catch (e) {
+          console.error("curve split map snapshot failed", e);
+        }
+      };
+      map.on("idle", refresh);
+      map.triggerRepaint();
     };
 
     map.on("load", setup);

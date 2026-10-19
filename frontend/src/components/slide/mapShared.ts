@@ -3,6 +3,15 @@
 // authed tile requests, the basemap style, and the blocks/sections
 // survey-grid overlays. Split from SlideMap.tsx so component files
 // only export components (react-refresh constraint).
+//
+// The dossier maps deliberately do NOT load blocks/sections: the grid
+// is the whole TX+NM extent (sections 32.6 MB / 50k polygons / 494k
+// vertices; blocks 5 MB), and every live MapLibre instance fetches,
+// parses (~60 MB main-thread heap) and re-indexes it in its worker —
+// a few hundred MB per map, times the several maps the dossier keeps
+// live near the viewport, plus re-parse churn on every lazy remount.
+// That was the dossier's Chrome OOM. The single-map slide page keeps
+// the grid.
 
 import maplibregl, {
   type ExpressionSpecification,

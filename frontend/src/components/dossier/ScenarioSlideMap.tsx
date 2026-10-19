@@ -1,6 +1,7 @@
 // Dossier scenario map — plan view of one narvi scenario: parcel AOI,
 // producing legs colored by formation_blueox, U-turn arcs in gray, on
-// the same basemap + blocks/sections overlays as the slide map. Like
+// the same basemap as the slide map (no blocks/sections — see
+// mapShared). Like
 // SlideMap it stays live (drag / scroll-zoom to frame the shot) and
 // refreshes a hidden snapshot <img> on every idle — the PPTX capture
 // reads the img, so whatever is framed at export time is what ships.
@@ -15,8 +16,6 @@ import { colorForFormation } from "../../map/formations";
 import {
   authedTransformRequest,
   buildStyle,
-  loadBlocks,
-  loadSections,
   registerPmtilesProtocol,
 } from "../slide/mapShared";
 import { useNearViewport } from "../slide/useNearViewport";
@@ -213,24 +212,16 @@ export function ScenarioSlideMap({
         map.fitBounds(b, { padding: 32, duration: 0, maxZoom: 14 });
       }
 
-      void Promise.allSettled([loadBlocks(map), loadSections(map)]).then(() => {
-        // Scenario geometry stays on top of the survey-grid overlays.
-        for (const id of [
-          `${AOI_SOURCE}-fill`, `${AOI_SOURCE}-line`,
-          `${TURNS_SOURCE}-line`, `${LEGS_SOURCE}-pdp`, `${LEGS_SOURCE}-line`,
-        ]) {
-          if (map.getLayer(id)) map.moveLayer(id);
+      // No blocks/sections overlay on dossier maps (see mapShared).
+      const refresh = () => {
+        try {
+          setSnapshot(map.getCanvas().toDataURL("image/png"));
+        } catch (e) {
+          console.error("scenario map snapshot failed", e);
         }
-        const refresh = () => {
-          try {
-            setSnapshot(map.getCanvas().toDataURL("image/png"));
-          } catch (e) {
-            console.error("scenario map snapshot failed", e);
-          }
-        };
-        map.on("idle", refresh);
-        map.triggerRepaint();
-      });
+      };
+      map.on("idle", refresh);
+      map.triggerRepaint();
     };
 
     map.on("load", setup);
