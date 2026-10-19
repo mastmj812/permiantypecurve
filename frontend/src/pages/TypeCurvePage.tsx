@@ -78,6 +78,21 @@ function ratioModesForRequest(
   return Object.keys(out).length > 0 ? out : null;
 }
 
+// A saved curve's separate ratio cohorts, for the streams that are still ratio-mode — so a
+// re-preview of a saved curve fits the ratio on the SAME wells it was saved with (a version
+// save inherits them server-side). A fresh aggregate has none.
+function ratioCohortsForRequest(
+  series: AggregatePayload | null | undefined,
+  modes: StreamModes,
+): Partial<Record<"gas" | "water", string[]>> | null {
+  const out: Partial<Record<"gas" | "water", string[]>> = {};
+  for (const s of ["gas", "water"] as const) {
+    const c = series?.ratio_cohorts?.[s];
+    if (modes[s] === "ratio" && c && c.api10s.length > 0) out[s] = c.api10s;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 const PERCENTILES: Array<{ key: string; label: string }> = [
   { key: "p10", label: "P10" },
   { key: "p25", label: "P25" },
@@ -435,6 +450,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       api10s: wells,
       alignment_method: selectedSaved ? versionAlignment : alignment,
       stream_modes: ratioModesForRequest(nextModes),
+      ratio_cohorts: selectedSaved ? ratioCohortsForRequest(selectedSaved.series, nextModes) : null,
     })
       .then(setAgg)
       .catch((e) => {
@@ -655,6 +671,7 @@ export function TypeCurvePage({ initialCurveId = null }: TypeCurvePageProps = {}
       api10s: selectedSaved.included_api10s,
       alignment_method: next,
       stream_modes: ratioModesForRequest(streamModes),
+      ratio_cohorts: ratioCohortsForRequest(selectedSaved.series, streamModes),
     })
       .then((p) => {
         if (seq === alignPreviewSeq.current) setAgg(p);
@@ -2122,6 +2139,11 @@ function RatioModePanel({
       <p className="muted" style={{ margin: "4px 0 6px", fontSize: 14 }}>
         Arps sliders are disabled — this stream is published as a fitted
         ratio of cumulative oil × the TC oil stream.
+        {fitted.ratio_cohort
+          ? ` The ratio was fitted on a SEPARATE cohort of ${fitted.ratio_cohort.n_wells} wells`
+            + `${fitted.ratio_cohort.n_requested !== fitted.ratio_cohort.n_wells ? ` (of ${fitted.ratio_cohort.n_requested} requested)` : ""}`
+            + ", not the TC cohort; the forecast still rides this curve's oil."
+          : ""}
       </p>
       <div className="tweak-grid">
         <RatioStat
