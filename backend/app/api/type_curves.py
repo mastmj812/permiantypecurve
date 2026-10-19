@@ -57,6 +57,11 @@ from app.type_curves.loader import (
     load_well_series,
     load_wells_with_forecast,
 )
+from app.type_curves.ratio_cohort import (
+    build_ratio_fitted_on_cohort,
+    ratio_cohorts_from_series,
+    validate_ratio_cohorts,
+)
 from app.type_curves.ratio_mode import (
     build_ratio_fitted,
     ratio_override_conflicts,
@@ -97,6 +102,10 @@ class ComputeRequest(BaseModel):
     # oil x the TC oil stream — see app.type_curves.ratio_mode). Never
     # inferred from data: the engineer chooses, the UI sends it.
     stream_modes: dict[str, str] | None = None
+    # Per ratio-mode stream, a SEPARATE well set the ratio is fitted on (e.g. water on
+    # MEASURED-water wells only — engineering_db D107). Forecast = that ratio x the TC's
+    # own oil. Omitted = the ratio is fitted on the TC cohort (unchanged behaviour).
+    ratio_cohorts: dict[str, list[str]] | None = None
 
 
 class ComputeResponse(BaseModel):
@@ -226,6 +235,9 @@ class SaveRequest(BaseModel):
     # saved series" — a version-save must never silently convert a
     # ratio-mode stream back to Arps.
     stream_modes: dict[str, str] | None = None
+    # Separate ratio cohorts (see ComputeRequest.ratio_cohorts). On the versions endpoint
+    # None inherits the parent's saved cohorts (when the stream stays ratio-mode).
+    ratio_cohorts: dict[str, list[str]] | None = None
 
 
 class BuildupPreviewRequest(BaseModel):
@@ -611,6 +623,7 @@ def _compute(
     n_months: int | None,
     tc: TypeCurve | None = None,
     stream_modes: dict[str, str] | None = None,
+    ratio_cohorts: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Build the persisted ``series`` JSONB.
 
@@ -730,12 +743,20 @@ def _compute(
                 status_code=422,
                 detail=f"ratio-mode {stream_name} needs a fitted oil stream — none available",
             )
-        fitted_ratio = build_ratio_fitted(
-            mean_oil=fitted_streams["oil"].mean,
-            mean_stream=fitted_streams[stream_name].mean,
-            oil_fitted=oil_fitted,
-            n_months=_FORECAST_N_MONTHS,
-        )
+        cohort = (ratio_cohorts or {}).get(stream_name)
+        if cohort:
+            fitted_ratio = _ratio_on_cohort(
+                session, resolver_tc, cohort, stream_name,
+                basis=validated_basis, alignment=validated_alignment,
+                cohort_df=cohort_df, tc_oil_fitted=oil_fitted,
+            )
+        else:
+            fitted_ratio = build_ratio_fitted(
+                mean_oil=fitted_streams["oil"].mean,
+                mean_stream=fitted_streams[stream_name].mean,
+                oil_fitted=oil_fitted,
+                n_months=_FORECAST_N_MONTHS,
+            )
         if fitted_ratio is None:
             raise HTTPException(
                 status_code=422,
@@ -745,6 +766,11 @@ def _compute(
                 ),
             )
         payload["streams"][stream_name]["fitted"] = fitted_ratio
+    if ratio_cohorts:
+        payload["ratio_cohorts"] = {
+            st: {"api10s": list(ids), "n_wells": payload["streams"][st]["fitted"]["ratio_cohort"]["n_wells"]}
+            for st, ids in ratio_cohorts.items()
+        }
 
     # --- empirical observed-only aggregation ---
     observed_wells = load_well_series(
@@ -792,6 +818,53 @@ def _compute(
         payload["observed_n_wells"] = 0
 
     return payload
+
+
+def _ratio_on_cohort(
+    session: Session,
+    resolver_tc: TypeCurve,
+    api10s: list[str],
+    stream_name: str,
+    *,
+    basis: str,
+    alignment: str,
+    cohort_df: float,
+    tc_oil_fitted: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Ratio fitted on a SEPARATE cohort (app.type_curves.ratio_cohort): aggregate that cohort on the curve's basis +
+    alignment (its own peak_ramp anchors), fit its mean oil for the fit window / beta cap, fit the ratio on its mean
+    series, forecast on the curve's oil. 422 when the cohort has fewer than 3 wells with forecasts."""
+    anchors = cohort_ramp_anchors(session, resolver_tc, api10s) if alignment == "peak_ramp" else None
+    wells = load_wells_with_forecast(
+        session, resolver_tc, api10s, alignment=alignment, n_months=_FORECAST_N_MONTHS, ramp_anchors=anchors
+    )
+    if len(wells) < 3:
+        raise HTTPException(
+            status_code=422,
+            detail=f"ratio cohort for {stream_name}: {len(wells)} of {len(api10s)} wells have forecasts + production; need >= 3",
+        )
+    agg = aggregate(wells, normalization_basis=basis, alignment_method=alignment, n_months=_FORECAST_N_MONTHS)
+    from app.type_curves.fit_p50 import fit_p50_series
+
+    cohort_oil = fit_p50_series(agg.streams["oil"].mean, df_terminal_per_year=cohort_df, stream="oil")
+    if not cohort_oil:
+        raise HTTPException(status_code=422, detail=f"ratio cohort for {stream_name}: its mean oil series does not fit")
+    return build_ratio_fitted_on_cohort(
+        cohort_mean_oil=agg.streams["oil"].mean,
+        cohort_mean_stream=agg.streams[stream_name].mean,
+        cohort_oil_fitted=cohort_oil,
+        tc_oil_fitted=tc_oil_fitted,
+        n_months=_FORECAST_N_MONTHS,
+        n_wells=len(wells),
+        n_requested=len(api10s),
+    )
+
+
+def _ratio_cohorts_or_400(cohorts: dict[str, list[str]] | None, modes: dict[str, str]) -> dict[str, list[str]]:
+    try:
+        return validate_ratio_cohorts(cohorts, modes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _inherit_overrides(
@@ -862,13 +935,15 @@ def _reject_overrides_on_ratio(
 def compute_type_curve(
     req: ComputeRequest, session: Session = Depends(get_session)
 ) -> ComputeResponse:
+    modes = _stream_modes_or_400(req.stream_modes)
     payload = _compute(
         session,
         req.api10s,
         basis=req.normalization_basis,
         alignment=req.alignment_method,
         n_months=req.n_months,
-        stream_modes=_stream_modes_or_400(req.stream_modes),
+        stream_modes=modes,
+        ratio_cohorts=_ratio_cohorts_or_400(req.ratio_cohorts, modes),
     )
     return ComputeResponse(**payload)
 
@@ -1101,6 +1176,7 @@ def save_type_curve(req: SaveRequest, session: Session = Depends(get_session)) -
         alignment=req.alignment_method,
         n_months=req.n_months,
         stream_modes=modes,
+        ratio_cohorts=_ratio_cohorts_or_400(req.ratio_cohorts, modes),
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     provenance = _build_provenance(session, req)
@@ -1133,6 +1209,12 @@ def save_as_new_version(
         modes = _stream_modes_or_400(req.stream_modes)
     else:
         modes = stream_modes_from_series(parent.series)
+    # Ratio cohorts ride the lineage the same way: explicit wins; None inherits the parent's,
+    # kept only for streams that are still ratio-mode in this version.
+    if req.ratio_cohorts is not None:
+        cohorts = _ratio_cohorts_or_400(req.ratio_cohorts, modes)
+    else:
+        cohorts = {st: ids for st, ids in ratio_cohorts_from_series(parent.series).items() if modes.get(st) == "ratio"}
     _reject_overrides_on_ratio(None, req.fit_overrides, modes=modes)
     # tc=parent so the bands resolve override -> global exactly like
     # re-aggregating the parent. Without it the version's series silently
@@ -1145,6 +1227,7 @@ def save_as_new_version(
         n_months=req.n_months,
         tc=parent,
         stream_modes=modes,
+        ratio_cohorts=cohorts,
     )
     payload = _apply_fit_overrides(payload, req.fit_overrides)
     # Provenance on versions: fresh inputs win; a None (old-workflow
@@ -2183,6 +2266,8 @@ def reaggregate_type_curve(
         # Preserve the saved series' per-stream modes — reaggregation
         # must never silently convert a ratio-mode stream back to Arps.
         stream_modes=stream_modes_from_series(tc.series),
+        # ... and never silently drop a separate ratio cohort (it is not the membership list).
+        ratio_cohorts=ratio_cohorts_from_series(tc.series),
     )
     tc.series = payload
     tc.is_stale = False

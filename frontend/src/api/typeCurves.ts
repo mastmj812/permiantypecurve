@@ -80,6 +80,9 @@ export interface FittedTypeCurve {
   r_const?: number | null;     // constant-fallback ratio (median of tail)
   implied_effective_decline_yr1?: number | null; // from the DERIVED series
   oil_ref?: Record<string, number | null>;       // oil fit snapshot (audit)
+  // Present when the ratio was fitted on a SEPARATE cohort (e.g. water on measured-water
+  // wells only, engineering_db D107): wells that carried a forecast / wells requested.
+  ratio_cohort?: { n_wells: number; n_requested: number } | null;
   // Ramp-prefix params — initial rate, ramp length, and the ramp's EUR
   // contribution. peak_index=0 + qo=qi reduces to pure post-peak Arps
   // (back-compat for type curves built before the ramp model).
@@ -139,6 +142,9 @@ export interface AggregatePayload {
   normalization_basis: NormalizationBasis;
   alignment_method: AlignmentMethod;
   streams: { oil: StreamSeries; gas: StreamSeries; water: StreamSeries };
+  // Separate per-stream ratio cohorts (backend app/type_curves/ratio_cohort.py): the
+  // well set a ratio-mode stream's ratio was fitted on. Absent = fitted on the TC cohort.
+  ratio_cohorts?: Partial<Record<"gas" | "water", { api10s: string[]; n_wells: number }>>;
   // Phase 2.5: observed-only aggregation (empirical bands, no fits)
   // for the workspace QC overlay. Absent on curves saved before
   // Phase 2.5 — frontend hides the QC chart in that case.
@@ -188,6 +194,8 @@ export async function computeTypeCurve(args: {
   // Per-stream mode for the published fitted curve (gas/water only).
   // Omitted keys default to Arps server-side.
   stream_modes?: Partial<Record<"gas" | "water", StreamMode>> | null;
+  // Separate ratio cohort per ratio-mode stream (only valid with stream_modes[s] = "ratio").
+  ratio_cohorts?: Partial<Record<"gas" | "water", string[]>> | null;
 }): Promise<AggregatePayload> {
   const r = await apiFetch("/api/type-curves/compute", {
     method: "POST",
