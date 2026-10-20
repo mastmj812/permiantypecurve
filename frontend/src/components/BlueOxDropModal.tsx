@@ -25,6 +25,12 @@ import {
 } from "../api/deals";
 import { type TypeCurveSummary, listTypeCurves } from "../api/typeCurves";
 import { defaultZoneName, zoneNameError } from "../api/zoneName";
+import {
+  danglingScopeRefs,
+  dropScopeRef,
+  liveScopeRefs,
+  pruneZoneScopes,
+} from "../map/blueoxScope";
 import { codeRank } from "../map/formations";
 import { BlueOxNotifyPanel } from "./BlueOxNotifyPanel";
 
@@ -273,19 +279,23 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
 
   // Pair-shaped so PHANTOM selections (pinned pairs whose narvi
   // scenario no longer exists) can be untoggled too — they have no
-  // NarviScenario row to pass.
+  // NarviScenario row to pass. Deselecting prunes the pair from zone
+  // scopes; a zone left with no live ref keeps its dangling refs and
+  // blocks save until re-scoped — never nulled to "all" (blueoxScope.ts).
   const toggleScenario = (s: Pick<NarviScenario, "deal_id" | "scenario_id">) => {
     const has = cfg.narvi_selections.some(
       (x) => x.deal_id === s.deal_id && x.scenario_id === s.scenario_id,
     );
+    const narviSelections = has
+      ? cfg.narvi_selections.filter(
+          (x) => !(x.deal_id === s.deal_id && x.scenario_id === s.scenario_id),
+        )
+      : [...cfg.narvi_selections, { deal_id: s.deal_id, scenario_id: s.scenario_id }];
     edit(
       deriveZoneCategories({
         ...cfg,
-        narvi_selections: has
-          ? cfg.narvi_selections.filter(
-              (x) => !(x.deal_id === s.deal_id && x.scenario_id === s.scenario_id),
-            )
-          : [...cfg.narvi_selections, { deal_id: s.deal_id, scenario_id: s.scenario_id }],
+        narvi_selections: narviSelections,
+        zones: pruneZoneScopes(cfg.zones, narviSelections),
       }),
     );
   };
@@ -313,12 +323,14 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
   // covers every selection, so unchecking a box there materializes
   // "all minus this one" (not "only this one"). A scope that grows back
   // to the full selection set — or empties — stores null (= all), so
-  // the config round-trips the legacy shape.
+  // the config round-trips the legacy shape. Works on the LIVE refs
+  // only: a dangling-only scope starts from nothing checked (not from
+  // "all"), and any explicit toggle sheds the dangling refs.
   const toggleZoneScope = (zi: number, ref: BlueOxScenarioRef) => {
     const z = cfg.zones[zi];
     if (!z) return;
     const cur: BlueOxScenarioRef[] = z.scenario_scope?.length
-      ? z.scenario_scope
+      ? liveScopeRefs(z, cfg.narvi_selections)
       : cfg.narvi_selections.map((s) => ({
           deal_id: s.deal_id,
           scenario_id: s.scenario_id,
@@ -384,6 +396,18 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
     return { suggestion, problem };
   });
   const zoneNameProblems = zoneNames.filter((n) => n.problem !== null).length;
+  // Scope refs naming scenarios no longer selected (left by a deselect
+  // that would have emptied the scope). The backend 422s these; block
+  // save here with the reason in view.
+  const zoneDangling = cfg.zones.map((z) => danglingScopeRefs(z, cfg.narvi_selections));
+  const scopeProblems = zoneDangling.filter((d) => d.length > 0).length;
+  const saveBlocked =
+    zoneNameProblems > 0
+      ? "fix the zone names marked in red first"
+      : scopeProblems > 0
+        ? `re-scope the ${scopeProblems === 1 ? "zone" : `${scopeProblems} zones`} marked `
+          + "in red — scope names scenarios no longer selected"
+        : null;
 
   const setZoneBenches = (i: number, benches: string[]) =>
     edit(
@@ -533,10 +557,15 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                       >
                         {!z.scenario_scope?.length
                           ? `all (${cfg.narvi_selections.length})`
-                          : `${z.scenario_scope.length} of ${cfg.narvi_selections.length}`}
+                          : `${liveScopeRefs(z, cfg.narvi_selections).length} of ${cfg.narvi_selections.length}`}
                         {scopeOpen === i ? " ▴" : " ▾"}
                       </button>
                       <span className="muted"> · {zoneWellCount(z)}w</span>
+                      {(zoneDangling[i]?.length ?? 0) > 0 && (
+                        <div style={{ color: "#dc2626", fontSize: 12, whiteSpace: "normal", maxWidth: 220 }}>
+                          scope names a deselected scenario — re-scope (▾) before saving
+                        </div>
+                      )}
                     </td>
                     <td>
                       <button type="button" className="link-btn" style={{ color: "#dc2626" }}
@@ -600,6 +629,33 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                       onChange={() => toggleZoneScope(zi, sel)}
                     />{" "}
                     {meta?.name ?? sel.scenario_id}
+                  </label>
+                );
+              })}
+              {(zoneDangling[scopeOpen] ?? []).map((ref) => {
+                const zi = scopeOpen;
+                const z = cfg.zones[zi];
+                if (!z) return null;
+                // the last ref can't be dropped alone: empty scope = "all"
+                const dropped = dropScopeRef(z, ref);
+                return (
+                  <label
+                    key={`dangling:${pairKey(ref.deal_id, ref.scenario_id)}`}
+                    style={{ display: "block", marginBottom: 2 }}
+                    title={dropped
+                      ? "in this zone's scope but no longer a selected scenario — uncheck to drop it"
+                      : "this zone's only scope ref, and no longer selected — check the scenarios this zone should capture (or 'all scenarios'); dropping it alone would widen the zone to every scenario"}
+                  >
+                    <input
+                      type="checkbox" checked disabled={!dropped}
+                      onChange={() => {
+                        if (dropped) setZone(zi, { scenario_scope: dropped.scenario_scope ?? null });
+                      }}
+                    />{" "}
+                    <b style={{ color: "#dc2626" }}>{pairKey(ref.deal_id, ref.scenario_id)}</b>
+                    <span style={{ color: "#dc2626", fontWeight: 600 }}>
+                      {" "}· not selected — {dropped ? "uncheck to drop it" : "re-scope this zone"}
+                    </span>
                   </label>
                 );
               })}
@@ -685,8 +741,8 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           </section>
         )}
         <footer style={{ display: "flex", gap: 8, alignItems: "center", padding: "10px 16px", borderTop: "1px solid var(--border, #e5e7eb)" }}>
-          <button type="button" className="tb-btn" disabled={busy !== null || zoneNameProblems > 0}
-            title={zoneNameProblems > 0 ? "fix the zone names marked in red first" : undefined}
+          <button type="button" className="tb-btn" disabled={busy !== null || saveBlocked !== null}
+            title={saveBlocked ?? undefined}
             onClick={() => void onSave()}>
             {busy === "save" ? "saving…" : "Save config"}
           </button>
@@ -708,6 +764,9 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
             {notifyOpen ? "Hide notify" : "Notify Blue Ox…"}
           </button>
           {dirty && <span className="muted">unsaved changes</span>}
+          {scopeProblems > 0 && (
+            <span style={{ color: "#dc2626", fontSize: 13 }}>{saveBlocked}</span>
+          )}
         </footer>
       </div>
     </div>,
