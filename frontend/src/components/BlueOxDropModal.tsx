@@ -32,6 +32,7 @@ import {
   pruneZoneScopes,
 } from "../map/blueoxScope";
 import { codeRank } from "../map/formations";
+import { scenarioMatches, searchTerms } from "../map/scenarioSearch";
 import { BlueOxNotifyPanel } from "./BlueOxNotifyPanel";
 
 const ALL_LEVELS: BlueOxLevel[] = ["P10", "P25", "P75", "P90"];
@@ -113,6 +114,9 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
   // "Notify Blue Ox" panel: open flag + reload key bumped per export.
   const [notifyOpen, setNotifyOpen] = useState(false);
   const [notifyKey, setNotifyKey] = useState(0);
+  // narvi scenario list filter: free text + "selected only".
+  const [scenarioQuery, setScenarioQuery] = useState("");
+  const [selectedOnly, setSelectedOnly] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -304,8 +308,10 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
   // narvi scenario — the scenario was deleted or re-saved under a
   // different deal. They'd otherwise be INVISIBLE (the list renders
   // only live rows) while still failing every config save with
-  // "narvi scenarios not found". Rendered as uncheckable-warning rows
-  // below so the engineer can drop them. Gated on scenariosLoaded: an
+  // "narvi scenarios not found". Rendered as red rows at the TOP of the
+  // scenario list, outside its filter (RIP Harambe 2026-10-29: at the
+  // bottom of the full list nobody found them), so the engineer can
+  // drop them. Gated on scenariosLoaded: an
   // unloaded/unreachable list proves nothing missing.
   const phantoms = scenariosLoaded
     ? cfg.narvi_selections.filter(
@@ -316,7 +322,19 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
       )
     : [];
 
-  const setZone = (i: number, patch: Partial<BlueOxConfig["zones"][number]>) =>
+  // Live rows the list shows under the filter. Phantoms bypass it —
+  // they block every save, so they always render, pinned at the top.
+  const terms = searchTerms(scenarioQuery);
+  const visibleScenarios = scenarios.filter(
+    (s) =>
+      scenarioMatches(s, terms) &&
+      (!selectedOnly ||
+        cfg.narvi_selections.some(
+          (x) => x.deal_id === s.deal_id && x.scenario_id === s.scenario_id,
+        )),
+  );
+
+  const setZone =(i: number, patch: Partial<BlueOxConfig["zones"][number]>) =>
     edit({ zones: cfg.zones.map((z, j) => (j === i ? { ...z, ...patch } : z)) });
 
   // Toggle one scenario in a zone's scope. An UNSCOPED zone implicitly
@@ -691,8 +709,38 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
           {scenarios.length === 0 && !scenarioError && (
             <p className="muted">loading scenario list…</p>
           )}
+          {scenarios.length > 0 && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "0 0 6px", fontSize: 14 }}>
+              <input
+                type="search" value={scenarioQuery} size={28}
+                placeholder="filter, e.g. ripharambe or harambe 49_50"
+                onChange={(e) => setScenarioQuery(e.target.value)}
+              />
+              <label>
+                <input type="checkbox" checked={selectedOnly}
+                  onChange={(e) => setSelectedOnly(e.target.checked)} />
+                {" "}selected only
+              </label>
+              <span className="muted">
+                {visibleScenarios.length} of {scenarios.length} shown ·{" "}
+                {cfg.narvi_selections.length} selected
+              </span>
+            </div>
+          )}
           <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 14 }}>
-            {scenarios.map((s) => {
+            {phantoms.map((x) => (
+              <li key={`${x.deal_id}/${x.scenario_id}`} style={{ marginBottom: 2 }}>
+                <label
+                  title="pinned in this config, but no narvi scenario has this deal/scenario id anymore (deleted, or re-saved under a different deal)">
+                  <input type="checkbox" checked onChange={() => toggleScenario(x)} />
+                  {" "}<b style={{ color: "#dc2626" }}>{x.deal_id}/{x.scenario_id}</b>
+                  <span style={{ color: "#dc2626", fontWeight: 600 }}>
+                    {" "}· not found in narvi — uncheck to drop it from this config
+                  </span>
+                </label>
+              </li>
+            ))}
+            {visibleScenarios.map((s) => {
               const checked = cfg.narvi_selections.some(
                 (x) => x.deal_id === s.deal_id && x.scenario_id === s.scenario_id,
               );
@@ -713,18 +761,9 @@ export function BlueOxDropModal({ deal, onClose }: Props) {
                 </li>
               );
             })}
-            {phantoms.map((x) => (
-              <li key={`${x.deal_id}/${x.scenario_id}`} style={{ marginBottom: 2 }}>
-                <label
-                  title="pinned in this config, but no narvi scenario has this deal/scenario id anymore (deleted, or re-saved under a different deal)">
-                  <input type="checkbox" checked onChange={() => toggleScenario(x)} />
-                  {" "}<b style={{ color: "#dc2626" }}>{x.deal_id}/{x.scenario_id}</b>
-                  <span style={{ color: "#dc2626", fontWeight: 600 }}>
-                    {" "}· not found in narvi — uncheck to drop it from this config
-                  </span>
-                </label>
-              </li>
-            ))}
+            {scenarios.length > 0 && visibleScenarios.length === 0 && (
+              <li className="muted">no scenarios match the filter</li>
+            )}
           </ul>
 
           <h4 style={{ margin: "14px 0 4px" }}>excluded benches</h4>
